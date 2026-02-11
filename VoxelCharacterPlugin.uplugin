@@ -1,0 +1,56 @@
+﻿{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "VoxelCharacterPlugin",
+	"Description": "a hybrid first/third-person character controller for Unreal Engine 5.7",
+	"Category": "Other",
+	"CreatedBy": "Daniel Raquel",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "VoxelCharacterPlugin",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "CommonGameFramework",
+			"Enabled": true
+		},
+		{
+			"Name": "VoxelWorlds",
+			"Enabled": true
+		},
+		{
+			"Name": "GameplayAbilities",
+			"Enabled": true
+		},
+		{
+			"Name": "EnhancedInput",
+			"Enabled": true
+		},
+		{
+			"Name": "ItemInventoryPlugin",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "InteractionPlugin",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "EquipmentPlugin",
+			"Enabled": true,
+			"Optional": true
+		}
+	]
+}
