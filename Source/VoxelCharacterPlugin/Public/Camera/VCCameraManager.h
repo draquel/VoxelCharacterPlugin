@@ -15,7 +15,7 @@ class UCameraComponent;
  *
  * Sits on AVCCharacterBase and drives a UCameraComponent each tick.
  * Supports voxel-aware camera collision in third-person mode
- * (collision trace stubbed until Gate 5).
+ * via ECC_Camera sphere trace against voxel terrain collision meshes.
  */
 UCLASS(ClassGroup = (VoxelCharacter), meta = (BlueprintSpawnableComponent))
 class VOXELCHARACTERPLUGIN_API UVCCameraManager : public UActorComponent

@@ -33,6 +33,10 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	bool bIsFalling = false;
 
+	/** True for one frame when the character transitions from falling to grounded. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	bool bJustLanded = false;
+
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	bool bIsCrouching = false;
 

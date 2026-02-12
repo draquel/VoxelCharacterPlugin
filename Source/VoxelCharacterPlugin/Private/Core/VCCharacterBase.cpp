@@ -20,6 +20,7 @@
 #include "VoxelWorldConfiguration.h"
 #include "VoxelChunkManager.h"
 #include "VoxelCharacterPlugin.h"
+#include "Engine/Engine.h"
 
 #if WITH_INTERACTION_PLUGIN
 #include "Components/InteractionComponent.h"
@@ -132,6 +133,11 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 	if (CameraManager)
 	{
 		CameraManager->UpdateCamera(DeltaSeconds);
+	}
+
+	if (bShowVoxelDebug && IsLocallyControlled())
+	{
+		DrawVoxelDebugInfo();
 	}
 }
 
@@ -252,10 +258,27 @@ void AVCCharacterBase::SetViewMode(EVCViewMode NewMode)
 		}
 	}
 
-	// 2. Mesh visibility
+	// 2. Rotation behavior
+	if (UCharacterMovementComponent* MovComp = GetCharacterMovement())
+	{
+		if (NewMode == EVCViewMode::FirstPerson)
+		{
+			// FP: character yaw locked to camera
+			bUseControllerRotationYaw = true;
+			MovComp->bOrientRotationToMovement = false;
+		}
+		else
+		{
+			// TP: character faces movement direction
+			bUseControllerRotationYaw = false;
+			MovComp->bOrientRotationToMovement = true;
+		}
+	}
+
+	// 3. Mesh visibility
 	UpdateMeshVisibility();
 
-	// 3. Equipment re-attachment (FP arms vs TP body)
+	// 4. Equipment re-attachment (FP arms vs TP body)
 	UpdateEquipmentAttachments();
 
 	// 4. Interaction scanner range adjustment
@@ -512,6 +535,96 @@ void AVCCharacterBase::HandleItemUnequipped(const FItemInstance& Item, FGameplay
 		ActiveItemAnimType = EVCEquipmentAnimType::Unarmed;
 	}
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// Debug
+// ---------------------------------------------------------------------------
+
+void AVCCharacterBase::ToggleVoxelDebug()
+{
+	bShowVoxelDebug = !bShowVoxelDebug;
+	UE_LOG(LogVoxelCharacter, Log, TEXT("VoxelCharacter debug: %s"), bShowVoxelDebug ? TEXT("ON") : TEXT("OFF"));
+}
+
+void AVCCharacterBase::DrawVoxelDebugInfo()
+{
+	if (!GEngine)
+	{
+		return;
+	}
+
+	const UVCMovementComponent* MovComp = Cast<UVCMovementComponent>(GetCharacterMovement());
+
+	// --- Terrain Context ---
+	if (MovComp)
+	{
+		const FVoxelTerrainContext& Ctx = MovComp->GetTerrainContext();
+		const UEnum* SurfaceEnum = StaticEnum<EVoxelSurfaceType>();
+		const FString SurfaceName = SurfaceEnum ? SurfaceEnum->GetNameStringByValue(static_cast<int64>(Ctx.SurfaceType)) : TEXT("?");
+
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Cyan,
+			FString::Printf(TEXT("=== VoxelCharacter Debug ===")));
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Green,
+			FString::Printf(TEXT("Surface: %s (MatID: %d)"), *SurfaceName, Ctx.VoxelMaterialID));
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Green,
+			FString::Printf(TEXT("Friction: %.2f  Hardness: %.2f"), Ctx.FrictionMultiplier, Ctx.SurfaceHardness));
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, Ctx.bIsUnderwater ? FColor::Blue : FColor::Green,
+			FString::Printf(TEXT("Water: %s  Depth: %.1f"), Ctx.bIsUnderwater ? TEXT("YES") : TEXT("No"), Ctx.WaterDepth));
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Green,
+			FString::Printf(TEXT("Chunk: [%d, %d, %d]"), Ctx.CurrentChunkCoord.X, Ctx.CurrentChunkCoord.Y, Ctx.CurrentChunkCoord.Z));
+	}
+
+	// --- Movement ---
+	if (MovComp)
+	{
+		const FString MoveMode = MovComp->IsMovingOnGround() ? TEXT("Ground")
+			: MovComp->IsFalling() ? TEXT("Falling")
+			: MovComp->IsSwimming() ? TEXT("Swimming")
+			: MovComp->IsFlying() ? TEXT("Flying")
+			: TEXT("Custom");
+
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Yellow,
+			FString::Printf(TEXT("Move: %s  Speed: %.0f  MaxWalk: %.0f"),
+				*MoveMode, MovComp->Velocity.Size(), MovComp->MaxWalkSpeed));
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Yellow,
+			FString::Printf(TEXT("GroundFriction: %.2f  Grip: %.2f"),
+				MovComp->GroundFriction, MovComp->VoxelSurfaceGripMultiplier));
+	}
+
+	// --- Camera ---
+	if (CameraManager)
+	{
+		const UEnum* ViewEnum = StaticEnum<EVCViewMode>();
+		const FString ViewName = ViewEnum ? ViewEnum->GetNameStringByValue(static_cast<int64>(CurrentViewMode)) : TEXT("?");
+
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Magenta,
+			FString::Printf(TEXT("View: %s  FOV: %.1f"), *ViewName, CameraManager->GetCurrentFOV()));
+
+		const FVector CamLoc = CameraManager->GetCurrentCameraLocation();
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Magenta,
+			FString::Printf(TEXT("CamPos: (%.0f, %.0f, %.0f)"), CamLoc.X, CamLoc.Y, CamLoc.Z));
+	}
+
+	// --- Voxel Target ---
+	FHitResult Hit;
+	if (TraceForVoxel(Hit))
+	{
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Orange,
+			FString::Printf(TEXT("Target: (%.0f, %.0f, %.0f) Dist: %.0f"),
+				Hit.ImpactPoint.X, Hit.ImpactPoint.Y, Hit.ImpactPoint.Z,
+				FVector::Dist(GetActorLocation(), Hit.ImpactPoint)));
+	}
+	else
+	{
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Orange, TEXT("Target: None"));
+	}
+
+	// --- Hotbar / Equipment ---
+	const UEnum* AnimEnum = StaticEnum<EVCEquipmentAnimType>();
+	const FString AnimName = AnimEnum ? AnimEnum->GetNameStringByValue(static_cast<int64>(ActiveItemAnimType)) : TEXT("?");
+	GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::White,
+		FString::Printf(TEXT("Hotbar: %d  AnimType: %s"), ActiveHotbarSlot, *AnimName));
 }
 
 // ---------------------------------------------------------------------------

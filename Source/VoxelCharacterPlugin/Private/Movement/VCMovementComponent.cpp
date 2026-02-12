@@ -10,8 +10,11 @@
 
 UVCMovementComponent::UVCMovementComponent()
 {
-	// Defaults matching a standard character
 	SetIsReplicatedByDefault(true);
+
+	// Third-person defaults: character faces movement direction
+	bOrientRotationToMovement = true;
+	RotationRate = FRotator(0.f, 500.f, 0.f);
 }
 
 void UVCMovementComponent::BeginPlay()
@@ -75,6 +78,20 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 
 	// Apply surface friction to ground friction
 	GroundFriction = 8.f * CachedTerrainContext.FrictionMultiplier * VoxelSurfaceGripMultiplier;
+
+	// --- Swimming mode transition ---
+	if (CachedTerrainContext.bIsUnderwater && CachedTerrainContext.WaterDepth >= SwimmingEntryDepth)
+	{
+		if (!IsSwimming())
+		{
+			SetMovementMode(MOVE_Swimming);
+			MaxSwimSpeed = BaseMaxWalkSpeed * VoxelSwimmingSpeedMultiplier * GASSpeedMultiplier;
+		}
+	}
+	else if (IsSwimming() && CachedTerrainContext.WaterDepth < SwimmingExitDepth)
+	{
+		SetMovementMode(MOVE_Walking);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -85,15 +102,23 @@ void UVCMovementComponent::FindFloor(const FVector& CapsuleLocation, FFindFloorR
 {
 	Super::FindFloor(CapsuleLocation, OutFloorResult, bCanUseCachedLocation, DownwardSweepResult);
 
-	// If we were grounded last frame but FindFloor found nothing, this may be
-	// a transient gap caused by async voxel mesh rebuilds. Grant a short grace
-	// period to prevent the character from briefly entering falling state.
-	if (!OutFloorResult.bWalkableFloor && bWasGroundedLastFrame && FloorGraceTimer <= 0.f)
+	// Real floor found — reset grace so it's available for the next gap
+	if (OutFloorResult.bWalkableFloor)
 	{
-		FloorGraceTimer = FloorGraceDuration;
+		bFloorGraceUsed = false;
+		return;
 	}
 
-	if (!OutFloorResult.bWalkableFloor && FloorGraceTimer > 0.f)
+	// No floor found. If we were grounded last frame, this may be a transient
+	// gap caused by async voxel mesh rebuilds. Grant a ONE-SHOT grace period.
+	// bFloorGraceUsed prevents infinite re-triggering (must land on real floor to reset).
+	if (bWasGroundedLastFrame && !bFloorGraceUsed && FloorGraceTimer <= 0.f)
+	{
+		FloorGraceTimer = FloorGraceDuration;
+		bFloorGraceUsed = true;
+	}
+
+	if (FloorGraceTimer > 0.f)
 	{
 		// Synthesize a walkable floor result to keep the character grounded
 		OutFloorResult.bWalkableFloor = true;

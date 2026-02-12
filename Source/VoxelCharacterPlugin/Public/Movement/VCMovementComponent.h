@@ -15,8 +15,9 @@ enum class EEditSource : uint8;
  * Extended CharacterMovementComponent with voxel terrain awareness.
  *
  * Caches terrain context (surface type, friction, water state) and adjusts
- * movement parameters accordingly.  Voxel queries are stubbed until Gate 5
- * wires them to VoxelWorlds.
+ * movement parameters accordingly. Queries voxel terrain data via
+ * FVCVoxelNavigationHelper and automatically transitions to swimming
+ * mode when water is detected.
  */
 UCLASS()
 class VOXELCHARACTERPLUGIN_API UVCMovementComponent : public UCharacterMovementComponent
@@ -48,6 +49,14 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
 	float VoxelSwimmingSpeedMultiplier = 0.6f;
+
+	/** Water depth (world units) at character feet before entering swimming mode. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel", meta = (ClampMin = "0.0"))
+	float SwimmingEntryDepth = 40.f;
+
+	/** Water depth below which the character exits swimming and returns to walking. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel", meta = (ClampMin = "0.0"))
+	float SwimmingExitDepth = 10.f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
 	float VoxelSurfaceGripMultiplier = 1.0f;
@@ -88,6 +97,9 @@ protected:
 
 	/** Grace period remaining when floor temporarily disappears during async mesh rebuild. */
 	mutable float FloorGraceTimer = 0.f;
+
+	/** True once a grace period has been granted — prevents re-triggering until a real floor is found. */
+	mutable bool bFloorGraceUsed = false;
 
 	/** Max grace period (seconds) to maintain grounded state during async mesh rebuilds. */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Movement|Voxel")

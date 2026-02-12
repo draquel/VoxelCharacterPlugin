@@ -30,7 +30,11 @@ void UVCAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	// --- Locomotion ---
 	const FVector Velocity = MovComp->Velocity;
 	Speed = Velocity.Size2D();
+
+	const bool bWasFalling = bIsFalling;
 	bIsFalling = MovComp->IsFalling();
+	bJustLanded = bWasFalling && !bIsFalling;
+
 	bIsCrouching = MovComp->IsCrouching();
 	bIsAccelerating = MovComp->GetCurrentAcceleration().SizeSquared() > KINDA_SMALL_NUMBER;
 

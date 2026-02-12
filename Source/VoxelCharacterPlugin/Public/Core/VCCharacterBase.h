@@ -134,6 +134,18 @@ public:
 	bool TraceForVoxel(FHitResult& OutHit, float MaxDistance = 500.f) const;
 
 	// =================================================================
+	// Debug
+	// =================================================================
+
+	/** Toggle on-screen debug overlay showing terrain, camera, and movement state. */
+	UFUNCTION(Exec, BlueprintCallable, Category = "VoxelCharacter|Debug")
+	void ToggleVoxelDebug();
+
+	/** When true, draws on-screen debug info each frame. Toggle via console: ToggleVoxelDebug */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|Debug")
+	bool bShowVoxelDebug = false;
+
+	// =================================================================
 	// Bridge Interface Overrides
 	// =================================================================
 
@@ -212,4 +224,7 @@ protected:
 
 	/** Resolve the InputConfig from the owning PlayerController. */
 	const UVCInputConfig* GetInputConfig() const;
+
+	/** Draw on-screen debug overlay with terrain, camera, and movement info. */
+	void DrawVoxelDebugInfo();
 };
