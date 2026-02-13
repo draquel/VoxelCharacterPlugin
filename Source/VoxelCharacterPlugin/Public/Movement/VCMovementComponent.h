@@ -74,6 +74,7 @@ public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void PhysCustom(float DeltaTime, int32 Iterations) override;
 	virtual void FindFloor(const FVector& CapsuleLocation, FFindFloorResult& OutFloorResult, bool bCanUseCachedLocation, const FHitResult* DownwardSweepResult = nullptr) const override;
+	virtual bool IsValidLandingSpot(const FVector& CapsuleLocation, const FHitResult& Hit) const override;
 
 protected:
 	/** Cached terrain data, refreshed every TerrainCacheDuration seconds. */
@@ -92,18 +93,31 @@ protected:
 	/** Current GAS speed multiplier (default 1.0). */
 	float GASSpeedMultiplier = 1.f;
 
-	/** Was the character grounded last frame? Used for async mesh rebuild tolerance. */
+	/** Was the character grounded last frame? Used for floor grace logic. */
 	bool bWasGroundedLastFrame = false;
 
-	/** Grace period remaining when floor temporarily disappears during async mesh rebuild. */
+	/** Grace period remaining when floor temporarily disappears. */
 	mutable float FloorGraceTimer = 0.f;
 
-	/** True once a grace period has been granted — prevents re-triggering until a real floor is found. */
-	mutable bool bFloorGraceUsed = false;
+	/** Time since a real (non-synthesized) floor was last detected. Used to allow
+	 *  grace to re-trigger on cubic terrain where floor contact is intermittent. */
+	mutable float TimeSinceLastRealFloor = 0.f;
 
-	/** Max grace period (seconds) to maintain grounded state during async mesh rebuilds. */
+	/** Max grace period (seconds) to maintain grounded state when floor vanishes.
+	 *  Higher values prevent falling thrash on cubic terrain. */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Movement|Voxel")
-	float FloorGraceDuration = 0.15f;
+	float FloorGraceDuration = 0.35f;
+
+	/** Window (seconds) after last real floor contact during which grace can re-trigger.
+	 *  Prevents the one-shot problem on cubic terrain where floor rapidly alternates. */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Movement|Voxel")
+	float RecentGroundedWindow = 1.0f;
+
+	/** Max distance below capsule bottom to check for floor when granting grace.
+	 *  If no floor is found within this distance, it's a real ledge (not a trimesh
+	 *  artifact) and the character should fall naturally instead of getting grace. */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Movement|Voxel")
+	float GraceHeightThreshold = 30.f;
 
 	virtual void BeginPlay() override;
 

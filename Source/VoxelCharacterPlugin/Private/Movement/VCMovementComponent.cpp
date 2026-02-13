@@ -2,6 +2,7 @@
 
 #include "Movement/VCMovementComponent.h"
 #include "Movement/VCVoxelNavigationHelper.h"
+#include "GameFramework/Character.h"
 #include "VoxelChunkManager.h"
 #include "VoxelEditManager.h"
 #include "VoxelEditTypes.h"
@@ -15,6 +16,28 @@ UVCMovementComponent::UVCMovementComponent()
 	// Third-person defaults: character faces movement direction
 	bOrientRotationToMovement = true;
 	RotationRate = FRotator(0.f, 500.f, 0.f);
+
+	// --- Voxel terrain movement defaults ---
+	// These compensate for trimesh collision characteristics:
+	// - Triangle edges at voxel boundaries create small geometric lips
+	// - Double-sided trimesh normals can be slightly off at seams
+	// - Cubic mode has full-voxel-height steps (VoxelSize, default 100)
+	// - LOD 1 collision produces coarser geometry with larger lips
+	MaxStepHeight = 50.f;   // Handles trimesh edge artifacts; full voxel steps require jumping
+	SetWalkableFloorAngle(55.f);
+	bUseFlatBaseForFloorChecks = true;
+	bMaintainHorizontalGroundVelocity = true;
+	bAlwaysCheckFloor = true;  // Force floor checks every frame (no caching)
+	PerchRadiusThreshold = 0.f;
+	PerchAdditionalHeight = 0.f;
+
+	// --- Braking / friction defaults for voxel terrain ---
+	// Default BrakingDecelerationWalking (2048) is too low — character slides.
+	// Combined with a dedicated braking friction, this gives snappy stops on terrain.
+	BrakingDecelerationWalking = 4096.f;
+	BrakingFrictionFactor = 3.f;
+	bUseSeparateBrakingFriction = true;
+	BrakingFriction = 1.f;
 }
 
 void UVCMovementComponent::BeginPlay()
@@ -46,6 +69,10 @@ void UVCMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 	{
 		FloorGraceTimer -= DeltaTime;
 	}
+
+	// Track how long since a real floor was found (incremented each frame,
+	// reset to 0 in FindFloor when actual floor detected)
+	TimeSinceLastRealFloor += DeltaTime;
 
 	// Refresh terrain cache periodically
 	TerrainContextCacheTimer += DeltaTime;
@@ -102,20 +129,105 @@ void UVCMovementComponent::FindFloor(const FVector& CapsuleLocation, FFindFloorR
 {
 	Super::FindFloor(CapsuleLocation, OutFloorResult, bCanUseCachedLocation, DownwardSweepResult);
 
-	// Real floor found — reset grace so it's available for the next gap
+	// --- Handle inverted normals from double-sided voxel trimesh collision ---
+	// With bDoubleSidedGeometry = true, the Chaos trimesh returns the raw face
+	// normal from triangle winding. If the mesher's winding convention differs
+	// from Chaos's expectation, top-surface normals point downward (ImpactNormal.Z < 0).
+	// The floor IS blocking but Super::FindFloor marks it unwalkable. Fix by
+	// flipping the normal and re-evaluating walkability.
+	if (!OutFloorResult.bWalkableFloor && OutFloorResult.bBlockingHit)
+	{
+		FHitResult& Hit = OutFloorResult.HitResult;
+		if (Hit.ImpactNormal.Z < -UE_KINDA_SMALL_NUMBER)
+		{
+			Hit.ImpactNormal = -Hit.ImpactNormal;
+			Hit.Normal = -Hit.Normal;
+			OutFloorResult.bWalkableFloor = IsWalkable(Hit);
+		}
+	}
+
+	// --- Line trace fallback for trimesh edge normal artifacts ---
+	// Capsule sweeps against trimesh collision can return normals perpendicular to
+	// triangle edges rather than face normals. On slopes, these edge normals can be
+	// nearly horizontal, causing IsWalkable() to fail. A line trace hits the triangle
+	// face directly, returning the correct face normal.
+	if (!OutFloorResult.bWalkableFloor && OutFloorResult.bBlockingHit)
+	{
+		const UPrimitiveComponent* CapsulePrimitive = Cast<UPrimitiveComponent>(UpdatedComponent);
+		if (CapsulePrimitive)
+		{
+			const ACharacter* Owner = CharacterOwner.Get();
+			const float CapsuleHalfHeight = Owner ? Owner->GetSimpleCollisionHalfHeight() : 0.f;
+			const FVector TraceStart = CapsuleLocation;
+			// Trace down past capsule bottom + generous margin for floor detection
+			constexpr float FloorTraceMargin = 50.f;
+			const FVector TraceEnd = CapsuleLocation - FVector(0.f, 0.f, CapsuleHalfHeight + FloorTraceMargin);
+
+			FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(VoxelFloorLineTrace), false, Owner);
+			FHitResult LineHit;
+
+			if (GetWorld()->LineTraceSingleByChannel(LineHit, TraceStart, TraceEnd, CapsulePrimitive->GetCollisionObjectType(), QueryParams))
+			{
+				// Fix inverted normals on the line trace result too
+				if (LineHit.ImpactNormal.Z < -UE_KINDA_SMALL_NUMBER)
+				{
+					LineHit.ImpactNormal = -LineHit.ImpactNormal;
+					LineHit.Normal = -LineHit.Normal;
+				}
+
+				if (IsWalkable(LineHit))
+				{
+					UE_LOG(LogVoxelCharacter, Verbose, TEXT("VoxelFloorLineTrace: Edge normal corrected. Sweep=(%.2f, %.2f, %.2f) LineTrace=(%.2f, %.2f, %.2f)"),
+						OutFloorResult.HitResult.ImpactNormal.X, OutFloorResult.HitResult.ImpactNormal.Y, OutFloorResult.HitResult.ImpactNormal.Z,
+						LineHit.ImpactNormal.X, LineHit.ImpactNormal.Y, LineHit.ImpactNormal.Z);
+
+					// Override the floor result with the corrected face normal
+					OutFloorResult.HitResult.ImpactNormal = LineHit.ImpactNormal;
+					OutFloorResult.HitResult.Normal = LineHit.Normal;
+					OutFloorResult.bWalkableFloor = true;
+				}
+			}
+		}
+	}
+
+	// Real floor found — reset the "recently grounded" timer
 	if (OutFloorResult.bWalkableFloor)
 	{
-		bFloorGraceUsed = false;
+		TimeSinceLastRealFloor = 0.f;
 		return;
 	}
 
-	// No floor found. If we were grounded last frame, this may be a transient
-	// gap caused by async voxel mesh rebuilds. Grant a ONE-SHOT grace period.
-	// bFloorGraceUsed prevents infinite re-triggering (must land on real floor to reset).
-	if (bWasGroundedLastFrame && !bFloorGraceUsed && FloorGraceTimer <= 0.f)
+	// No floor found. Only grant grace for SHALLOW gaps (trimesh collision artifacts),
+	// not for real ledges. Check how far below the nearest floor is — if it's a big
+	// drop (e.g., a cubic voxel step-down), let the character fall naturally instead
+	// of synthesizing floor and teleporting down later.
+	if (TimeSinceLastRealFloor < RecentGroundedWindow && FloorGraceTimer <= 0.f)
 	{
-		FloorGraceTimer = FloorGraceDuration;
-		bFloorGraceUsed = true;
+		bool bShouldGrantGrace = true;
+
+		// Trace down to see if there's floor within the grace height threshold.
+		// If the nearest floor is too far below, this is a real ledge — don't grant grace.
+		const ACharacter* Owner = CharacterOwner.Get();
+		if (Owner)
+		{
+			const float CapsuleHalfHeight = Owner->GetSimpleCollisionHalfHeight();
+			const FVector TraceStart = CapsuleLocation - FVector(0.f, 0.f, CapsuleHalfHeight);
+			const FVector TraceEnd = TraceStart - FVector(0.f, 0.f, GraceHeightThreshold);
+
+			FCollisionQueryParams Params(SCENE_QUERY_STAT(VoxelGraceCheck), false, Owner);
+			FHitResult GraceHit;
+			if (!GetWorld()->LineTraceSingleByChannel(GraceHit, TraceStart, TraceEnd,
+				UpdatedComponent->GetCollisionObjectType(), Params))
+			{
+				// No floor within threshold — real ledge, let character fall
+				bShouldGrantGrace = false;
+			}
+		}
+
+		if (bShouldGrantGrace)
+		{
+			FloorGraceTimer = FloorGraceDuration;
+		}
 	}
 
 	if (FloorGraceTimer > 0.f)
@@ -125,6 +237,62 @@ void UVCMovementComponent::FindFloor(const FVector& CapsuleLocation, FFindFloorR
 		OutFloorResult.bBlockingHit = true;
 		OutFloorResult.FloorDist = 0.f;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Landing Spot Validation (inverted normal fix for voxel trimesh)
+// ---------------------------------------------------------------------------
+
+bool UVCMovementComponent::IsValidLandingSpot(const FVector& CapsuleLocation, const FHitResult& Hit) const
+{
+	if (!Hit.bBlockingHit)
+	{
+		return Super::IsValidLandingSpot(CapsuleLocation, Hit);
+	}
+
+	// Fix inverted normals from double-sided voxel trimesh.
+	// The base class rejects hits with ImpactNormal.Z < 0 before FindFloor
+	// gets a chance to correct them, causing the character to slide after jumps.
+	if (!Hit.bStartPenetrating && Hit.ImpactNormal.Z < -UE_KINDA_SMALL_NUMBER)
+	{
+		FHitResult FixedHit = Hit;
+		FixedHit.ImpactNormal = -FixedHit.ImpactNormal;
+		FixedHit.Normal = -FixedHit.Normal;
+		return Super::IsValidLandingSpot(CapsuleLocation, FixedHit);
+	}
+
+	// Fix edge normals: capsule sweep may return a nearly-horizontal edge normal
+	// instead of the face normal. Line trace to get the actual surface normal.
+	if (!Hit.bStartPenetrating && !IsWalkable(Hit))
+	{
+		const float CapsuleHalfHeight = CharacterOwner ? CharacterOwner->GetSimpleCollisionHalfHeight() : 0.f;
+		const FVector TraceStart = CapsuleLocation;
+		const FVector TraceEnd = CapsuleLocation - FVector(0.f, 0.f, CapsuleHalfHeight + 50.f);
+
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(VoxelLandingTrace), false, CharacterOwner);
+		FHitResult LineHit;
+
+		if (GetWorld()->LineTraceSingleByChannel(LineHit, TraceStart, TraceEnd,
+			UpdatedComponent->GetCollisionObjectType(), Params))
+		{
+			// Fix inverted normals on line trace too
+			if (LineHit.ImpactNormal.Z < -UE_KINDA_SMALL_NUMBER)
+			{
+				LineHit.ImpactNormal = -LineHit.ImpactNormal;
+				LineHit.Normal = -LineHit.Normal;
+			}
+
+			if (IsWalkable(LineHit))
+			{
+				FHitResult FixedHit = Hit;
+				FixedHit.ImpactNormal = LineHit.ImpactNormal;
+				FixedHit.Normal = LineHit.Normal;
+				return Super::IsValidLandingSpot(CapsuleLocation, FixedHit);
+			}
+		}
+	}
+
+	return Super::IsValidLandingSpot(CapsuleLocation, Hit);
 }
 
 // ---------------------------------------------------------------------------
