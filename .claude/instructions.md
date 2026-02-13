@@ -234,6 +234,52 @@ The check uses an AABB-vs-AABB test (voxel box against capsule bounding box) —
 | Camera State | No | Local only, never replicated |
 | Input State | No | Local only |
 
+## UI Management (AVCPlayerController)
+
+### Widget Ownership
+
+`AVCPlayerController` owns and manages all player-facing UI widgets. It creates them, positions them in the viewport, and handles input flow. The widget classes themselves live in their respective gameplay plugins (e.g., `UHotbarWidget` in ItemInventoryPlugin), but the controller is the orchestrator.
+
+**Persistent widgets** (created in `CreatePersistentWidgets()` during `BeginPlay`):
+- `HotbarWidget` — always visible at bottom-center, `HitTestInvisible` by default
+- `InteractionPromptWidget` — shown/hidden by interaction scanner callbacks
+
+**Toggle widgets** (lazy-created in `ShowInventoryPanels()`):
+- `InventoryPanelWidget` — grid of slots [9, MaxSlots), removed from viewport on close
+- `EquipmentPanelWidget` — equipment slots, removed from viewport on close
+- `ItemCursorWidget` — floating cursor icon, lazy-created on first item grab, Z-order 100
+
+All widget class references are `TSubclassOf<UUserWidget>` properties on the controller. If not set, they default to the C++ base class via `StaticClass()`. This allows Blueprint skinning without code changes.
+
+### Click-to-Move State Machine
+
+The controller manages a simple two-state machine for item rearrangement:
+
+```
+HeldSlotIndex == INDEX_NONE  →  Nothing held
+HeldSlotIndex >= 0           →  Item grabbed from that slot
+```
+
+**Delegate binding:** `BindSlotClickDelegates()` is called once from `ShowInventoryPanels()` after widgets are initialized. It binds the hotbar's and panel's `OnSlotClicked`/`OnSlotRightClicked` to `OnSlotClickedFromUI`/`OnSlotRightClickedFromUI` on the controller. A `bSlotDelegatesBound` guard prevents double-binding since the hotbar and panel widget objects persist across open/close cycles.
+
+**Slot routing:** `SetSlotHeldVisual(int32, bool)` routes to the correct container widget based on slot index: `< 9` → hotbar, `>= 9` → panel.
+
+**Inventory close cleanup:** `HideInventoryPanels()` calls `CancelHeldState()` before reverting the hotbar to `HitTestInvisible`.
+
+### Conditional Compilation
+
+All inventory/interaction/equipment UI code is wrapped in `#if WITH_INVENTORY_PLUGIN` / `#if WITH_INTERACTION_PLUGIN` / `#if WITH_EQUIPMENT_PLUGIN` guards. The controller compiles and functions (without UI) when gameplay plugins are absent.
+
+Widget class includes go in the `.cpp` inside these guards — never in the header. The header uses forward declarations only: `class UItemCursorWidget;`, `class UInventoryComponent;`.
+
+### Adding New UI Widgets
+
+When adding a new widget that the controller manages:
+1. Add `TSubclassOf<UUserWidget>` class property and `TObjectPtr<UUserWidget>` instance in the controller header
+2. Forward-declare the widget class in the header; `#include` in the `.cpp` under the correct `WITH_*` guard
+3. Create/add to viewport in the appropriate lifecycle method
+4. If the widget needs click interaction, follow the delegate relay pattern: child widget → container delegate → controller handler
+
 ## Integration Testing Checklist
 
 When modifying this plugin, verify:
