@@ -129,6 +129,31 @@ UAbilitySystemComponent* AVCCharacterBase::GetAbilitySystemComponent() const
 }
 
 // ---------------------------------------------------------------------------
+// ICGFInventoryInterface
+// ---------------------------------------------------------------------------
+
+UActorComponent* AVCCharacterBase::GetInventoryComponent_Implementation() const
+{
+#if WITH_INVENTORY_PLUGIN
+	return InventoryComponent;
+#else
+	return nullptr;
+#endif
+}
+
+TArray<UActorComponent*> AVCCharacterBase::GetInventoryComponents_Implementation() const
+{
+	TArray<UActorComponent*> Result;
+#if WITH_INVENTORY_PLUGIN
+	if (InventoryComponent)
+	{
+		Result.Add(InventoryComponent);
+	}
+#endif
+	return Result;
+}
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 

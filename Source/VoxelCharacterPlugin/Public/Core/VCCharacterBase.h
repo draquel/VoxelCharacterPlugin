@@ -7,6 +7,7 @@
 #include "AbilitySystemInterface.h"
 #include "Core/VCTypes.h"
 #include "Types/CGFItemTypes.h"
+#include "Interfaces/CGFInventoryInterface.h"
 #include "Integration/VCInventoryBridge.h"
 #include "Integration/VCInteractionBridge.h"
 #include "Integration/VCEquipmentBridge.h"
@@ -44,6 +45,7 @@ class UInventoryComponent;
 UCLASS()
 class VOXELCHARACTERPLUGIN_API AVCCharacterBase : public ACharacter,
 	public IAbilitySystemInterface,
+	public ICGFInventoryInterface,
 	public IVCInventoryBridge,
 	public IVCInteractionBridge,
 	public IVCEquipmentBridge,
@@ -56,6 +58,10 @@ public:
 
 	// --- IAbilitySystemInterface ---
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
+
+	// --- ICGFInventoryInterface ---
+	virtual UActorComponent* GetInventoryComponent_Implementation() const override;
+	virtual TArray<UActorComponent*> GetInventoryComponents_Implementation() const override;
 
 	// =================================================================
 	// Components
