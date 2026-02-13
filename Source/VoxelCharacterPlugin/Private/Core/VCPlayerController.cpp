@@ -21,6 +21,7 @@
 #include "Data/ItemDefinition.h"
 #include "UI/HotbarWidget.h"
 #include "UI/InventoryPanelWidget.h"
+#include "UI/ItemCursorWidget.h"
 #endif
 
 #if WITH_INTERACTION_PLUGIN
@@ -289,6 +290,14 @@ void AVCPlayerController::ShowInventoryPanels()
 
 		InventoryPanelWidget->SetVisibility(ESlateVisibility::Visible);
 	}
+
+	// Make hotbar clickable while inventory is open
+	if (HotbarWidget)
+	{
+		HotbarWidget->SetVisibility(ESlateVisibility::Visible);
+	}
+
+	BindSlotClickDelegates();
 #endif
 
 #if WITH_EQUIPMENT_PLUGIN
@@ -329,6 +338,16 @@ void AVCPlayerController::ShowInventoryPanels()
 
 void AVCPlayerController::HideInventoryPanels()
 {
+#if WITH_INVENTORY_PLUGIN
+	CancelHeldState();
+
+	// Revert hotbar to display-only
+	if (HotbarWidget)
+	{
+		HotbarWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+#endif
+
 	if (InventoryPanelWidget && InventoryPanelWidget->IsInViewport())
 	{
 		InventoryPanelWidget->RemoveFromParent();
@@ -370,6 +389,222 @@ void AVCPlayerController::RemoveInputMappingContext(const UInputMappingContext* 
 	{
 		Subsystem->RemoveMappingContext(Context);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Click-to-Move Item Management
+// ---------------------------------------------------------------------------
+
+void AVCPlayerController::BindSlotClickDelegates()
+{
+#if WITH_INVENTORY_PLUGIN
+	if (bSlotDelegatesBound)
+	{
+		return;
+	}
+
+	if (UHotbarWidget* Hotbar = Cast<UHotbarWidget>(HotbarWidget))
+	{
+		Hotbar->OnSlotClicked.AddDynamic(this, &AVCPlayerController::OnSlotClickedFromUI);
+		Hotbar->OnSlotRightClicked.AddDynamic(this, &AVCPlayerController::OnSlotRightClickedFromUI);
+	}
+
+	if (UInventoryPanelWidget* Panel = Cast<UInventoryPanelWidget>(InventoryPanelWidget))
+	{
+		Panel->OnSlotClicked.AddDynamic(this, &AVCPlayerController::OnSlotClickedFromUI);
+		Panel->OnSlotRightClicked.AddDynamic(this, &AVCPlayerController::OnSlotRightClickedFromUI);
+	}
+
+	bSlotDelegatesBound = true;
+#endif
+}
+
+void AVCPlayerController::OnSlotClickedFromUI(int32 ClickedSlotIndex, UInventoryComponent* Inventory)
+{
+#if WITH_INVENTORY_PLUGIN
+	if (HeldSlotIndex == INDEX_NONE)
+	{
+		// Nothing held — check if clicked slot has an item
+		if (Inventory)
+		{
+			const FItemInstance Item = Inventory->GetItemInSlot(ClickedSlotIndex);
+			if (Item.IsValid())
+			{
+				EnterHeldState(ClickedSlotIndex, Inventory);
+			}
+		}
+	}
+	else if (ClickedSlotIndex == HeldSlotIndex && Inventory == HeldInventory)
+	{
+		// Clicked same slot — cancel
+		CancelHeldState();
+	}
+	else
+	{
+		// Held + clicked different slot — swap
+		ExecuteSwapAndClearHeld(ClickedSlotIndex);
+	}
+#endif
+}
+
+void AVCPlayerController::OnSlotRightClickedFromUI(int32 ClickedSlotIndex, UInventoryComponent* Inventory)
+{
+#if WITH_INVENTORY_PLUGIN
+	if (HeldSlotIndex != INDEX_NONE)
+	{
+		CancelHeldState();
+	}
+#endif
+}
+
+void AVCPlayerController::EnterHeldState(int32 InSlotIndex, UInventoryComponent* Inventory)
+{
+#if WITH_INVENTORY_PLUGIN
+	HeldSlotIndex = InSlotIndex;
+	HeldInventory = Inventory;
+
+	SetSlotHeldVisual(InSlotIndex, true);
+	ShowItemCursor(InSlotIndex, Inventory);
+
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("EnterHeldState: Slot %d"), InSlotIndex);
+#endif
+}
+
+void AVCPlayerController::ExecuteSwapAndClearHeld(int32 TargetSlotIndex)
+{
+#if WITH_INVENTORY_PLUGIN
+	if (!HeldInventory || HeldSlotIndex == INDEX_NONE)
+	{
+		return;
+	}
+
+	// Clear visuals first
+	SetSlotHeldVisual(HeldSlotIndex, false);
+	HideItemCursor();
+
+	const int32 SourceSlot = HeldSlotIndex;
+
+	// Reset state before swap (in case swap triggers delegate callbacks)
+	HeldSlotIndex = INDEX_NONE;
+	HeldInventory = nullptr;
+
+	// Find the pawn's inventory for the swap
+	UInventoryComponent* Inventory = nullptr;
+	if (APawn* ControlledPawn = GetPawn())
+	{
+		Inventory = ControlledPawn->FindComponentByClass<UInventoryComponent>();
+	}
+
+	if (Inventory)
+	{
+		const EInventoryOperationResult Result = Inventory->TrySwapSlots(SourceSlot, TargetSlotIndex);
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("ExecuteSwap: %d <-> %d = %s"),
+			SourceSlot, TargetSlotIndex,
+			Result == EInventoryOperationResult::Success ? TEXT("Success") : TEXT("Failed"));
+	}
+#endif
+}
+
+void AVCPlayerController::CancelHeldState()
+{
+#if WITH_INVENTORY_PLUGIN
+	if (HeldSlotIndex == INDEX_NONE)
+	{
+		return;
+	}
+
+	SetSlotHeldVisual(HeldSlotIndex, false);
+	HideItemCursor();
+
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("CancelHeldState: Slot %d"), HeldSlotIndex);
+
+	HeldSlotIndex = INDEX_NONE;
+	HeldInventory = nullptr;
+#endif
+}
+
+void AVCPlayerController::SetSlotHeldVisual(int32 InSlotIndex, bool bHeld)
+{
+#if WITH_INVENTORY_PLUGIN
+	// Hotbar slots are [0, 9), panel slots are [9, MaxSlots)
+	if (InSlotIndex < 9)
+	{
+		if (UHotbarWidget* Hotbar = Cast<UHotbarWidget>(HotbarWidget))
+		{
+			Hotbar->SetSlotHeld(InSlotIndex, bHeld);
+		}
+	}
+	else
+	{
+		if (UInventoryPanelWidget* Panel = Cast<UInventoryPanelWidget>(InventoryPanelWidget))
+		{
+			Panel->SetSlotHeld(InSlotIndex, bHeld);
+		}
+	}
+#endif
+}
+
+void AVCPlayerController::ShowItemCursor(int32 InSlotIndex, UInventoryComponent* Inventory)
+{
+#if WITH_INVENTORY_PLUGIN
+	if (!Inventory)
+	{
+		return;
+	}
+
+	// Lazy-create cursor widget
+	if (!ItemCursorWidget)
+	{
+		TSubclassOf<UUserWidget> ClassToUse = ItemCursorWidgetClass;
+		if (!ClassToUse)
+		{
+			ClassToUse = UItemCursorWidget::StaticClass();
+		}
+		ItemCursorWidget = CreateWidget<UItemCursorWidget>(this, ClassToUse);
+		if (ItemCursorWidget)
+		{
+			ItemCursorWidget->AddToViewport(100);
+		}
+	}
+
+	if (!ItemCursorWidget)
+	{
+		return;
+	}
+
+	// Resolve item icon
+	const FItemInstance Item = Inventory->GetItemInSlot(InSlotIndex);
+	TSoftObjectPtr<UTexture2D> IconRef;
+
+	if (Item.IsValid())
+	{
+		UItemDatabaseSubsystem* ItemDB = nullptr;
+		if (const UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr)
+		{
+			ItemDB = GI->GetSubsystem<UItemDatabaseSubsystem>();
+		}
+
+		if (ItemDB)
+		{
+			if (const UItemDefinition* Def = ItemDB->GetDefinition(Item.ItemDefinitionId))
+			{
+				IconRef = Def->Icon;
+			}
+		}
+	}
+
+	ItemCursorWidget->ShowWithIcon(IconRef);
+#endif
+}
+
+void AVCPlayerController::HideItemCursor()
+{
+#if WITH_INVENTORY_PLUGIN
+	if (ItemCursorWidget)
+	{
+		ItemCursorWidget->HideCursor();
+	}
+#endif
 }
 
 // ---------------------------------------------------------------------------

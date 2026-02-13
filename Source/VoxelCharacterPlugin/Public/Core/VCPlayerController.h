@@ -10,6 +10,8 @@
 class UVCInputConfig;
 class UInputMappingContext;
 class UUserWidget;
+class UInventoryComponent;
+class UItemCursorWidget;
 
 /**
  * Player controller for the voxel character system.
@@ -73,6 +75,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|UI")
 	TSubclassOf<UUserWidget> EquipmentPanelWidgetClass;
 
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> ItemCursorWidgetClass;
+
 	// --- Debug Commands ---
 
 	/** Give an item to the possessed character's inventory by asset name substring. */
@@ -126,5 +131,49 @@ private:
 	UPROPERTY()
 	TObjectPtr<UUserWidget> EquipmentPanelWidget;
 
+	UPROPERTY()
+	TObjectPtr<UItemCursorWidget> ItemCursorWidget;
+
 	bool bInventoryOpen = false;
+
+	// --- Click-to-move item management ---
+
+	/** The slot index currently held/grabbed (-1 = nothing held). */
+	int32 HeldSlotIndex = INDEX_NONE;
+
+	/** The inventory component the held slot belongs to. */
+	UPROPERTY()
+	TObjectPtr<UInventoryComponent> HeldInventory;
+
+	/** Whether we've bound slot click delegates (guard against double-bind). */
+	bool bSlotDelegatesBound = false;
+
+	/** Bind click delegates from hotbar + panel widgets. */
+	void BindSlotClickDelegates();
+
+	/** Handle a slot left-click (state machine). */
+	UFUNCTION()
+	void OnSlotClickedFromUI(int32 ClickedSlotIndex, UInventoryComponent* Inventory);
+
+	/** Handle a slot right-click (cancel). */
+	UFUNCTION()
+	void OnSlotRightClickedFromUI(int32 ClickedSlotIndex, UInventoryComponent* Inventory);
+
+	/** Enter the held state: highlight slot, show cursor. */
+	void EnterHeldState(int32 InSlotIndex, UInventoryComponent* Inventory);
+
+	/** Swap held slot with target, clear held state. */
+	void ExecuteSwapAndClearHeld(int32 TargetSlotIndex);
+
+	/** Cancel held state: clear highlight, hide cursor. */
+	void CancelHeldState();
+
+	/** Set or clear the held visual on the correct widget. */
+	void SetSlotHeldVisual(int32 InSlotIndex, bool bHeld);
+
+	/** Show the item cursor with the icon for the given slot. */
+	void ShowItemCursor(int32 InSlotIndex, UInventoryComponent* Inventory);
+
+	/** Hide the item cursor widget. */
+	void HideItemCursor();
 };
