@@ -25,6 +25,11 @@
 
 #if WITH_INTERACTION_PLUGIN
 #include "Components/InteractionComponent.h"
+#include "Components/InteractableComponent.h"
+#include "Detection/SphereOverlapDetection.h"
+#include "Subsystems/WorldItemPoolSubsystem.h"
+#include "Actors/WorldItem.h"
+#include "Tags/CGFGameplayTags.h"
 #endif
 
 #if WITH_EQUIPMENT_PLUGIN
@@ -722,6 +727,63 @@ void AVCCharacterBase::SetActiveHotbarSlot(int32 SlotIndex)
 {
 	ActiveHotbarSlot = FMath::Clamp(SlotIndex, 0, NumHotbarSlots - 1);
 	UE_LOG(LogVoxelCharacter, Verbose, TEXT("ActiveHotbarSlot = %d"), ActiveHotbarSlot);
+}
+
+bool AVCCharacterBase::RequestPickupItem(AActor* WorldItem)
+{
+#if WITH_INTERACTION_PLUGIN && WITH_INVENTORY_PLUGIN
+	if (!WorldItem)
+	{
+		return false;
+	}
+
+	if (UInteractableComponent* Interactable = WorldItem->FindComponentByClass<UInteractableComponent>())
+	{
+		return Interactable->Interact(this, CGFGameplayTags::Interaction_Type_Pickup) == EInteractionResult::Success;
+	}
+#endif
+	return false;
+}
+
+bool AVCCharacterBase::RequestDropActiveItem(int32 Count)
+{
+#if WITH_INVENTORY_PLUGIN && WITH_INTERACTION_PLUGIN
+	if (!InventoryComponent)
+	{
+		return false;
+	}
+
+	FItemInstance Item = InventoryComponent->GetItemInSlot(ActiveHotbarSlot);
+	if (!Item.IsValid())
+	{
+		return false;
+	}
+
+	// Determine drop location: in front of character
+	const FVector DropLoc = GetActorLocation() + GetActorForwardVector() * 150.f;
+
+	UWorldItemPoolSubsystem* Pool = GetWorld()->GetSubsystem<UWorldItemPoolSubsystem>();
+	if (!Pool)
+	{
+		return false;
+	}
+
+	// Create a copy with the requested count for dropping
+	FItemInstance DropItem = Item;
+	DropItem.StackCount = FMath::Min(Count, Item.StackCount);
+
+	AWorldItem* Spawned = Pool->SpawnWorldItem(DropItem, DropLoc);
+	if (!Spawned)
+	{
+		return false;
+	}
+
+	// Remove from inventory
+	InventoryComponent->TryRemoveItem(Item.InstanceId, DropItem.StackCount);
+	return true;
+#else
+	return false;
+#endif
 }
 
 // ---------------------------------------------------------------------------

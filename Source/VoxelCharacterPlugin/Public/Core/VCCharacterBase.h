@@ -172,6 +172,8 @@ public:
 	virtual UActorComponent* GetPrimaryInventory() const override;
 	virtual int32 GetActiveHotbarSlot() const override;
 	virtual void SetActiveHotbarSlot(int32 SlotIndex) override;
+	virtual bool RequestPickupItem(AActor* WorldItem) override;
+	virtual bool RequestDropActiveItem(int32 Count = 1) override;
 
 	// --- IVCInteractionBridge ---
 	virtual FVector GetInteractionTraceOrigin() const override;
