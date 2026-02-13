@@ -272,6 +272,7 @@ protected:
 	void Input_OpenInventory(const FInputActionValue& Value);
 	void Input_HotbarSlot(const FInputActionValue& Value);
 	void Input_ScrollHotbar(const FInputActionValue& Value);
+	void Input_Drop(const FInputActionValue& Value);
 
 	/** Resolve the InputConfig from the owning PlayerController. */
 	const UVCInputConfig* GetInputConfig() const;

@@ -63,6 +63,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_ScrollHotbar;
 
+	/** Digital — Q key — drop active hotbar item. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_Drop;
+
 	// ==================== Mapping Contexts ====================
 
 	/** Base gameplay context — always active at priority 0. */

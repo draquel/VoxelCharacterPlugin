@@ -1005,6 +1005,10 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	{
 		EIC->BindAction(Config->IA_ScrollHotbar, ETriggerEvent::Triggered, this, &AVCCharacterBase::Input_ScrollHotbar);
 	}
+	if (Config->IA_Drop)
+	{
+		EIC->BindAction(Config->IA_Drop, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Drop);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1191,4 +1195,9 @@ void AVCCharacterBase::Input_ScrollHotbar(const FInputActionValue& Value)
 
 		SetActiveHotbarSlot(NewSlot);
 	}
+}
+
+void AVCCharacterBase::Input_Drop(const FInputActionValue& Value)
+{
+	RequestDropActiveItem(1);
 }
