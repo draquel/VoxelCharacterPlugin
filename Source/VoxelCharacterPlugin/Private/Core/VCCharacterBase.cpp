@@ -71,6 +71,8 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 
 #if WITH_INTERACTION_PLUGIN
 	InteractionComponent = CreateDefaultSubobject<UInteractionComponent>(TEXT("InteractionComponent"));
+	InteractionComponent->DetectionStrategy = CreateDefaultSubobject<USphereOverlapDetection>(TEXT("DefaultDetectionStrategy"));
+	InteractionComponent->InteractionRange = 400.f;
 #endif
 
 #if WITH_EQUIPMENT_PLUGIN
