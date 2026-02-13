@@ -19,6 +19,7 @@
 #include "VoxelCoordinates.h"
 #include "VoxelWorldConfiguration.h"
 #include "VoxelChunkManager.h"
+#include "VoxelCollisionManager.h"
 #include "VoxelCharacterPlugin.h"
 #include "Engine/Engine.h"
 
@@ -124,15 +125,115 @@ void AVCCharacterBase::BeginPlay()
 		EquipmentManager->OnItemUnequipped.AddDynamic(this, &AVCCharacterBase::HandleItemUnequipped);
 	}
 #endif
+
+	// --- Terrain Ready Spawn ---
+	if (bWaitForTerrain)
+	{
+		FreezeForTerrainWait();
+		InitiateChunkBasedWait();
+	}
+}
+
+void AVCCharacterBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// Unbind from collision manager delegate
+	if (UVoxelCollisionManager* ColMgr = CachedCollisionManager.Get())
+	{
+		if (CollisionReadyDelegateHandle.IsValid())
+		{
+			ColMgr->OnCollisionReady.Remove(CollisionReadyDelegateHandle);
+			CollisionReadyDelegateHandle.Reset();
+		}
+	}
+	CachedCollisionManager.Reset();
+	PendingTerrainChunks.Empty();
+
+	Super::EndPlay(EndPlayReason);
 }
 
 void AVCCharacterBase::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	// --- Terrain Ready Spawn ---
+	// Primary: OnChunkCollisionReady delegate. Fallback: periodic poll + timeout.
+	if (bIsWaitingForTerrain)
+	{
+		TerrainWaitElapsed += DeltaSeconds;
+
+		// Periodic poll every 2s: re-check HasCollision and re-request dropped chunks
+		if (PendingTerrainChunks.Num() > 0 && FMath::Fmod(TerrainWaitElapsed, 2.0f) < DeltaSeconds)
+		{
+			if (UVoxelCollisionManager* ColMgr = CachedCollisionManager.Get())
+			{
+				TArray<FIntVector> NowReady;
+				for (const FIntVector& Coord : PendingTerrainChunks)
+				{
+					if (ColMgr->HasCollision(Coord))
+					{
+						NowReady.Add(Coord);
+					}
+					else
+					{
+						// Re-request in case the previous request was dropped (chunk data wasn't ready)
+						ColMgr->RequestCollision(Coord, 2000.f);
+					}
+				}
+				for (const FIntVector& Coord : NowReady)
+				{
+					PendingTerrainChunks.Remove(Coord);
+					UE_LOG(LogVoxelCharacter, Log,
+						TEXT("Terrain poll: Chunk (%d,%d,%d) ready — %d remaining"),
+						Coord.X, Coord.Y, Coord.Z, PendingTerrainChunks.Num());
+				}
+				if (PendingTerrainChunks.Num() == 0)
+				{
+					UE_LOG(LogVoxelCharacter, Log, TEXT("All terrain chunks ready (via poll) — placing character."));
+					PlaceOnTerrainAndResume();
+					return;
+				}
+
+				// "Good enough" placement: if most chunks ready and we've waited a while,
+				// proceed even if some edge chunks fail. Center chunk is the most important.
+				const int32 TotalChunks = (2 * TerrainWaitChunkRadius + 1) * (2 * TerrainWaitChunkRadius + 1);
+				const int32 ReadyChunks = TotalChunks - PendingTerrainChunks.Num();
+				if (TerrainWaitElapsed > 10.f && ReadyChunks >= FMath::CeilToInt(TotalChunks * 0.75f))
+				{
+					UE_LOG(LogVoxelCharacter, Log,
+						TEXT("Terrain mostly ready (%d/%d chunks) after %.1fs — placing character."),
+						ReadyChunks, TotalChunks, TerrainWaitElapsed);
+					PendingTerrainChunks.Empty();
+					PlaceOnTerrainAndResume();
+					return;
+				}
+			}
+		}
+
+		if (TerrainWaitElapsed >= TerrainWaitTimeout)
+		{
+			UE_LOG(LogVoxelCharacter, Warning,
+				TEXT("Terrain wait timeout (%.1fs) — %d/%d chunks still pending. Force-placing."),
+				TerrainWaitTimeout, PendingTerrainChunks.Num(),
+				(2 * TerrainWaitChunkRadius + 1) * (2 * TerrainWaitChunkRadius + 1));
+			PendingTerrainChunks.Empty();
+			PlaceOnTerrainAndResume();
+		}
+		return; // Skip camera/debug updates while frozen
+	}
+
 	if (CameraManager)
 	{
 		CameraManager->UpdateCamera(DeltaSeconds);
+
+		// Deferred FP mesh hide: wait until camera blend is nearly complete
+		// so the player sees the camera zoom in on the character before it vanishes.
+		if (bPendingFPMeshHide && CameraManager->GetTopModeBlendWeight() >= 0.9f)
+		{
+			bPendingFPMeshHide = false;
+			UpdateMeshVisibility();
+			// Restore default near clip plane now that the body mesh is hidden
+			GNearClippingPlane = 10.f;
+		}
 	}
 
 	if (bShowVoxelDebug && IsLocallyControlled())
@@ -275,8 +376,20 @@ void AVCCharacterBase::SetViewMode(EVCViewMode NewMode)
 		}
 	}
 
-	// 3. Mesh visibility
-	UpdateMeshVisibility();
+	// 3. Mesh visibility — defer hide when entering FP so the camera
+	//    blend can "zoom in" on the character before hiding the body.
+	if (NewMode == EVCViewMode::FirstPerson && IsLocallyControlled())
+	{
+		bPendingFPMeshHide = true;
+		// Temporarily shrink near clip plane so the mesh doesn't get clipped
+		// as the camera zooms through it during the blend.
+		GNearClippingPlane = 1.f;
+	}
+	else
+	{
+		bPendingFPMeshHide = false;
+		UpdateMeshVisibility();
+	}
 
 	// 4. Equipment re-attachment (FP arms vs TP body)
 	UpdateEquipmentAttachments();
@@ -300,7 +413,11 @@ void AVCCharacterBase::SetViewMode(EVCViewMode NewMode)
 
 void AVCCharacterBase::OnRep_ViewMode()
 {
-	UpdateMeshVisibility();
+	// Skip immediate mesh hide if we're deferring it for the FP camera blend
+	if (!bPendingFPMeshHide)
+	{
+		UpdateMeshVisibility();
+	}
 	UpdateEquipmentAttachments();
 }
 
@@ -318,6 +435,195 @@ void AVCCharacterBase::UpdateMeshVisibility()
 	{
 		FirstPersonArmsMesh->SetVisibility(bIsLocalFP);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Terrain Ready Spawn
+// ---------------------------------------------------------------------------
+
+void AVCCharacterBase::FreezeForTerrainWait()
+{
+	GetCharacterMovement()->DisableMovement();
+	SetActorEnableCollision(false);
+	bIsWaitingForTerrain = true;
+	TerrainWaitElapsed = 0.f;
+	UE_LOG(LogVoxelCharacter, Log, TEXT("Waiting for terrain collision before placing character..."));
+}
+
+void AVCCharacterBase::InitiateChunkBasedWait()
+{
+	// Find the collision manager via the chunk manager
+	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	if (!ChunkMgr)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("InitiateChunkBasedWait: No VoxelChunkManager found — placing immediately."));
+		PlaceOnTerrainAndResume();
+		return;
+	}
+
+	UVoxelCollisionManager* ColMgr = ChunkMgr->GetCollisionManager();
+	if (!ColMgr)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("InitiateChunkBasedWait: No CollisionManager — placing immediately."));
+		PlaceOnTerrainAndResume();
+		return;
+	}
+
+	const UVoxelWorldConfiguration* Config = ChunkMgr->GetConfiguration();
+	if (!Config)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("InitiateChunkBasedWait: No VoxelWorldConfiguration — placing immediately."));
+		PlaceOnTerrainAndResume();
+		return;
+	}
+
+	CachedCollisionManager = ColMgr;
+
+	// Relocate to valid terrain if current position is over water or invalid.
+	// Place at terrain surface height so chunk Z calculation is correct.
+	// Movement/collision are disabled during wait, so the character won't fall.
+	// PlaceOnTerrainAndResume() raycast (±50000u) handles precise final placement.
+	FVector ValidSpawn;
+	if (FVCVoxelNavigationHelper::FindSpawnablePosition(GetWorld(), GetActorLocation(), ValidSpawn))
+	{
+		SetActorLocation(ValidSpawn);
+	}
+
+	UE_LOG(LogVoxelCharacter, Log,
+		TEXT("InitiateChunkBasedWait: Bound to CollisionManager %p in world '%s' (PIE=%d)"),
+		ColMgr, *GetWorld()->GetName(), GetWorld()->IsPlayInEditor());
+
+	// Convert character world position to chunk coordinate
+	const FVector CharPos = GetActorLocation();
+	const FVector RelPos = CharPos - Config->WorldOrigin;
+	const FIntVector CenterChunk = FVoxelCoordinates::WorldToChunk(RelPos, Config->ChunkSize, Config->VoxelSize);
+
+	// Build the grid of chunks we need to wait for (radius on X/Y, center chunk Z only)
+	PendingTerrainChunks.Empty();
+	for (int32 DX = -TerrainWaitChunkRadius; DX <= TerrainWaitChunkRadius; ++DX)
+	{
+		for (int32 DY = -TerrainWaitChunkRadius; DY <= TerrainWaitChunkRadius; ++DY)
+		{
+			const FIntVector ChunkCoord(CenterChunk.X + DX, CenterChunk.Y + DY, CenterChunk.Z);
+
+			if (ColMgr->HasCollision(ChunkCoord))
+			{
+				// Already ready — skip
+				continue;
+			}
+
+			PendingTerrainChunks.Add(ChunkCoord);
+
+			// Request collision with high priority so it's processed ASAP
+			ColMgr->RequestCollision(ChunkCoord, 2000.f);
+		}
+	}
+
+	UE_LOG(LogVoxelCharacter, Log,
+		TEXT("InitiateChunkBasedWait: Center chunk (%d,%d,%d), waiting for %d chunks in %dx%d grid"),
+		CenterChunk.X, CenterChunk.Y, CenterChunk.Z,
+		PendingTerrainChunks.Num(),
+		2 * TerrainWaitChunkRadius + 1, 2 * TerrainWaitChunkRadius + 1);
+
+	if (PendingTerrainChunks.Num() == 0)
+	{
+		// All chunks already have collision — place immediately
+		PlaceOnTerrainAndResume();
+		return;
+	}
+
+	// Bind to the collision ready delegate
+	CollisionReadyDelegateHandle = ColMgr->OnCollisionReady.AddUObject(
+		this, &AVCCharacterBase::OnChunkCollisionReady);
+}
+
+void AVCCharacterBase::OnChunkCollisionReady(const FIntVector& ChunkCoord)
+{
+	if (!bIsWaitingForTerrain)
+	{
+		return;
+	}
+
+	const int32 Removed = PendingTerrainChunks.Remove(ChunkCoord);
+	if (Removed > 0)
+	{
+		UE_LOG(LogVoxelCharacter, Log,
+			TEXT("OnChunkCollisionReady: Chunk (%d,%d,%d) ready — %d remaining"),
+			ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, PendingTerrainChunks.Num());
+	}
+
+	if (PendingTerrainChunks.Num() == 0)
+	{
+		// All required chunks are ready — place character
+		UE_LOG(LogVoxelCharacter, Log, TEXT("All terrain chunks ready — placing character."));
+
+		// Unbind delegate now that we're done waiting
+		if (UVoxelCollisionManager* ColMgr = CachedCollisionManager.Get())
+		{
+			ColMgr->OnCollisionReady.Remove(CollisionReadyDelegateHandle);
+			CollisionReadyDelegateHandle.Reset();
+		}
+
+		PlaceOnTerrainAndResume();
+	}
+}
+
+void AVCCharacterBase::PlaceOnTerrainAndResume()
+{
+	// Re-enable collision on the actor and explicitly on the capsule
+	SetActorEnableCollision(true);
+	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
+	{
+		Capsule->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	}
+
+	// Sphere sweep downward to find terrain surface (more robust than line trace at a single point)
+	const FVector SpawnPos = GetActorLocation();
+	const FVector TraceStart(SpawnPos.X, SpawnPos.Y, SpawnPos.Z + 50000.f);
+	const FVector TraceEnd(SpawnPos.X, SpawnPos.Y, SpawnPos.Z - 50000.f);
+	const float SweepRadius = 50.f; // Small sphere to avoid exact-point misses on trimesh seams
+
+	FCollisionQueryParams Params;
+	Params.AddIgnoredActor(this);
+
+	FHitResult Hit;
+	const FCollisionShape SweepShape = FCollisionShape::MakeSphere(SweepRadius);
+	bool bTraceHit = GetWorld()->SweepSingleByChannel(Hit, TraceStart, TraceEnd, FQuat::Identity, ECC_WorldStatic, SweepShape, Params);
+
+	// Fallback: line trace without sweep
+	if (!bTraceHit)
+	{
+		bTraceHit = GetWorld()->LineTraceSingleByChannel(Hit, TraceStart, TraceEnd, ECC_WorldStatic, Params);
+	}
+
+	if (bTraceHit)
+	{
+		const float CapsuleHalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+		SetActorLocation(Hit.ImpactPoint + FVector(0.f, 0.f, CapsuleHalfHeight));
+
+		UE_LOG(LogVoxelCharacter, Log,
+			TEXT("PlaceOnTerrainAndResume: Trace HIT at (%.0f, %.0f, %.0f) — Component=%s — placed at Z=%.0f"),
+			Hit.ImpactPoint.X, Hit.ImpactPoint.Y, Hit.ImpactPoint.Z,
+			Hit.GetComponent() ? *Hit.GetComponent()->GetName() : TEXT("null"),
+			GetActorLocation().Z);
+	}
+	else
+	{
+		UE_LOG(LogVoxelCharacter, Warning,
+			TEXT("PlaceOnTerrainAndResume: Trace MISSED — character at (%.0f, %.0f, %.0f), World=%s, will fall freely"),
+			SpawnPos.X, SpawnPos.Y, SpawnPos.Z,
+			*GetWorld()->GetName());
+	}
+
+	// Resume normal movement
+	GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+	bIsWaitingForTerrain = false;
+
+	UE_LOG(LogVoxelCharacter, Log,
+		TEXT("Terrain ready — ActorCollision=%s, CapsuleCollision=%s, MovementMode=%d"),
+		GetActorEnableCollision() ? TEXT("Enabled") : TEXT("DISABLED"),
+		GetCapsuleComponent() ? (*StaticEnum<ECollisionEnabled::Type>()->GetNameStringByValue(static_cast<int64>(GetCapsuleComponent()->GetCollisionEnabled()))) : TEXT("?"),
+		static_cast<int32>(GetCharacterMovement()->MovementMode.GetValue()));
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@
 #include "VoxelWorldConfiguration.h"
 #include "VoxelCoordinates.h"
 #include "VoxelData.h"
+#include "IVoxelWorldMode.h"
 #include "VoxelCharacterPlugin.h"
 #include "EngineUtils.h"
 
@@ -17,15 +18,19 @@ TWeakObjectPtr<UVoxelChunkManager> FVCVoxelNavigationHelper::CachedChunkManager;
 
 UVoxelChunkManager* FVCVoxelNavigationHelper::FindChunkManager(const UWorld* World)
 {
-	if (CachedChunkManager.IsValid())
-	{
-		return CachedChunkManager.Get();
-	}
-
 	if (!World)
 	{
 		return nullptr;
 	}
+
+	// Validate cached manager belongs to the same world (critical for PIE)
+	if (CachedChunkManager.IsValid() && CachedChunkManager->GetWorld() == World)
+	{
+		return CachedChunkManager.Get();
+	}
+
+	// Cache miss or wrong world — clear and re-search
+	CachedChunkManager.Reset();
 
 	// Search all actors for one with a VoxelChunkManager component
 	for (TActorIterator<AActor> It(const_cast<UWorld*>(World)); It; ++It)
@@ -156,6 +161,91 @@ bool FVCVoxelNavigationHelper::IsPositionUnderwater(const UWorld* World, const F
 		return true;
 	}
 
+	return false;
+}
+
+// ---------------------------------------------------------------------------
+// Find Spawnable Position
+// ---------------------------------------------------------------------------
+
+bool FVCVoxelNavigationHelper::FindSpawnablePosition(
+	const UWorld* World,
+	const FVector& NearPosition,
+	FVector& OutPosition,
+	float MaxSearchRadius)
+{
+	UVoxelChunkManager* ChunkMgr = FindChunkManager(World);
+	if (!ChunkMgr)
+	{
+		return false;
+	}
+
+	const IVoxelWorldMode* WorldMode = ChunkMgr->GetWorldMode();
+	const UVoxelWorldConfiguration* Config = ChunkMgr->GetConfiguration();
+	if (!WorldMode || !Config)
+	{
+		return false;
+	}
+
+	const float ChunkWorldSize = Config->ChunkSize * Config->VoxelSize;
+	const float WaterLevel = Config->WaterLevel;
+	const bool bHasWater = Config->bEnableWaterLevel;
+
+	// Helper: query terrain height and check if above water
+	auto IsAboveWater = [&](float X, float Y, float& OutTerrainHeight) -> bool
+	{
+		OutTerrainHeight = WorldMode->GetTerrainHeightAt(X, Y, Config->NoiseParams);
+		return !bHasWater || OutTerrainHeight > WaterLevel;
+	};
+
+	// Try the requested position first
+	float TerrainHeight = 0.f;
+	if (IsAboveWater(NearPosition.X, NearPosition.Y, TerrainHeight))
+	{
+		OutPosition = FVector(NearPosition.X, NearPosition.Y, TerrainHeight);
+		UE_LOG(LogVoxelCharacter, Log,
+			TEXT("FindSpawnablePosition: Position (%.0f, %.0f) is above water at Z=%.0f"),
+			NearPosition.X, NearPosition.Y, TerrainHeight);
+		return true;
+	}
+
+	UE_LOG(LogVoxelCharacter, Log,
+		TEXT("FindSpawnablePosition: Position (%.0f, %.0f) is underwater (terrain Z=%.0f, water=%.0f). Searching outward..."),
+		NearPosition.X, NearPosition.Y, TerrainHeight, WaterLevel);
+
+	// Spiral search outward at ChunkWorldSize intervals in 8 directions
+	static const FVector2D Directions[] =
+	{
+		FVector2D( 1,  0), FVector2D( 1,  1), FVector2D( 0,  1), FVector2D(-1,  1),
+		FVector2D(-1,  0), FVector2D(-1, -1), FVector2D( 0, -1), FVector2D( 1, -1)
+	};
+
+	const float Step = ChunkWorldSize;
+	const int32 MaxRings = FMath::CeilToInt(MaxSearchRadius / Step);
+
+	for (int32 Ring = 1; Ring <= MaxRings; ++Ring)
+	{
+		const float Radius = Ring * Step;
+
+		for (const FVector2D& Dir : Directions)
+		{
+			const float SampleX = NearPosition.X + Dir.X * Radius;
+			const float SampleY = NearPosition.Y + Dir.Y * Radius;
+
+			if (IsAboveWater(SampleX, SampleY, TerrainHeight))
+			{
+				OutPosition = FVector(SampleX, SampleY, TerrainHeight);
+				UE_LOG(LogVoxelCharacter, Log,
+					TEXT("FindSpawnablePosition: Found land at (%.0f, %.0f) Z=%.0f, ring %d (%.0f units away)"),
+					SampleX, SampleY, TerrainHeight, Ring, Radius);
+				return true;
+			}
+		}
+	}
+
+	UE_LOG(LogVoxelCharacter, Warning,
+		TEXT("FindSpawnablePosition: No land found within %.0f units of (%.0f, %.0f)"),
+		MaxSearchRadius, NearPosition.X, NearPosition.Y);
 	return false;
 }
 

@@ -18,6 +18,7 @@ class UVCMovementComponent;
 class UCameraComponent;
 class UAbilitySystemComponent;
 class UVCInputConfig;
+class UVoxelCollisionManager;
 struct FInputActionValue;
 
 #if WITH_INTERACTION_PLUGIN
@@ -134,6 +135,18 @@ public:
 	bool TraceForVoxel(FHitResult& OutHit, float MaxDistance = 500.f) const;
 
 	// =================================================================
+	// Terrain Ready Spawn
+	// =================================================================
+
+	/** Wait for voxel terrain collision before allowing movement. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|Spawn")
+	bool bWaitForTerrain = true;
+
+	/** Whether the character is currently waiting for terrain. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Spawn")
+	bool bIsWaitingForTerrain = false;
+
+	// =================================================================
 	// Debug
 	// =================================================================
 
@@ -169,6 +182,7 @@ public:
 protected:
 	// --- Lifecycle ---
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void PossessedBy(AController* NewController) override;
@@ -180,6 +194,43 @@ protected:
 
 	/** Update body / arms mesh visibility based on current view mode. */
 	void UpdateMeshVisibility();
+
+	/** When true, mesh hide is deferred until the FP camera blend is nearly complete. */
+	bool bPendingFPMeshHide = false;
+
+	// --- Terrain Ready Spawn ---
+
+	/** Elapsed time waiting for terrain (seconds). Used for timeout fallback. */
+	float TerrainWaitElapsed = 0.f;
+
+	/** Max seconds to wait for terrain before falling back to line trace placement. */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Spawn")
+	float TerrainWaitTimeout = 60.f;
+
+	/** How many chunks around the spawn chunk to wait for (1 = 3x3 grid). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Spawn")
+	int32 TerrainWaitChunkRadius = 1;
+
+	/** Chunks still waiting for collision during terrain-ready spawn. */
+	TSet<FIntVector> PendingTerrainChunks;
+
+	/** Handle for the OnCollisionReady delegate (for cleanup in EndPlay). */
+	FDelegateHandle CollisionReadyDelegateHandle;
+
+	/** Cached collision manager pointer for delegate unbinding. */
+	TWeakObjectPtr<UVoxelCollisionManager> CachedCollisionManager;
+
+	/** Freeze character movement and collision until terrain is ready. */
+	void FreezeForTerrainWait();
+
+	/** Begin event-driven wait for surrounding chunks to have collision. */
+	void InitiateChunkBasedWait();
+
+	/** Callback fired when any chunk's collision becomes ready. */
+	void OnChunkCollisionReady(const FIntVector& ChunkCoord);
+
+	/** Unfreeze and place character on terrain surface. */
+	void PlaceOnTerrainAndResume();
 
 	/** Bind GAS attribute change delegates to character subsystems. */
 	void BindAttributeChangeDelegates(UAbilitySystemComponent* ASC);

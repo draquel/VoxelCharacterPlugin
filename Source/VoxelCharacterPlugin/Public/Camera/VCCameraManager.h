@@ -76,6 +76,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Camera")
 	float GetCurrentFOV() const { return CurrentFOV; }
 
+	/** Blend weight of the top (active) camera mode (0 = just pushed, 1 = fully blended). */
+	float GetTopModeBlendWeight() const;
+
 	/** Set the camera component this manager drives (called by character on construction). */
 	void SetCameraComponent(UCameraComponent* InCamera) { CameraComponent = InCamera; }
 

@@ -151,6 +151,15 @@ void UVCCameraManager::UpdateCamera(float DeltaTime)
 // Voxel Camera Collision (stub)
 // ---------------------------------------------------------------------------
 
+float UVCCameraManager::GetTopModeBlendWeight() const
+{
+	if (CameraModeStack.Num() > 0 && CameraModeStack.Last())
+	{
+		return CameraModeStack.Last()->CurrentBlendWeight;
+	}
+	return 1.f;
+}
+
 FVector UVCCameraManager::ResolveVoxelCameraCollision(const FVector& IdealLocation, const FVector& PivotLocation) const
 {
 	const UWorld* World = GetWorld();

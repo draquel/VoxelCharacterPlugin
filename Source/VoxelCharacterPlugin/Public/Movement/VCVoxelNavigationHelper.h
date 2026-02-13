@@ -56,6 +56,26 @@ public:
 	 */
 	static bool IsPositionUnderwater(const UWorld* World, const FVector& Location, float& OutWaterDepth);
 
+	/**
+	 * Find a valid spawn position on terrain above water level.
+	 *
+	 * Uses the voxel world mode's deterministic terrain height query (pure math
+	 * from noise parameters) — does not require chunks to be loaded.
+	 * If the given position is over water, performs a spiral search outward
+	 * at chunk-sized intervals to find the nearest above-water terrain.
+	 *
+	 * @param World World context
+	 * @param NearPosition Desired spawn position (world space)
+	 * @param OutPosition Output: valid terrain position with safe Z margin
+	 * @param MaxSearchRadius Maximum search radius in world units (default 50000)
+	 * @return True if a valid position was found
+	 */
+	static bool FindSpawnablePosition(
+		const UWorld* World,
+		const FVector& NearPosition,
+		FVector& OutPosition,
+		float MaxSearchRadius = 50000.f);
+
 	/** Clear the cached chunk manager reference (call on world teardown). */
 	static void ClearCache();
 
