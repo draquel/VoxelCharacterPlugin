@@ -186,6 +186,27 @@ Primary/Secondary actions (LMB/RMB) route through a priority chain:
 
 Do not bypass this chain. New action types insert into the chain, they don't replace it.
 
+## Terrain Spawn System
+
+### FindSpawnablePosition
+
+`FVCVoxelNavigationHelper::FindSpawnablePosition()` uses `IVoxelWorldMode::GetTerrainHeightAt()` to deterministically query terrain height from noise parameters — no loaded chunks required. Called at the top of `InitiateChunkBasedWait()` to correct the spawn position before chunk collision is requested.
+
+- If position is above water (or water disabled): returns terrain height at that X,Y
+- If underwater: spirals outward at `ChunkWorldSize` intervals in 8 directions until above-water terrain is found
+- Returns false if no land within `MaxSearchRadius` (default 50,000 units)
+
+**Critical**: The character must be placed AT the terrain surface height (not above it) so the chunk Z coordinate calculation picks the correct terrain-level chunks. Movement and collision are disabled during the wait, so the character won't fall.
+
+### Capsule Overlap Gate for Block Placement
+
+`Server_RequestVoxelModification_Implementation` rejects `Place` operations where the voxel's AABB overlaps the character's capsule bounding box. This prevents:
+- Placing blocks inside the character's feet position
+- The surface mesh topology absorbing the block the character stands on
+- The character falling through the world due to collision surface removal
+
+The check uses an AABB-vs-AABB test (voxel box against capsule bounding box) — slightly conservative at capsule corners, which is the safer direction.
+
 ## Multiplayer Rules
 
 ### Server Authority

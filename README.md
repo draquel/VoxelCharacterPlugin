@@ -125,9 +125,25 @@ Changing between first and third person touches multiple systems. The full seque
 | Camera | Local only | Never replicated |
 | View mode | Server | Replicated to all clients for mesh visibility |
 
+### Terrain-Ready Spawn System
+
+Characters spawn frozen until terrain collision is ready beneath them. The system uses deterministic terrain height queries (`IVoxelWorldMode::GetTerrainHeightAt`) — pure math from noise parameters — to validate and correct spawn positions before any chunks are loaded:
+
+1. `FreezeForTerrainWait()` — Disables movement and collision
+2. `InitiateChunkBasedWait()` — Calls `FVCVoxelNavigationHelper::FindSpawnablePosition()` to verify terrain is above water at the spawn point. If underwater, spirals outward at chunk-sized intervals to find nearest land. Relocates the character to valid terrain before requesting chunk collision.
+3. Chunk collision requests go to the correct terrain-level chunks
+4. `PlaceOnTerrainAndResume()` — Sphere sweep (±50,000 units) finds the exact surface position once collision is cooked
+
+`FindSpawnablePosition()` is a static utility on `FVCVoxelNavigationHelper`, available for gameplay use (respawns, multiplayer joins, teleportation).
+
 ### Voxel Modification Flow
 
-Clients never modify voxel data directly. All modifications route through `Server_RequestVoxelModification` on the player controller. The server validates the request (range check, permissions, tool requirements) before applying. Clients can display predicted visual feedback (block crack overlays, particles) that reconciles when the server response arrives.
+Clients never modify voxel data directly. All modifications route through `Server_RequestVoxelModification` on the player controller. The server validates the request before applying:
+
+- **Range check**: Rejects modifications beyond 800 units from the pawn
+- **Capsule overlap check** (Place only): Rejects block placement if the voxel's AABB overlaps the character's capsule bounding box, preventing the player from placing blocks inside themselves and destroying the terrain they stand on
+
+Clients can display predicted visual feedback (block crack overlays, particles) that reconciles when the server response arrives.
 
 ## File Structure
 
