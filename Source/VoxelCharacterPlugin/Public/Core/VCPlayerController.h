@@ -9,6 +9,7 @@
 
 class UVCInputConfig;
 class UInputMappingContext;
+class UUserWidget;
 
 /**
  * Player controller for the voxel character system.
@@ -41,10 +42,36 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
 	void SetUIInputMode(UUserWidget* FocusWidget = nullptr);
 
-	// --- UI Stubs ---
+	// --- UI ---
 
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
 	void ToggleInventoryUI();
+
+	/** Show the interaction prompt for the given interactable actor. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void ShowInteractionPrompt(AActor* InteractableActor);
+
+	/** Hide the interaction prompt. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void HideInteractionPrompt();
+
+	/** Update the hotbar selection highlight. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void UpdateHotbarSelection(int32 SlotIndex);
+
+	// --- Widget Class Overrides (set in Blueprint defaults for skinning) ---
+
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> HotbarWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> InteractionPromptWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> InventoryPanelWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> EquipmentPanelWidgetClass;
 
 	// --- Debug Commands ---
 
@@ -75,4 +102,29 @@ protected:
 
 	/** Current input mode state. */
 	bool bIsInUIMode = false;
+
+private:
+	/** Create always-visible widgets (hotbar, interaction prompt). Called from BeginPlay on local controller. */
+	void CreatePersistentWidgets();
+
+	/** Show inventory + equipment panels (lazy-created). */
+	void ShowInventoryPanels();
+
+	/** Hide inventory + equipment panels. */
+	void HideInventoryPanels();
+
+	// --- Widget instances ---
+	UPROPERTY()
+	TObjectPtr<UUserWidget> HotbarWidget;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> InteractionPromptWidget;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> InventoryPanelWidget;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> EquipmentPanelWidget;
+
+	bool bInventoryOpen = false;
 };

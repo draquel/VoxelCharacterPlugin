@@ -19,11 +19,19 @@
 #include "Components/InventoryComponent.h"
 #include "Subsystems/ItemDatabaseSubsystem.h"
 #include "Data/ItemDefinition.h"
+#include "UI/HotbarWidget.h"
+#include "UI/InventoryPanelWidget.h"
 #endif
 
 #if WITH_INTERACTION_PLUGIN
 #include "Subsystems/WorldItemPoolSubsystem.h"
 #include "Actors/WorldItem.h"
+#include "UI/InteractionPromptWidget.h"
+#endif
+
+#if WITH_EQUIPMENT_PLUGIN
+#include "Components/EquipmentManagerComponent.h"
+#include "UI/EquipmentPanelWidget.h"
 #endif
 
 AVCPlayerController::AVCPlayerController()
@@ -38,6 +46,11 @@ void AVCPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 	SetGameInputMode();
+
+	if (IsLocalController())
+	{
+		CreatePersistentWidgets();
+	}
 }
 
 void AVCPlayerController::OnPossess(APawn* InPawn)
@@ -49,6 +62,20 @@ void AVCPlayerController::OnPossess(APawn* InPawn)
 	{
 		AddInputMappingContext(InputConfig->IMC_Gameplay, 0);
 	}
+
+	// Initialize hotbar with the possessed pawn's inventory
+#if WITH_INVENTORY_PLUGIN
+	if (HotbarWidget && InPawn)
+	{
+		if (UInventoryComponent* Inventory = InPawn->FindComponentByClass<UInventoryComponent>())
+		{
+			if (UHotbarWidget* Hotbar = Cast<UHotbarWidget>(HotbarWidget))
+			{
+				Hotbar->InitHotbar(Inventory, 9);
+			}
+		}
+	}
+#endif
 }
 
 void AVCPlayerController::OnUnPossess()
@@ -113,15 +140,204 @@ void AVCPlayerController::SetUIInputMode(UUserWidget* FocusWidget)
 
 void AVCPlayerController::ToggleInventoryUI()
 {
-	if (bIsInUIMode)
+	bInventoryOpen = !bInventoryOpen;
+
+	if (bInventoryOpen)
 	{
-		SetGameInputMode();
+		ShowInventoryPanels();
+		SetUIInputMode();
 	}
 	else
 	{
-		SetUIInputMode();
+		HideInventoryPanels();
+		SetGameInputMode();
 	}
-	UE_LOG(LogVoxelCharacter, Verbose, TEXT("ToggleInventoryUI: %s"), bIsInUIMode ? TEXT("UI") : TEXT("Game"));
+
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("ToggleInventoryUI: %s"), bInventoryOpen ? TEXT("Open") : TEXT("Closed"));
+}
+
+void AVCPlayerController::ShowInteractionPrompt(AActor* InteractableActor)
+{
+#if WITH_INTERACTION_PLUGIN
+	if (UInteractionPromptWidget* Prompt = Cast<UInteractionPromptWidget>(InteractionPromptWidget))
+	{
+		Prompt->ShowPromptForActor(InteractableActor);
+	}
+#endif
+}
+
+void AVCPlayerController::HideInteractionPrompt()
+{
+#if WITH_INTERACTION_PLUGIN
+	if (UInteractionPromptWidget* Prompt = Cast<UInteractionPromptWidget>(InteractionPromptWidget))
+	{
+		Prompt->HidePrompt();
+	}
+#endif
+}
+
+void AVCPlayerController::UpdateHotbarSelection(int32 SlotIndex)
+{
+#if WITH_INVENTORY_PLUGIN
+	if (UHotbarWidget* Hotbar = Cast<UHotbarWidget>(HotbarWidget))
+	{
+		Hotbar->SetActiveSlot(SlotIndex);
+	}
+#endif
+}
+
+void AVCPlayerController::CreatePersistentWidgets()
+{
+	UE_LOG(LogVoxelCharacter, Log, TEXT("CreatePersistentWidgets: IsLocal=%s, Pawn=%s"),
+		IsLocalController() ? TEXT("true") : TEXT("false"),
+		GetPawn() ? *GetPawn()->GetName() : TEXT("null"));
+
+#if WITH_INVENTORY_PLUGIN
+	{
+		TSubclassOf<UUserWidget> ClassToUse = HotbarWidgetClass;
+		if (!ClassToUse)
+		{
+			ClassToUse = UHotbarWidget::StaticClass();
+		}
+		HotbarWidget = CreateWidget<UUserWidget>(this, ClassToUse);
+		UE_LOG(LogVoxelCharacter, Log, TEXT("CreatePersistentWidgets: HotbarWidget=%s, Class=%s"),
+			HotbarWidget ? TEXT("created") : TEXT("FAILED"),
+			*ClassToUse->GetName());
+
+		if (HotbarWidget)
+		{
+			HotbarWidget->AddToViewport(0);
+			HotbarWidget->SetAnchorsInViewport(FAnchors(0.5f, 0.95f, 0.5f, 0.95f));
+			HotbarWidget->SetAlignmentInViewport(FVector2D(0.5f, 1.f));
+			HotbarWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+
+			// OnPossess fires before BeginPlay, so the pawn may already be possessed
+			if (APawn* CurrentPawn = GetPawn())
+			{
+				UInventoryComponent* Inventory = CurrentPawn->FindComponentByClass<UInventoryComponent>();
+				UE_LOG(LogVoxelCharacter, Log, TEXT("CreatePersistentWidgets: Pawn=%s, Inventory=%s"),
+					*CurrentPawn->GetName(),
+					Inventory ? TEXT("found") : TEXT("NOT FOUND"));
+
+				if (Inventory)
+				{
+					if (UHotbarWidget* Hotbar = Cast<UHotbarWidget>(HotbarWidget))
+					{
+						Hotbar->InitHotbar(Inventory, 9);
+					}
+					else
+					{
+						UE_LOG(LogVoxelCharacter, Error, TEXT("CreatePersistentWidgets: Cast to UHotbarWidget FAILED"));
+					}
+				}
+			}
+		}
+	}
+#endif
+
+#if WITH_INTERACTION_PLUGIN
+	{
+		TSubclassOf<UUserWidget> ClassToUse = InteractionPromptWidgetClass;
+		if (!ClassToUse)
+		{
+			ClassToUse = UInteractionPromptWidget::StaticClass();
+		}
+		InteractionPromptWidget = CreateWidget<UUserWidget>(this, ClassToUse);
+		if (InteractionPromptWidget)
+		{
+			InteractionPromptWidget->AddToViewport(2);
+			InteractionPromptWidget->SetAnchorsInViewport(FAnchors(0.5f, 0.7f, 0.5f, 0.7f));
+			InteractionPromptWidget->SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
+			// Starts collapsed (NativeConstruct sets Collapsed)
+		}
+	}
+#endif
+}
+
+void AVCPlayerController::ShowInventoryPanels()
+{
+#if WITH_INVENTORY_PLUGIN
+	if (!InventoryPanelWidget)
+	{
+		TSubclassOf<UUserWidget> ClassToUse = InventoryPanelWidgetClass;
+		if (!ClassToUse)
+		{
+			ClassToUse = UInventoryPanelWidget::StaticClass();
+		}
+		InventoryPanelWidget = CreateWidget<UUserWidget>(this, ClassToUse);
+	}
+	if (InventoryPanelWidget)
+	{
+		if (!InventoryPanelWidget->IsInViewport())
+		{
+			InventoryPanelWidget->AddToViewport(1);
+			InventoryPanelWidget->SetAnchorsInViewport(FAnchors(0.65f, 0.3f, 0.65f, 0.3f));
+			InventoryPanelWidget->SetAlignmentInViewport(FVector2D(0.5f, 0.f));
+		}
+
+		// Init with pawn's inventory
+		if (APawn* ControlledPawn = GetPawn())
+		{
+			if (UInventoryComponent* Inventory = ControlledPawn->FindComponentByClass<UInventoryComponent>())
+			{
+				if (UInventoryPanelWidget* Panel = Cast<UInventoryPanelWidget>(InventoryPanelWidget))
+				{
+					Panel->InitPanel(Inventory, 9);
+				}
+			}
+		}
+
+		InventoryPanelWidget->SetVisibility(ESlateVisibility::Visible);
+	}
+#endif
+
+#if WITH_EQUIPMENT_PLUGIN
+	if (!EquipmentPanelWidget)
+	{
+		TSubclassOf<UUserWidget> ClassToUse = EquipmentPanelWidgetClass;
+		if (!ClassToUse)
+		{
+			ClassToUse = UEquipmentPanelWidget::StaticClass();
+		}
+		EquipmentPanelWidget = CreateWidget<UUserWidget>(this, ClassToUse);
+	}
+	if (EquipmentPanelWidget)
+	{
+		if (!EquipmentPanelWidget->IsInViewport())
+		{
+			EquipmentPanelWidget->AddToViewport(1);
+			EquipmentPanelWidget->SetAnchorsInViewport(FAnchors(0.35f, 0.3f, 0.35f, 0.3f));
+			EquipmentPanelWidget->SetAlignmentInViewport(FVector2D(0.5f, 0.f));
+		}
+
+		// Init with pawn's equipment manager
+		if (APawn* ControlledPawn = GetPawn())
+		{
+			if (UEquipmentManagerComponent* EquipMgr = ControlledPawn->FindComponentByClass<UEquipmentManagerComponent>())
+			{
+				if (UEquipmentPanelWidget* Panel = Cast<UEquipmentPanelWidget>(EquipmentPanelWidget))
+				{
+					Panel->InitPanel(EquipMgr);
+				}
+			}
+		}
+
+		EquipmentPanelWidget->SetVisibility(ESlateVisibility::Visible);
+	}
+#endif
+}
+
+void AVCPlayerController::HideInventoryPanels()
+{
+	if (InventoryPanelWidget && InventoryPanelWidget->IsInViewport())
+	{
+		InventoryPanelWidget->RemoveFromParent();
+	}
+
+	if (EquipmentPanelWidget && EquipmentPanelWidget->IsInViewport())
+	{
+		EquipmentPanelWidget->RemoveFromParent();
+	}
 }
 
 // ---------------------------------------------------------------------------

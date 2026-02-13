@@ -729,6 +729,11 @@ void AVCCharacterBase::SetActiveHotbarSlot(int32 SlotIndex)
 {
 	ActiveHotbarSlot = FMath::Clamp(SlotIndex, 0, NumHotbarSlots - 1);
 	UE_LOG(LogVoxelCharacter, Verbose, TEXT("ActiveHotbarSlot = %d"), ActiveHotbarSlot);
+
+	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	{
+		PC->UpdateHotbarSelection(ActiveHotbarSlot);
+	}
 }
 
 bool AVCCharacterBase::RequestPickupItem(AActor* WorldItem)
@@ -919,14 +924,21 @@ void AVCCharacterBase::HandleInteractableFound(AActor* InteractableActor)
 	UE_LOG(LogVoxelCharacter, Verbose, TEXT("Interactable found: %s"),
 		InteractableActor ? *InteractableActor->GetName() : TEXT("null"));
 
-	// Forward to PlayerController for HUD prompt display
-	// (HUD widget creation is game-specific; the controller provides the hooks)
+	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	{
+		PC->ShowInteractionPrompt(InteractableActor);
+	}
 }
 
 void AVCCharacterBase::HandleInteractableLost(AActor* InteractableActor)
 {
 	UE_LOG(LogVoxelCharacter, Verbose, TEXT("Interactable lost: %s"),
 		InteractableActor ? *InteractableActor->GetName() : TEXT("null"));
+
+	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	{
+		PC->HideInteractionPrompt();
+	}
 }
 
 void AVCCharacterBase::HandleItemEquipped(const FItemInstance& Item, FGameplayTag SlotTag)
