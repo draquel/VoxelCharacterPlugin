@@ -6,6 +6,8 @@
 #include "EnhancedInputSubsystems.h"
 #include "InputMappingContext.h"
 #include "Blueprint/UserWidget.h"
+#include "GameFramework/Character.h"
+#include "Components/CapsuleComponent.h"
 #include "VoxelChunkManager.h"
 #include "VoxelEditManager.h"
 #include "VoxelEditTypes.h"
@@ -216,6 +218,32 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 
 	case EVoxelModificationType::Place:
 	{
+		// Reject placement if the voxel overlaps the character's capsule
+		if (const ACharacter* PawnCharacter = Cast<ACharacter>(ControlledPawn))
+		{
+			if (const UCapsuleComponent* Capsule = PawnCharacter->GetCapsuleComponent())
+			{
+				const float VoxelSize = Config->VoxelSize;
+				const FVector PawnPos = PawnCharacter->GetActorLocation();
+				const float R = Capsule->GetScaledCapsuleRadius();
+				const float HH = Capsule->GetScaledCapsuleHalfHeight();
+
+				const FVector VoxelMax = VoxelWorldPos + FVector(VoxelSize);
+				const bool bOverlaps =
+					VoxelWorldPos.X < PawnPos.X + R && VoxelMax.X > PawnPos.X - R &&
+					VoxelWorldPos.Y < PawnPos.Y + R && VoxelMax.Y > PawnPos.Y - R &&
+					VoxelWorldPos.Z < PawnPos.Z + HH && VoxelMax.Z > PawnPos.Z - HH;
+
+				if (bOverlaps)
+				{
+					UE_LOG(LogVoxelCharacter, Verbose,
+						TEXT("Server_RequestVoxelModification: Rejected place at [%d,%d,%d] — overlaps pawn capsule"),
+						VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z);
+					return;
+				}
+			}
+		}
+
 		Brush.Radius = Config->VoxelSize * 0.8f;
 		Brush.Strength = 1.f;
 		Brush.FalloffType = EVoxelBrushFalloff::Sharp;
