@@ -46,6 +46,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
 	void ToggleInventoryUI();
 
+	// --- Debug Commands ---
+
+	/** Give an item to the possessed character's inventory by asset name substring. */
+	UFUNCTION(Exec)
+	void GiveItem(FString AssetName, int32 Count = 1);
+
+	/** Spawn a WorldItem in front of the player by asset name substring. */
+	UFUNCTION(Exec)
+	void SpawnWorldItem(FString AssetName, int32 Count = 1);
+
 	// --- Server RPCs ---
 
 	/** Request a server-authoritative voxel modification. */

@@ -15,6 +15,17 @@
 #include "VoxelCoordinates.h"
 #include "VoxelCharacterPlugin.h"
 
+#if WITH_INVENTORY_PLUGIN
+#include "Components/InventoryComponent.h"
+#include "Subsystems/ItemDatabaseSubsystem.h"
+#include "Data/ItemDefinition.h"
+#endif
+
+#if WITH_INTERACTION_PLUGIN
+#include "Subsystems/WorldItemPoolSubsystem.h"
+#include "Actors/WorldItem.h"
+#endif
+
 AVCPlayerController::AVCPlayerController()
 {
 }
@@ -143,6 +154,149 @@ void AVCPlayerController::RemoveInputMappingContext(const UInputMappingContext* 
 	{
 		Subsystem->RemoveMappingContext(Context);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Debug Commands
+// ---------------------------------------------------------------------------
+
+void AVCPlayerController::GiveItem(FString AssetName, int32 Count)
+{
+#if WITH_INVENTORY_PLUGIN
+	if (Count <= 0)
+	{
+		Count = 1;
+	}
+
+	UItemDatabaseSubsystem* ItemDB = GetGameInstance()->GetSubsystem<UItemDatabaseSubsystem>();
+	if (!ItemDB)
+	{
+		UE_LOG(LogVoxelCharacter, Error, TEXT("GiveItem: ItemDatabaseSubsystem not found"));
+		return;
+	}
+
+	// Resolve asset name by substring match against all registered definitions
+	FPrimaryAssetId FoundId;
+	const TArray<FPrimaryAssetId> AllIds = ItemDB->GetAllDefinitionIds();
+
+	for (const FPrimaryAssetId& Id : AllIds)
+	{
+		if (Id.PrimaryAssetName.ToString().Contains(AssetName))
+		{
+			FoundId = Id;
+			break;
+		}
+	}
+
+	if (!FoundId.IsValid())
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("GiveItem: No item found matching '%s'. Available items:"), *AssetName);
+		for (const FPrimaryAssetId& Id : AllIds)
+		{
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("  - %s"), *Id.PrimaryAssetName.ToString());
+		}
+		return;
+	}
+
+	FItemInstance Instance = ItemDB->CreateItemInstance(FoundId, Count);
+	if (!Instance.IsValid())
+	{
+		UE_LOG(LogVoxelCharacter, Error, TEXT("GiveItem: Failed to create item instance for '%s'"), *FoundId.ToString());
+		return;
+	}
+
+	// Find inventory on the possessed pawn
+	UInventoryComponent* Inventory = nullptr;
+	if (APawn* ControlledPawn = GetPawn())
+	{
+		Inventory = ControlledPawn->FindComponentByClass<UInventoryComponent>();
+	}
+
+	if (!Inventory)
+	{
+		UE_LOG(LogVoxelCharacter, Error, TEXT("GiveItem: No InventoryComponent found on possessed pawn"));
+		return;
+	}
+
+	const EInventoryOperationResult Result = Inventory->TryAddItem(Instance);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("GiveItem: %s x%d -> %s"),
+		*FoundId.PrimaryAssetName.ToString(), Count,
+		Result == EInventoryOperationResult::Success ? TEXT("Success") : TEXT("Failed"));
+#else
+	UE_LOG(LogVoxelCharacter, Warning, TEXT("GiveItem: ItemInventoryPlugin not enabled"));
+#endif
+}
+
+void AVCPlayerController::SpawnWorldItem(FString AssetName, int32 Count)
+{
+#if WITH_INVENTORY_PLUGIN && WITH_INTERACTION_PLUGIN
+	if (Count <= 0)
+	{
+		Count = 1;
+	}
+
+	UItemDatabaseSubsystem* ItemDB = GetGameInstance()->GetSubsystem<UItemDatabaseSubsystem>();
+	if (!ItemDB)
+	{
+		UE_LOG(LogVoxelCharacter, Error, TEXT("SpawnWorldItem: ItemDatabaseSubsystem not found"));
+		return;
+	}
+
+	// Resolve asset name by substring match
+	FPrimaryAssetId FoundId;
+	const TArray<FPrimaryAssetId> AllIds = ItemDB->GetAllDefinitionIds();
+
+	for (const FPrimaryAssetId& Id : AllIds)
+	{
+		if (Id.PrimaryAssetName.ToString().Contains(AssetName))
+		{
+			FoundId = Id;
+			break;
+		}
+	}
+
+	if (!FoundId.IsValid())
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("SpawnWorldItem: No item found matching '%s'. Available items:"), *AssetName);
+		for (const FPrimaryAssetId& Id : AllIds)
+		{
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("  - %s"), *Id.PrimaryAssetName.ToString());
+		}
+		return;
+	}
+
+	FItemInstance Instance = ItemDB->CreateItemInstance(FoundId, Count);
+	if (!Instance.IsValid())
+	{
+		UE_LOG(LogVoxelCharacter, Error, TEXT("SpawnWorldItem: Failed to create item instance for '%s'"), *FoundId.ToString());
+		return;
+	}
+
+	// Spawn in front of the player
+	APawn* ControlledPawn = GetPawn();
+	if (!ControlledPawn)
+	{
+		UE_LOG(LogVoxelCharacter, Error, TEXT("SpawnWorldItem: No possessed pawn"));
+		return;
+	}
+
+	const FVector DropLoc = ControlledPawn->GetActorLocation() + ControlledPawn->GetActorForwardVector() * 200.f;
+
+	UWorldItemPoolSubsystem* Pool = GetWorld()->GetSubsystem<UWorldItemPoolSubsystem>();
+	if (!Pool)
+	{
+		UE_LOG(LogVoxelCharacter, Error, TEXT("SpawnWorldItem: WorldItemPoolSubsystem not found"));
+		return;
+	}
+
+	AWorldItem* Spawned = Pool->SpawnWorldItem(Instance, DropLoc);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("SpawnWorldItem: %s x%d at (%.0f, %.0f, %.0f) -> %s"),
+		*FoundId.PrimaryAssetName.ToString(), Count,
+		DropLoc.X, DropLoc.Y, DropLoc.Z,
+		Spawned ? TEXT("Success") : TEXT("Failed"));
+#else
+	UE_LOG(LogVoxelCharacter, Warning, TEXT("SpawnWorldItem: ItemInventoryPlugin/InteractionPlugin not enabled"));
+#endif
 }
 
 // ---------------------------------------------------------------------------
