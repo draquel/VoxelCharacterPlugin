@@ -70,6 +70,35 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 
 #if WITH_EQUIPMENT_PLUGIN
 	EquipmentManager = CreateDefaultSubobject<UEquipmentManagerComponent>(TEXT("EquipmentManager"));
+	{
+		FEquipmentSlotDefinition MainHand;
+		MainHand.SlotTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.MainHand"));
+		MainHand.SlotDisplayName = NSLOCTEXT("VoxelCharacter", "MainHand", "Main Hand");
+		MainHand.AttachSocket = FName("hand_r");
+		MainHand.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Weapon")));
+		EquipmentManager->AvailableSlots.Add(MainHand);
+
+		FEquipmentSlotDefinition OffHand;
+		OffHand.SlotTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.OffHand"));
+		OffHand.SlotDisplayName = NSLOCTEXT("VoxelCharacter", "OffHand", "Off Hand");
+		OffHand.AttachSocket = FName("hand_l");
+		OffHand.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Weapon")));
+		EquipmentManager->AvailableSlots.Add(OffHand);
+
+		FEquipmentSlotDefinition Head;
+		Head.SlotTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.Head"));
+		Head.SlotDisplayName = NSLOCTEXT("VoxelCharacter", "Head", "Head");
+		Head.AttachSocket = FName("head");
+		Head.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Armor")));
+		EquipmentManager->AvailableSlots.Add(Head);
+
+		FEquipmentSlotDefinition Chest;
+		Chest.SlotTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.Chest"));
+		Chest.SlotDisplayName = NSLOCTEXT("VoxelCharacter", "Chest", "Chest");
+		Chest.AttachSocket = FName("spine_03");
+		Chest.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Armor")));
+		EquipmentManager->AvailableSlots.Add(Chest);
+	}
 #endif
 
 #if WITH_INVENTORY_PLUGIN
