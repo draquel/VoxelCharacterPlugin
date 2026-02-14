@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "GameplayTagContainer.h"
 #include "Core/VCTypes.h"
 #include "VCPlayerController.generated.h"
 
@@ -12,6 +13,7 @@ class UInputMappingContext;
 class UUserWidget;
 class UInventoryComponent;
 class UItemCursorWidget;
+class UEquipmentManagerComponent;
 
 /**
  * Player controller for the voxel character system.
@@ -138,29 +140,53 @@ private:
 
 	// --- Click-to-move item management ---
 
-	/** The slot index currently held/grabbed (-1 = nothing held). */
+	/** Distinguishes whether the held slot is from inventory or equipment. */
+	enum class EVCHeldSource : uint8 { None, Inventory, Equipment };
+
+	/** Current held source type. */
+	EVCHeldSource HeldSourceType = EVCHeldSource::None;
+
+	/** The slot index currently held/grabbed (-1 = nothing held). Inventory source only. */
 	int32 HeldSlotIndex = INDEX_NONE;
 
-	/** The inventory component the held slot belongs to. */
+	/** The inventory component the held slot belongs to. Inventory source only. */
 	UPROPERTY()
 	TObjectPtr<UInventoryComponent> HeldInventory;
+
+	/** The equipment slot tag currently held. Equipment source only. */
+	FGameplayTag HeldEquipmentSlotTag;
+
+	/** The equipment manager the held slot belongs to. Equipment source only. */
+	UPROPERTY()
+	TObjectPtr<UEquipmentManagerComponent> HeldEquipmentManager;
 
 	/** Whether we've bound slot click delegates (guard against double-bind). */
 	bool bSlotDelegatesBound = false;
 
-	/** Bind click delegates from hotbar + panel widgets. */
+	/** Bind click delegates from hotbar + panel + equipment widgets. */
 	void BindSlotClickDelegates();
 
-	/** Handle a slot left-click (state machine). */
+	/** Handle an inventory slot left-click (state machine). */
 	UFUNCTION()
 	void OnSlotClickedFromUI(int32 ClickedSlotIndex, UInventoryComponent* Inventory);
 
-	/** Handle a slot right-click (cancel). */
+	/** Handle an inventory slot right-click (cancel). */
 	UFUNCTION()
 	void OnSlotRightClickedFromUI(int32 ClickedSlotIndex, UInventoryComponent* Inventory);
 
-	/** Enter the held state: highlight slot, show cursor. */
+	/** Handle an equipment slot left-click (state machine). */
+	UFUNCTION()
+	void OnEquipmentSlotClickedFromUI(FGameplayTag SlotTag, UEquipmentManagerComponent* EquipmentManager);
+
+	/** Handle an equipment slot right-click (cancel). */
+	UFUNCTION()
+	void OnEquipmentSlotRightClickedFromUI(FGameplayTag SlotTag, UEquipmentManagerComponent* EquipmentManager);
+
+	/** Enter the held state from an inventory slot. */
 	void EnterHeldState(int32 InSlotIndex, UInventoryComponent* Inventory);
+
+	/** Enter the held state from an equipment slot. */
+	void EnterHeldStateFromEquipment(FGameplayTag InSlotTag, UEquipmentManagerComponent* EquipMgr);
 
 	/** Swap held slot with target, clear held state. */
 	void ExecuteSwapAndClearHeld(int32 TargetSlotIndex);
@@ -168,11 +194,17 @@ private:
 	/** Cancel held state: clear highlight, hide cursor. */
 	void CancelHeldState();
 
-	/** Set or clear the held visual on the correct widget. */
+	/** Set or clear the held visual on an inventory slot widget. */
 	void SetSlotHeldVisual(int32 InSlotIndex, bool bHeld);
 
-	/** Show the item cursor with the icon for the given slot. */
+	/** Set or clear the held visual on an equipment slot widget. */
+	void SetEquipmentSlotHeldVisual(FGameplayTag InSlotTag, bool bHeld);
+
+	/** Show the item cursor with the icon for the given inventory slot. */
 	void ShowItemCursor(int32 InSlotIndex, UInventoryComponent* Inventory);
+
+	/** Show the item cursor with the icon for the given equipment slot. */
+	void ShowItemCursorForEquipment(FGameplayTag InSlotTag, UEquipmentManagerComponent* EquipMgr);
 
 	/** Hide the item cursor widget. */
 	void HideItemCursor();

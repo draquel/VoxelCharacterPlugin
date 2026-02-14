@@ -253,18 +253,38 @@ All widget class references are `TSubclassOf<UUserWidget>` properties on the con
 
 ### Click-to-Move State Machine
 
-The controller manages a simple two-state machine for item rearrangement:
+The controller manages a state machine for item rearrangement across inventory and equipment slots. The held source tracks what type of slot the player grabbed from:
 
 ```
-HeldSlotIndex == INDEX_NONE  →  Nothing held
-HeldSlotIndex >= 0           →  Item grabbed from that slot
+EVCHeldSource::None       →  Nothing held
+EVCHeldSource::Inventory  →  Item grabbed from an inventory slot (HeldSlotIndex, HeldInventory)
+EVCHeldSource::Equipment  →  Item grabbed from an equipment slot (HeldEquipmentSlotTag, HeldEquipmentManager)
 ```
 
-**Delegate binding:** `BindSlotClickDelegates()` is called once from `ShowInventoryPanels()` after widgets are initialized. It binds the hotbar's and panel's `OnSlotClicked`/`OnSlotRightClicked` to `OnSlotClickedFromUI`/`OnSlotRightClickedFromUI` on the controller. A `bSlotDelegatesBound` guard prevents double-binding since the hotbar and panel widget objects persist across open/close cycles.
+**Interaction matrix:**
 
-**Slot routing:** `SetSlotHeldVisual(int32, bool)` routes to the correct container widget based on slot index: `< 9` → hotbar, `>= 9` → panel.
+| Source | Target | Operation |
+|--------|--------|-----------|
+| Inventory → Inventory | `TrySwapSlots(sourceSlot, targetSlot)` |
+| Inventory → Equipment | `EquipMgr->TryEquipFromInventory(itemGuid, inventory, slotTag)` |
+| Equipment → Inventory | `EquipMgr->TryUnequipToInventory(slotTag, inventory)` + `TrySwapSlots` to clicked slot |
+| Equipment → Equipment | Cancel (not supported) |
+| Any → Same slot | Cancel |
+| Any → Right-click | Cancel |
 
-**Inventory close cleanup:** `HideInventoryPanels()` calls `CancelHeldState()` before reverting the hotbar to `HitTestInvisible`.
+The unequip flow (equipment → inventory) first unequips to the first available inventory slot via `TryUnequipToInventory`, then finds where the item landed by `FindSlotIndexByInstanceId` and swaps it to the player's clicked slot. This gives precise placement control.
+
+**Delegate binding:** `BindSlotClickDelegates()` is called once from `ShowInventoryPanels()` **after both inventory and equipment panels are created**. It binds:
+- Hotbar + inventory panel `OnSlotClicked`/`OnSlotRightClicked` → `OnSlotClickedFromUI`/`OnSlotRightClickedFromUI`
+- Equipment panel `OnSlotClicked`/`OnSlotRightClicked` → `OnEquipmentSlotClickedFromUI`/`OnEquipmentSlotRightClickedFromUI`
+
+A `bSlotDelegatesBound` guard prevents double-binding since widget objects persist across open/close cycles. **Critical:** The bind call must come after both `#if WITH_INVENTORY_PLUGIN` and `#if WITH_EQUIPMENT_PLUGIN` blocks so all panels exist.
+
+**Slot routing:** `SetSlotHeldVisual(int32, bool)` routes inventory slots to the correct container: `< 9` → hotbar, `>= 9` → panel. `SetEquipmentSlotHeldVisual(FGameplayTag, bool)` routes equipment slots to the equipment panel's `SetSlotHeld()`.
+
+**Cursor icon:** `ShowItemCursor(int32, UInventoryComponent*)` resolves icons from inventory items. `ShowItemCursorForEquipment(FGameplayTag, UEquipmentManagerComponent*)` resolves icons from equipped items. Both use the `ItemDatabaseSubsystem` to look up the `UItemDefinition::Icon`.
+
+**Cancel/cleanup:** `CancelHeldState()` checks `HeldSourceType` to clear the correct visual (inventory or equipment), hides the cursor, and resets all held fields. `HideInventoryPanels()` calls `CancelHeldState()` before reverting the hotbar to `HitTestInvisible`.
 
 ### Conditional Compilation
 
