@@ -14,6 +14,8 @@ class UUserWidget;
 class UInventoryComponent;
 class UItemCursorWidget;
 class UEquipmentManagerComponent;
+class UVCMinimapWidget;
+class UVCWorldMapWidget;
 
 /**
  * Player controller for the voxel character system.
@@ -51,6 +53,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
 	void ToggleInventoryUI();
 
+	/** Toggle the full-screen world map overlay. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void ToggleWorldMapUI();
+
 	/** Show the interaction prompt for the given interactable actor. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
 	void ShowInteractionPrompt(AActor* InteractableActor);
@@ -79,6 +85,12 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|UI")
 	TSubclassOf<UUserWidget> ItemCursorWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> MinimapWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> WorldMapWidgetClass;
 
 	// --- Debug Commands ---
 
@@ -136,7 +148,14 @@ private:
 	UPROPERTY()
 	TObjectPtr<UItemCursorWidget> ItemCursorWidget;
 
+	UPROPERTY()
+	TObjectPtr<UUserWidget> MinimapWidget;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> WorldMapWidget;
+
 	bool bInventoryOpen = false;
+	bool bWorldMapOpen = false;
 
 	// --- Click-to-move item management ---
 

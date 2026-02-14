@@ -278,6 +278,7 @@ protected:
 	void Input_PrimaryAction(const FInputActionValue& Value);
 	void Input_SecondaryAction(const FInputActionValue& Value);
 	void Input_OpenInventory(const FInputActionValue& Value);
+	void Input_OpenMap(const FInputActionValue& Value);
 	void Input_HotbarSlot(const FInputActionValue& Value);
 	void Input_ScrollHotbar(const FInputActionValue& Value);
 	void Input_Drop(const FInputActionValue& Value);

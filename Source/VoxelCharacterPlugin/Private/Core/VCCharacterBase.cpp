@@ -1127,6 +1127,10 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	{
 		EIC->BindAction(Config->IA_OpenInventory, ETriggerEvent::Started, this, &AVCCharacterBase::Input_OpenInventory);
 	}
+	if (Config->IA_OpenMap)
+	{
+		EIC->BindAction(Config->IA_OpenMap, ETriggerEvent::Started, this, &AVCCharacterBase::Input_OpenMap);
+	}
 	if (Config->IA_HotbarSlot)
 	{
 		EIC->BindAction(Config->IA_HotbarSlot, ETriggerEvent::Started, this, &AVCCharacterBase::Input_HotbarSlot);
@@ -1296,6 +1300,14 @@ void AVCCharacterBase::Input_OpenInventory(const FInputActionValue& Value)
 	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
 	{
 		PC->ToggleInventoryUI();
+	}
+}
+
+void AVCCharacterBase::Input_OpenMap(const FInputActionValue& Value)
+{
+	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	{
+		PC->ToggleWorldMapUI();
 	}
 }
 

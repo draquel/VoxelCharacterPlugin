@@ -31,6 +31,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"UMG",
 				"VoxelCore",
 				"VoxelStreaming",
+				"VoxelMap",
 			}
 		);
 

@@ -36,6 +36,9 @@
 #include "UI/EquipmentSlotWidget.h"
 #endif
 
+#include "Map/VCMinimapWidget.h"
+#include "Map/VCWorldMapWidget.h"
+
 AVCPlayerController::AVCPlayerController()
 {
 }
@@ -158,6 +161,52 @@ void AVCPlayerController::ToggleInventoryUI()
 	UE_LOG(LogVoxelCharacter, Verbose, TEXT("ToggleInventoryUI: %s"), bInventoryOpen ? TEXT("Open") : TEXT("Closed"));
 }
 
+void AVCPlayerController::ToggleWorldMapUI()
+{
+	bWorldMapOpen = !bWorldMapOpen;
+
+	if (bWorldMapOpen)
+	{
+		// Lazy-create world map widget
+		if (!WorldMapWidget)
+		{
+			TSubclassOf<UUserWidget> ClassToUse = WorldMapWidgetClass;
+			if (!ClassToUse)
+			{
+				ClassToUse = UVCWorldMapWidget::StaticClass();
+			}
+			WorldMapWidget = CreateWidget<UUserWidget>(this, ClassToUse);
+		}
+
+		if (WorldMapWidget)
+		{
+			if (!WorldMapWidget->IsInViewport())
+			{
+				WorldMapWidget->AddToViewport(10);
+			}
+			WorldMapWidget->SetVisibility(ESlateVisibility::Visible);
+
+			// Refresh the map data
+			if (UVCWorldMapWidget* WMap = Cast<UVCWorldMapWidget>(WorldMapWidget))
+			{
+				WMap->RefreshMap();
+			}
+		}
+
+		SetUIInputMode(WorldMapWidget);
+	}
+	else
+	{
+		if (WorldMapWidget && WorldMapWidget->IsInViewport())
+		{
+			WorldMapWidget->RemoveFromParent();
+		}
+		SetGameInputMode();
+	}
+
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("ToggleWorldMapUI: %s"), bWorldMapOpen ? TEXT("Open") : TEXT("Closed"));
+}
+
 void AVCPlayerController::ShowInteractionPrompt(AActor* InteractableActor)
 {
 #if WITH_INTERACTION_PLUGIN
@@ -254,6 +303,26 @@ void AVCPlayerController::CreatePersistentWidgets()
 		}
 	}
 #endif
+
+	// Minimap (top-right corner, always visible, Z-order 1)
+	{
+		TSubclassOf<UUserWidget> ClassToUse = MinimapWidgetClass;
+		if (!ClassToUse)
+		{
+			ClassToUse = UVCMinimapWidget::StaticClass();
+		}
+		MinimapWidget = CreateWidget<UUserWidget>(this, ClassToUse);
+		if (MinimapWidget)
+		{
+			MinimapWidget->AddToViewport(1);
+			MinimapWidget->SetAnchorsInViewport(FAnchors(1.0f, 0.0f, 1.0f, 0.0f));
+			MinimapWidget->SetAlignmentInViewport(FVector2D(1.0f, 0.0f));
+			MinimapWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+		}
+
+		UE_LOG(LogVoxelCharacter, Log, TEXT("CreatePersistentWidgets: MinimapWidget=%s"),
+			MinimapWidget ? TEXT("created") : TEXT("FAILED"));
+	}
 }
 
 void AVCPlayerController::ShowInventoryPanels()
