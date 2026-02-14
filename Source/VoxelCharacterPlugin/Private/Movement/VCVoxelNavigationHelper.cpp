@@ -10,6 +10,10 @@
 #include "VoxelCharacterPlugin.h"
 #include "EngineUtils.h"
 
+// Maximum number of voxel samples when scanning upward for cave cover.
+// Caps the cost in deep-water scenarios where the character is far below the surface.
+static constexpr int32 MaxCoverScanSamples = 20;
+
 TWeakObjectPtr<UVoxelChunkManager> FVCVoxelNavigationHelper::CachedChunkManager;
 
 // ---------------------------------------------------------------------------
@@ -46,6 +50,43 @@ UVoxelChunkManager* FVCVoxelNavigationHelper::FindChunkManager(const UWorld* Wor
 	}
 
 	return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// Cave Cover Check — scan upward for solid terrain between location and water
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a position is sheltered from water by solid terrain above it.
+ * Scans voxels upward from Location to WaterSurface. If any solid voxel is
+ * found between the character and the water level, the character is inside a
+ * cave (or enclosed terrain) and should NOT be treated as underwater.
+ */
+static bool IsShelteredFromWater(
+	UVoxelChunkManager* ChunkMgr,
+	const FVector& Location,
+	float WaterSurface,
+	float VoxelSize)
+{
+	const float ScanStep = VoxelSize;
+	float ScanZ = Location.Z + ScanStep;
+	int32 SamplesChecked = 0;
+
+	while (ScanZ < WaterSurface && SamplesChecked < MaxCoverScanSamples)
+	{
+		const FVoxelData Voxel = ChunkMgr->GetVoxelAtWorldPosition(
+			FVector(Location.X, Location.Y, ScanZ));
+
+		if (Voxel.IsSolid())
+		{
+			return true;
+		}
+
+		ScanZ += ScanStep;
+		++SamplesChecked;
+	}
+
+	return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,14 +141,18 @@ FVoxelTerrainContext FVCVoxelNavigationHelper::QueryTerrainContext(const UWorld*
 		break;
 	}
 
-	// Water state
+	// Water state — only treat as underwater if below water level AND
+	// not sheltered by solid terrain above (i.e. not inside a cave)
 	if (Config->bEnableWaterLevel)
 	{
 		const float WaterSurface = Config->WaterLevel + Config->WorldOrigin.Z;
 		if (Location.Z < WaterSurface)
 		{
-			Context.bIsUnderwater = true;
-			Context.WaterDepth = WaterSurface - Location.Z;
+			if (!IsShelteredFromWater(ChunkMgr, Location, WaterSurface, Config->VoxelSize))
+			{
+				Context.bIsUnderwater = true;
+				Context.WaterDepth = WaterSurface - Location.Z;
+			}
 		}
 	}
 
@@ -157,6 +202,12 @@ bool FVCVoxelNavigationHelper::IsPositionUnderwater(const UWorld* World, const F
 	const float WaterSurface = Config->WaterLevel + Config->WorldOrigin.Z;
 	if (Location.Z < WaterSurface)
 	{
+		// Not underwater if sheltered by solid terrain above (cave)
+		if (IsShelteredFromWater(ChunkMgr, Location, WaterSurface, Config->VoxelSize))
+		{
+			return false;
+		}
+
 		OutWaterDepth = WaterSurface - Location.Z;
 		return true;
 	}
