@@ -61,6 +61,28 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
 	float VoxelSurfaceGripMultiplier = 1.0f;
 
+	// --- Swimming Tuning ---
+
+	/** Buoyancy while swimming. 1.0 = float at surface, <1.0 = sink slowly, >1.0 = rise faster. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0", ClampMax = "2.0"))
+	float SwimmingBuoyancy = 1.0f;
+
+	/** Braking deceleration while swimming. Higher = stop faster when not pressing input. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0"))
+	float SwimmingBrakingDeceleration = 600.f;
+
+	/** Max acceleration while swimming. Lower values give a sluggish underwater feel. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0"))
+	float SwimmingMaxAcceleration = 256.f;
+
+	/** Vertical acceleration when ascending (jump held) while swimming. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0"))
+	float DiveAscendAcceleration = 300.f;
+
+	/** Vertical acceleration when descending (crouch held) while swimming. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0"))
+	float DiveDescendAcceleration = 250.f;
+
 	/** Current logical surface type (derived from voxel material). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
 	EVoxelSurfaceType CurrentSurfaceType = EVoxelSurfaceType::Default;
@@ -76,6 +98,9 @@ public:
 	virtual void FindFloor(const FVector& CapsuleLocation, FFindFloorResult& OutFloorResult, bool bCanUseCachedLocation, const FHitResult* DownwardSweepResult = nullptr) const override;
 	virtual bool IsValidLandingSpot(const FVector& CapsuleLocation, const FHitResult& Hit) const override;
 
+	/** Override to use voxel water depth instead of physics water volumes. */
+	virtual float ImmersionDepth() const override;
+
 protected:
 	/** Cached terrain data, refreshed every TerrainCacheDuration seconds. */
 	FVoxelTerrainContext CachedTerrainContext;
@@ -89,6 +114,9 @@ protected:
 
 	/** Base MaxWalkSpeed before GAS multiplier. Captured on BeginPlay. */
 	float BaseMaxWalkSpeed = 0.f;
+
+	/** Base MaxAcceleration before swimming override. Captured on BeginPlay. */
+	float BaseMaxAcceleration = 0.f;
 
 	/** Current GAS speed multiplier (default 1.0). */
 	float GASSpeedMultiplier = 1.f;

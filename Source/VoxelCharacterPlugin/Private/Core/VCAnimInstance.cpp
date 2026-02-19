@@ -62,10 +62,12 @@ void UVCAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 		AimYaw = FMath::ClampAngle(DeltaRotation.Yaw, -90.f, 90.f);
 	}
 
-	// --- Surface Type ---
+	// --- Surface Type & Swimming ---
 	if (const UVCMovementComponent* VCMovComp = Cast<UVCMovementComponent>(MovComp))
 	{
 		SurfaceType = VCMovComp->CurrentSurfaceType;
+		bIsSwimming = MovComp->IsSwimming();
+		WaterDepth = VCMovComp->GetTerrainContext().WaterDepth;
 	}
 
 	// --- Equipment Anim Type ---

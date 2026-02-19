@@ -65,4 +65,13 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	EVoxelSurfaceType SurfaceType = EVoxelSurfaceType::Default;
+
+	// ==================== Swimming ====================
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	bool bIsSwimming = false;
+
+	/** Depth below water surface (world units). 0 when not underwater. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float WaterDepth = 0.f;
 };

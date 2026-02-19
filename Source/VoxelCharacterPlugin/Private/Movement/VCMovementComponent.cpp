@@ -38,12 +38,18 @@ UVCMovementComponent::UVCMovementComponent()
 	BrakingFrictionFactor = 3.f;
 	bUseSeparateBrakingFriction = true;
 	BrakingFriction = 1.f;
+
+	// --- Swimming defaults ---
+	BrakingDecelerationSwimming = 600.f;
+	Buoyancy = 1.0f;
+	NavAgentProps.bCanSwim = true;
 }
 
 void UVCMovementComponent::BeginPlay()
 {
 	Super::BeginPlay();
 	BaseMaxWalkSpeed = MaxWalkSpeed;
+	BaseMaxAcceleration = MaxAcceleration;
 
 	// Subscribe to chunk edit events for terrain cache invalidation
 	if (UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld()))
@@ -83,6 +89,50 @@ void UVCMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 	}
 
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	// UE's PhysSwimming checks GetPhysicsVolume()->bWaterVolume and exits to
+	// MOVE_Falling when no water volume is found. We use voxel water flags instead
+	// of physics volumes, so re-enter swimming if UE kicked us out while still underwater.
+	if (!IsSwimming() && CachedTerrainContext.bIsUnderwater
+		&& CachedTerrainContext.WaterDepth >= SwimmingExitDepth)
+	{
+		SetMovementMode(MOVE_Swimming);
+	}
+
+	// --- Dive controls: vertical movement while swimming ---
+	// Jump = ascend, Crouch = descend. Applied as direct velocity modification
+	// post-Super so it doesn't interfere with UE's swimming physics.
+	if (IsSwimming() && CharacterOwner)
+	{
+		const bool bWantsAscend = CharacterOwner->bPressedJump;
+		const bool bWantsDescent = CharacterOwner->bIsCrouched || IsCrouching();
+
+		if (bWantsAscend)
+		{
+			Velocity.Z += DiveAscendAcceleration * DeltaTime;
+		}
+		else if (bWantsDescent)
+		{
+			// Check if the voxel below the character is solid — if so, stop descending
+			// to prevent sinking through the ocean floor.
+			const float HalfHeight = CharacterOwner->GetSimpleCollisionHalfHeight();
+			const FVector FeetPos = CharacterOwner->GetActorLocation() - FVector(0.f, 0.f, HalfHeight);
+			FHitResult GroundHit;
+			FCollisionQueryParams Params(SCENE_QUERY_STAT(DiveFloorCheck), false, CharacterOwner);
+			const bool bHitFloor = GetWorld()->LineTraceSingleByChannel(
+				GroundHit, FeetPos, FeetPos - FVector(0.f, 0.f, 50.f),
+				ECC_WorldStatic, Params);
+
+			if (!bHitFloor)
+			{
+				Velocity.Z -= DiveDescendAcceleration * DeltaTime;
+			}
+		}
+
+		// Clamp vertical speed to swim speed limits
+		const float MaxVerticalSpeed = MaxSwimSpeed;
+		Velocity.Z = FMath::Clamp(Velocity.Z, -MaxVerticalSpeed, MaxVerticalSpeed);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -98,8 +148,22 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 	}
 
 	// Query voxel terrain at the character's feet position
-	const FVector FeetPos = Owner->GetActorLocation() - FVector(0.f, 0.f, GetOwner()->GetSimpleCollisionHalfHeight());
+	const float HalfHeight = Owner->GetSimpleCollisionHalfHeight();
+	const FVector FeetPos = Owner->GetActorLocation() - FVector(0.f, 0.f, HalfHeight);
 	CachedTerrainContext = FVCVoxelNavigationHelper::QueryTerrainContext(GetWorld(), FeetPos);
+
+	// If feet-level water check missed (feet on solid ocean floor), check at body center.
+	// When standing on the seabed, feet are in a solid voxel (no water flag) but the
+	// character's body is submerged in water-flagged air voxels above.
+	if (!CachedTerrainContext.bIsUnderwater)
+	{
+		float BodyWaterDepth = 0.f;
+		if (FVCVoxelNavigationHelper::IsPositionUnderwater(GetWorld(), Owner->GetActorLocation(), BodyWaterDepth))
+		{
+			CachedTerrainContext.bIsUnderwater = true;
+			CachedTerrainContext.WaterDepth = BodyWaterDepth;
+		}
+	}
 
 	CurrentSurfaceType = CachedTerrainContext.SurfaceType;
 
@@ -113,11 +177,15 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 		{
 			SetMovementMode(MOVE_Swimming);
 			MaxSwimSpeed = BaseMaxWalkSpeed * VoxelSwimmingSpeedMultiplier * GASSpeedMultiplier;
+			Buoyancy = SwimmingBuoyancy;
+			BrakingDecelerationSwimming = SwimmingBrakingDeceleration;
+			MaxAcceleration = SwimmingMaxAcceleration;
 		}
 	}
 	else if (IsSwimming() && CachedTerrainContext.WaterDepth < SwimmingExitDepth)
 	{
 		SetMovementMode(MOVE_Walking);
+		MaxAcceleration = BaseMaxAcceleration;
 	}
 }
 
@@ -304,6 +372,29 @@ void UVCMovementComponent::PhysCustom(float DeltaTime, int32 Iterations)
 	Super::PhysCustom(DeltaTime, Iterations);
 
 	// Future: climbing mode implementation
+}
+
+// ---------------------------------------------------------------------------
+// Immersion Depth (voxel-based water detection)
+// ---------------------------------------------------------------------------
+
+float UVCMovementComponent::ImmersionDepth() const
+{
+	// UE's default ImmersionDepth() uses physics water volumes, which we don't have.
+	// Instead, use the voxel terrain context water depth to compute immersion ratio.
+	if (!CachedTerrainContext.bIsUnderwater || !CharacterOwner)
+	{
+		return 0.f;
+	}
+
+	// Map water depth (world units) to 0-1 immersion ratio based on capsule height
+	const float CapsuleHeight = CharacterOwner->GetSimpleCollisionHalfHeight() * 2.f;
+	if (CapsuleHeight <= 0.f)
+	{
+		return 0.f;
+	}
+
+	return FMath::Clamp(CachedTerrainContext.WaterDepth / CapsuleHeight, 0.f, 1.f);
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@
 #include "Camera/VCThirdPersonCameraMode.h"
 #include "Movement/VCMovementComponent.h"
 #include "Movement/VCVoxelNavigationHelper.h"
+#include "Camera/VCUnderwaterPostProcess.h"
 #include "Input/VCInputConfig.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -186,6 +187,15 @@ void AVCCharacterBase::BeginPlay()
 		EquipmentManager->OnItemUnequipped.AddDynamic(this, &AVCCharacterBase::HandleItemUnequipped);
 	}
 #endif
+
+	// --- Underwater Post-Process ---
+	{
+		UVCUnderwaterPostProcess* UnderwaterPP = NewObject<UVCUnderwaterPostProcess>(this, TEXT("UnderwaterPostProcess"));
+		if (UnderwaterPP)
+		{
+			UnderwaterPP->RegisterComponent();
+		}
+	}
 
 	// --- Terrain Ready Spawn ---
 	if (bWaitForTerrain)
