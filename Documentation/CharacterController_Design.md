@@ -1120,3 +1120,9 @@ void AVCCharacterBase::SetViewMode(EVCViewMode NewMode)
 4. **Networked Voxel Prediction:** Block placement/destruction should be client-predicted for responsiveness, but needs server validation. The `Server_RequestVoxelModification` RPC handles this, but a rollback mechanism may be needed if the server rejects a modification.
 
 5. **First-Person Body Visibility:** Some games show the player's body when looking down in FP. This is possible by keeping the body mesh visible with `bOwnerNoSee` on certain bones, but adds complexity. Recommend starting with separate FP arms mesh and revisiting.
+
+---
+
+## Known Issues
+
+1. **Shore exit while swimming (2026-06-09):** Exiting the water at a shoreline is still challenging. The swim-to-walk transition in `UVCMovementComponent::UpdateVoxelTerrainContext()` requires shallow water depth plus a walkable floor, and the surface cap in `PhysSwimming()` zeroes upward velocity near the water line, so the character can stall at the water's edge instead of climbing out onto the bank. Needs a dedicated shore-exit assist (e.g., forward-and-up boost or step-up onto walkable terrain when swimming toward a shallow slope).

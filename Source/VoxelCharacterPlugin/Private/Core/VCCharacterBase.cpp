@@ -1164,11 +1164,25 @@ void AVCCharacterBase::Input_Move(const FInputActionValue& Value)
 	const FVector2D MoveInput = Value.Get<FVector2D>();
 	if (Controller)
 	{
-		const FRotator YawRotation(0.f, Controller->GetControlRotation().Yaw, 0.f);
-		const FVector ForwardDir = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
-		const FVector RightDir = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
-		AddMovementInput(ForwardDir, MoveInput.Y);
-		AddMovementInput(RightDir, MoveInput.X);
+		const UVCMovementComponent* MovComp = Cast<UVCMovementComponent>(GetCharacterMovement());
+		if (MovComp && MovComp->IsSwimming())
+		{
+			// Swimming: full 3D direction from camera (look down + forward = dive)
+			const FRotator ControlRot = Controller->GetControlRotation();
+			const FVector ForwardDir = FRotationMatrix(ControlRot).GetUnitAxis(EAxis::X);
+			const FVector RightDir = FRotationMatrix(ControlRot).GetUnitAxis(EAxis::Y);
+			AddMovementInput(ForwardDir, MoveInput.Y);
+			AddMovementInput(RightDir, MoveInput.X);
+		}
+		else
+		{
+			// Ground/air: yaw only (existing behavior)
+			const FRotator YawRotation(0.f, Controller->GetControlRotation().Yaw, 0.f);
+			const FVector ForwardDir = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
+			const FVector RightDir = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
+			AddMovementInput(ForwardDir, MoveInput.Y);
+			AddMovementInput(RightDir, MoveInput.X);
+		}
 	}
 }
 

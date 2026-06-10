@@ -83,6 +83,18 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0"))
 	float DiveDescendAcceleration = 250.f;
 
+	/** Fluid drag coefficient for CalcVelocity while swimming. Higher = more resistance. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0"))
+	float SwimmingDragCoefficient = 1.5f;
+
+	/** Passive upward force when idle/no vertical input, pushing character toward surface. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0"))
+	float SurfaceBuoyancyStrength = 150.f;
+
+	/** Dampens upward velocity near water surface to prevent breaching. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float SwimmingSurfaceDamping = 0.85f;
+
 	/** Current logical surface type (derived from voxel material). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
 	EVoxelSurfaceType CurrentSurfaceType = EVoxelSurfaceType::Default;
@@ -95,6 +107,7 @@ public:
 	// --- Overrides ---
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void PhysCustom(float DeltaTime, int32 Iterations) override;
+	virtual void PhysSwimming(float DeltaTime, int32 Iterations) override;
 	virtual void FindFloor(const FVector& CapsuleLocation, FFindFloorResult& OutFloorResult, bool bCanUseCachedLocation, const FHitResult* DownwardSweepResult = nullptr) const override;
 	virtual bool IsValidLandingSpot(const FVector& CapsuleLocation, const FHitResult& Hit) const override;
 

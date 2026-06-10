@@ -89,20 +89,31 @@ void UVCMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 	}
 
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+}
 
-	// UE's PhysSwimming checks GetPhysicsVolume()->bWaterVolume and exits to
-	// MOVE_Falling when no water volume is found. We use voxel water flags instead
-	// of physics volumes, so re-enter swimming if UE kicked us out while still underwater.
-	if (!IsSwimming() && CachedTerrainContext.bIsUnderwater
-		&& CachedTerrainContext.WaterDepth >= SwimmingExitDepth)
+// ---------------------------------------------------------------------------
+// PhysSwimming — Custom 3D swimming physics (no physics water volume checks)
+// ---------------------------------------------------------------------------
+
+void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
+{
+	if (DeltaTime < MIN_TICK_TIME)
 	{
-		SetMovementMode(MOVE_Swimming);
+		return;
 	}
 
-	// --- Dive controls: vertical movement while swimming ---
-	// Jump = ascend, Crouch = descend. Applied as direct velocity modification
-	// post-Super so it doesn't interfere with UE's swimming physics.
-	if (IsSwimming() && CharacterOwner)
+	// --- Restore pre-additive root motion velocity ---
+	RestorePreAdditiveRootMotionVelocity();
+
+	// --- Calculate velocity with fluid drag ---
+	// bFluid=true enables UE's fluid friction model (drag proportional to speed)
+	CalcVelocity(DeltaTime, SwimmingDragCoefficient, true, BrakingDecelerationSwimming);
+
+	// --- Apply root motion ---
+	ApplyRootMotionToVelocity(DeltaTime);
+
+	// --- Dive controls: Jump = ascend, Crouch = descend ---
+	if (CharacterOwner)
 	{
 		const bool bWantsAscend = CharacterOwner->bPressedJump;
 		const bool bWantsDescent = CharacterOwner->bIsCrouched || IsCrouching();
@@ -113,8 +124,7 @@ void UVCMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 		}
 		else if (bWantsDescent)
 		{
-			// Check if the voxel below the character is solid — if so, stop descending
-			// to prevent sinking through the ocean floor.
+			// Check if the ocean floor is directly below — don't descend into it
 			const float HalfHeight = CharacterOwner->GetSimpleCollisionHalfHeight();
 			const FVector FeetPos = CharacterOwner->GetActorLocation() - FVector(0.f, 0.f, HalfHeight);
 			FHitResult GroundHit;
@@ -129,9 +139,57 @@ void UVCMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 			}
 		}
 
-		// Clamp vertical speed to swim speed limits
-		const float MaxVerticalSpeed = MaxSwimSpeed;
-		Velocity.Z = FMath::Clamp(Velocity.Z, -MaxVerticalSpeed, MaxVerticalSpeed);
+		// --- Passive buoyancy: gently push toward surface when idle ---
+		// Only applies when no significant vertical input from pitch-based movement or dive keys.
+		const bool bHasVerticalInput = bWantsAscend || bWantsDescent || FMath::Abs(Acceleration.Z) > 10.f;
+		if (!bHasVerticalInput && SurfaceBuoyancyStrength > 0.f && CachedTerrainContext.bIsUnderwater)
+		{
+			// Scale buoyancy with depth: strongest deep, zero at surface
+			const float DepthRatio = FMath::Clamp(CachedTerrainContext.WaterDepth / FMath::Max(SwimmingEntryDepth, 1.f), 0.f, 1.f);
+			Velocity.Z += SurfaceBuoyancyStrength * DepthRatio * DeltaTime;
+		}
+
+		// --- Surface damping: decelerate upward motion near water surface ---
+		if (CachedTerrainContext.WaterDepth < SwimmingEntryDepth && Velocity.Z > 0.f)
+		{
+			const float SurfaceRatio = FMath::Clamp(CachedTerrainContext.WaterDepth / FMath::Max(SwimmingEntryDepth, 1.f), 0.f, 1.f);
+			Velocity.Z *= FMath::Lerp(SwimmingSurfaceDamping, 1.f, SurfaceRatio);
+		}
+
+		// --- Surface cap: hard-stop upward velocity at the water line ---
+		// Prevents the character from breaching the surface and falling back in.
+		// Shore exit is handled by horizontal movement into shallow water, which
+		// triggers the mode transition in UpdateVoxelTerrainContext.
+		const float HalfHeight = CharacterOwner->GetSimpleCollisionHalfHeight();
+		if (CachedTerrainContext.WaterDepth < HalfHeight && Velocity.Z > 0.f)
+		{
+			Velocity.Z = 0.f;
+		}
+	}
+
+	// --- Clamp vertical speed ---
+	Velocity.Z = FMath::Clamp(Velocity.Z, -MaxSwimSpeed, MaxSwimSpeed);
+
+	// --- Move and handle collisions ---
+	Iterations++;
+	bJustTeleported = false;
+
+	FVector OldLocation = UpdatedComponent->GetComponentLocation();
+	const FVector Adjusted = Velocity * DeltaTime;
+	FHitResult Hit(1.f);
+	const FQuat Rotation = UpdatedComponent->GetComponentQuat();
+
+	SafeMoveUpdatedComponent(Adjusted, Rotation, true, Hit);
+
+	if (Hit.bBlockingHit && UpdatedComponent)
+	{
+		// Slide along collision surfaces (seabed, cave walls)
+		SlideAlongSurface(Adjusted, (1.f - Hit.Time), Hit.Normal, Hit, true);
+	}
+
+	if (!bJustTeleported && !HasAnimRootMotion() && !CurrentRootMotion.HasOverrideVelocity())
+	{
+		Velocity = (UpdatedComponent->GetComponentLocation() - OldLocation) / DeltaTime;
 	}
 }
 
@@ -182,9 +240,35 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 			MaxAcceleration = SwimmingMaxAcceleration;
 		}
 	}
-	else if (IsSwimming() && CachedTerrainContext.WaterDepth < SwimmingExitDepth)
+	else if (IsSwimming() && (!CachedTerrainContext.bIsUnderwater || CachedTerrainContext.WaterDepth < SwimmingExitDepth))
 	{
-		SetMovementMode(MOVE_Walking);
+		// Anti-flicker guard for the seabed case: when bIsUnderwater goes false
+		// (feet/body in solid voxel), verify with an upper-body water check before
+		// exiting. Skip this when water IS detected but shallow (genuine shore exit).
+		if (!CachedTerrainContext.bIsUnderwater)
+		{
+			const FVector UpperBodyPos = Owner->GetActorLocation() + FVector(0.f, 0.f, HalfHeight * 0.5f);
+			float UpperBodyWaterDepth = 0.f;
+			if (FVCVoxelNavigationHelper::IsPositionUnderwater(GetWorld(), UpperBodyPos, UpperBodyWaterDepth))
+			{
+				// Upper body still in water — seabed contact, stay swimming
+				return;
+			}
+		}
+
+		// Near the water surface or at shore — check for walkable floor
+		FFindFloorResult FloorResult;
+		FindFloor(UpdatedComponent->GetComponentLocation(), FloorResult, false);
+
+		if (FloorResult.bWalkableFloor)
+		{
+			SetMovementMode(MOVE_Walking);
+		}
+		else
+		{
+			// No floor — let gravity pull back to water or down to ground
+			SetMovementMode(MOVE_Falling);
+		}
 		MaxAcceleration = BaseMaxAcceleration;
 	}
 }
