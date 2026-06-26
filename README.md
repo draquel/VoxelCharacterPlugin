@@ -1,6 +1,6 @@
 # VoxelCharacterPlugin
 
-A hybrid first/third-person character controller for Unreal Engine 5.7, purpose-built for voxel worlds with integrated inventory, interaction, equipment, and Gameplay Ability System (GAS) support.
+A hybrid first/third-person character controller for Unreal Engine 5.8, purpose-built for voxel worlds with integrated inventory, interaction, equipment, and Gameplay Ability System (GAS) support.
 
 ## Overview
 

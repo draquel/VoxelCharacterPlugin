@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document defines a **hybrid first/third-person character controller** for Unreal Engine 5.7, designed as a standalone plugin (`VoxelCharacterPlugin`) that integrates with the existing plugin suite:
+This document defines a **hybrid first/third-person character controller** for Unreal Engine 5.8, designed as a standalone plugin (`VoxelCharacterPlugin`) that integrates with the existing plugin suite:
 
 - **CommonGameFramework** — shared types, interfaces
 - **ItemInventoryPlugin** — item/inventory management
