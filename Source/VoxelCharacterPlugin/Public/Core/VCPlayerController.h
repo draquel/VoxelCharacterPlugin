@@ -17,6 +17,9 @@ class UEquipmentManagerComponent;
 class UVCMinimapWidget;
 class UVCWorldMapWidget;
 
+/** A voxel modification was (partially) blocked — RejectedVoxelCount voxels refused the edit. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVoxelEditBlocked, int32, RejectedVoxelCount);
+
 /**
  * Player controller for the voxel character system.
  *
@@ -104,11 +107,30 @@ public:
 
 	// --- Server RPCs ---
 
-	/** Request a server-authoritative voxel modification. */
-	UFUNCTION(Server, Reliable, Category = "VoxelCharacter|Voxel")
+	/** Request a server-authoritative voxel modification. BlueprintCallable so BP tools/UI can
+	 *  request edits through the same validated path as input-driven digging. */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "VoxelCharacter|Voxel")
 	void Server_RequestVoxelModification(const FIntVector& VoxelCoord, EVoxelModificationType ModType, uint8 MaterialID);
 
+	// --- Edit feedback ---
+
+	/**
+	 * Fired on the OWNING CLIENT when a requested voxel modification was blocked (e.g. an edit
+	 * validator vetoed a protected area — see VoxelWorlds IVoxelEditValidator). The controller
+	 * stays policy-free: it reports "blocked", not why. Bind UI here for real messaging.
+	 */
+	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Voxel")
+	FOnVoxelEditBlocked OnVoxelEditBlocked;
+
+	/** Show the built-in minimal on-screen "protected" message when an edit is blocked. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "VoxelCharacter|Voxel")
+	bool bShowEditBlockedMessage = true;
+
 protected:
+	/** Server->owning-client notification that the last modification request was blocked. */
+	UFUNCTION(Client, Reliable)
+	void Client_NotifyVoxelEditBlocked(int32 RejectedVoxelCount);
+
 	virtual void BeginPlay() override;
 	virtual void OnPossess(APawn* InPawn) override;
 	virtual void OnUnPossess() override;
