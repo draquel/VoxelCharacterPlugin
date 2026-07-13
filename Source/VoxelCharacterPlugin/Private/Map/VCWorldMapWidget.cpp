@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Map/VCWorldMapWidget.h"
+#include "Map/VCMapMarkerRegistry.h"
 #include "VoxelMapSubsystem.h"
 #include "VoxelCharacterPlugin.h"
 #include "Blueprint/WidgetTree.h"
@@ -134,13 +135,24 @@ void UVCWorldMapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 
+	bool bViewChanged = false;
 	if (bMapDirty)
 	{
 		RebuildMapTexture();
 		bMapDirty = false;
+		bViewChanged = true;
 	}
 
 	UpdatePlayerMarker();
+
+	// Registry markers refresh on view changes and at a slow cadence otherwise (gathering runs
+	// deterministic placement over the whole visible area, which can be large when zoomed out).
+	TimeSinceMarkerUpdate += InDeltaTime;
+	if (bViewChanged || TimeSinceMarkerUpdate >= FMath::Max(MarkerUpdateInterval, 0.1f))
+	{
+		TimeSinceMarkerUpdate = 0.0f;
+		UpdateMarkers();
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -387,5 +399,107 @@ void UVCWorldMapWidget::UpdatePlayerMarker()
 		MapCoordinateText->SetText(FText::FromString(
 			FString::Printf(TEXT("Player: X=%d  Y=%d  |  Zoom: %.1fx"), VoxelX, VoxelY, CurrentZoom)
 		));
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Registry Markers
+// ---------------------------------------------------------------------------
+
+void UVCWorldMapWidget::UpdateMarkers()
+{
+	if (!RootCanvas || !WidgetTree || RenderedTexSize <= 0 || RenderedWorldPerPixel <= 0.0f)
+	{
+		return;
+	}
+
+	if (!MarkerRegistry.IsValid())
+	{
+		if (const UWorld* World = GetWorld())
+		{
+			MarkerRegistry = World->GetSubsystem<UVCMapMarkerRegistry>();
+		}
+	}
+
+	TArray<FVCMapMarker> Markers;
+	if (UVCMapMarkerRegistry* Registry = MarkerRegistry.Get())
+	{
+		// The rendered view: PanOffset-centred, RenderedTexSize pixels at RenderedWorldPerPixel.
+		const float ViewWorldExtent = 0.5f * RenderedTexSize * RenderedWorldPerPixel;
+		const FBox2D Area(PanOffset - FVector2D(ViewWorldExtent, ViewWorldExtent),
+			PanOffset + FVector2D(ViewWorldExtent, ViewWorldExtent));
+		Registry->GatherMarkers(Area, Markers);
+	}
+
+	Markers.Sort([](const FVCMapMarker& A, const FVCMapMarker& B) { return A.Priority > B.Priority; });
+
+	const float HalfTex = 0.5f * RenderedTexSize;
+
+	int32 Used = 0;
+	for (const FVCMapMarker& Marker : Markers)
+	{
+		if (Used >= MaxMarkers)
+		{
+			break;
+		}
+
+		// Same mapping as the player marker: world offset from the view centre, in texture pixels.
+		const FVector2D PixelOffset = (Marker.WorldPosition - PanOffset) / RenderedWorldPerPixel;
+		if (FMath::Abs(PixelOffset.X) > HalfTex || FMath::Abs(PixelOffset.Y) > HalfTex)
+		{
+			continue; // outside the map image
+		}
+
+		// Pool: dot + label per slot, created on demand.
+		if (!MarkerDots.IsValidIndex(Used))
+		{
+			UImage* Dot = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
+			Dot->SetDesiredSizeOverride(FVector2D(MarkerDotSize, MarkerDotSize));
+			if (UCanvasPanelSlot* DotSlot = RootCanvas->AddChildToCanvas(Dot))
+			{
+				DotSlot->SetAnchors(FAnchors(0.5f, 0.5f, 0.5f, 0.5f));
+				DotSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+				DotSlot->SetAutoSize(true);
+			}
+			MarkerDots.Add(Dot);
+
+			UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+			FSlateFontInfo Font = Label->GetFont();
+			Font.Size = 9;
+			Label->SetFont(Font);
+			if (UCanvasPanelSlot* LabelSlot = RootCanvas->AddChildToCanvas(Label))
+			{
+				LabelSlot->SetAnchors(FAnchors(0.5f, 0.5f, 0.5f, 0.5f));
+				LabelSlot->SetAlignment(FVector2D(0.0f, 0.5f));
+				LabelSlot->SetAutoSize(true);
+			}
+			MarkerLabels.Add(Label);
+		}
+
+		UImage* Dot = MarkerDots[Used];
+		Dot->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Dot->SetColorAndOpacity(Marker.Color);
+		if (UCanvasPanelSlot* DotSlot = Cast<UCanvasPanelSlot>(Dot->Slot))
+		{
+			DotSlot->SetPosition(PixelOffset);
+		}
+
+		UTextBlock* Label = MarkerLabels[Used];
+		Label->SetVisibility(Marker.Label.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+		Label->SetText(Marker.Label);
+		Label->SetColorAndOpacity(FSlateColor(Marker.Color));
+		if (UCanvasPanelSlot* LabelSlot = Cast<UCanvasPanelSlot>(Label->Slot))
+		{
+			LabelSlot->SetPosition(PixelOffset + FVector2D(0.75f * MarkerDotSize + 2.0f, 0.0f));
+		}
+
+		++Used;
+	}
+
+	// Hide the unused tail of the pools.
+	for (int32 i = Used; i < MarkerDots.Num(); ++i)
+	{
+		MarkerDots[i]->SetVisibility(ESlateVisibility::Collapsed);
+		MarkerLabels[i]->SetVisibility(ESlateVisibility::Collapsed);
 	}
 }
