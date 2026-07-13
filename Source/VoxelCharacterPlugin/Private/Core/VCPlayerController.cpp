@@ -3,6 +3,7 @@
 #include "Core/VCPlayerController.h"
 #include "Input/VCInputConfig.h"
 #include "Movement/VCVoxelNavigationHelper.h"
+#include "Engine/Engine.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputMappingContext.h"
 #include "Blueprint/UserWidget.h"
@@ -1141,5 +1142,26 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 			VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z, MaterialID);
 		break;
 	}
+	}
+
+	// Edit-protection feedback: the edit manager counts voxels a validator vetoed during the
+	// apply above (e.g. protected POI/dungeon claims). Tell the owning client so its UI can react.
+	const int32 RejectedVoxels = EditMgr->GetLastRejectedEditCount();
+	if (RejectedVoxels > 0)
+	{
+		Client_NotifyVoxelEditBlocked(RejectedVoxels);
+	}
+}
+
+void AVCPlayerController::Client_NotifyVoxelEditBlocked_Implementation(int32 RejectedVoxelCount)
+{
+	OnVoxelEditBlocked.Broadcast(RejectedVoxelCount);
+
+	// Minimal built-in message until a game binds real UI to OnVoxelEditBlocked. Keyed so rapid
+	// repeat blocks refresh one line instead of stacking.
+	if (bShowEditBlockedMessage && GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			/*Key=*/0x7C0EDB10, 1.5f, FColor::Orange, TEXT("This area is protected."));
 	}
 }
