@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Map/VCMinimapWidget.h"
+#include "Map/VCMapMarkerRegistry.h"
 #include "VoxelMapSubsystem.h"
 #include "VoxelCharacterPlugin.h"
 #include "Blueprint/WidgetTree.h"
@@ -183,10 +184,15 @@ void UVCMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 	FVector CameraLoc;
 	PC->GetPlayerViewPoint(CameraLoc, CameraRot);
 
+	const float MapAngleDeg = -CameraRot.Yaw - 90.0f;
 	if (MapImage)
 	{
-		MapImage->SetRenderTransformAngle(-CameraRot.Yaw - 90.0f);
+		MapImage->SetRenderTransformAngle(MapAngleDeg);
 	}
+
+	// Marker dots from the registry (POIs, quests, ... — the map is source-agnostic),
+	// rotated with the map so they stay glued to the terrain.
+	UpdateMarkers(PlayerPos, MapAngleDeg);
 
 	// Position the north indicator on the minimap edge.
 	// North = +X axis (yaw=0 direction). As the camera rotates, north's
@@ -203,6 +209,89 @@ void UVCMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 		{
 			NorthSlot->SetPosition(FVector2D(NX, NY));
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Markers
+// ---------------------------------------------------------------------------
+
+void UVCMinimapWidget::UpdateMarkers(const FVector& PlayerPos, float MapAngleDeg)
+{
+	if (!MapCanvas || !WidgetTree)
+	{
+		return;
+	}
+
+	if (!MarkerRegistry.IsValid())
+	{
+		if (const UWorld* World = GetWorld())
+		{
+			MarkerRegistry = World->GetSubsystem<UVCMapMarkerRegistry>();
+		}
+	}
+
+	TArray<FVCMapMarker> Markers;
+	if (UVCMapMarkerRegistry* Registry = MarkerRegistry.Get())
+	{
+		// Gather slightly beyond the visible radius so dots slide in smoothly at the rim.
+		const FVector2D Player2D(PlayerPos.X, PlayerPos.Y);
+		const float GatherRadius = MinimapWorldRadius * RotationOversize;
+		const FBox2D Area(Player2D - FVector2D(GatherRadius, GatherRadius), Player2D + FVector2D(GatherRadius, GatherRadius));
+		Registry->GatherMarkers(Area, Markers);
+	}
+
+	// Highest priority first — they win the marker budget and draw on top (added last below).
+	Markers.Sort([](const FVCMapMarker& A, const FVCMapMarker& B) { return A.Priority > B.Priority; });
+
+	const FVector2D Player2D(PlayerPos.X, PlayerPos.Y);
+	const float PixelsPerWorldUnit = MinimapSize / (2.0f * FMath::Max(MinimapWorldRadius, 1.0f));
+	const float VisibleRadiusPx = MinimapSize * 0.48f; // keep dots inside the square
+
+	int32 Used = 0;
+	for (const FVCMapMarker& Marker : Markers)
+	{
+		if (Used >= MaxMarkers)
+		{
+			break;
+		}
+
+		// World offset -> pixel offset -> rotate with the map image (same angle, same pivot).
+		const FVector2D PixelOffset = (Marker.WorldPosition - Player2D) * PixelsPerWorldUnit;
+		const FVector2D Rotated = PixelOffset.GetRotated(MapAngleDeg);
+		if (Rotated.SizeSquared() > VisibleRadiusPx * VisibleRadiusPx)
+		{
+			continue;
+		}
+
+		// Pool: create on demand, reuse thereafter.
+		if (!MarkerDots.IsValidIndex(Used))
+		{
+			UImage* Dot = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
+			Dot->SetDesiredSizeOverride(FVector2D(MarkerDotSize, MarkerDotSize));
+			if (UCanvasPanelSlot* DotSlot = MapCanvas->AddChildToCanvas(Dot))
+			{
+				DotSlot->SetAnchors(FAnchors(0.5f, 0.5f, 0.5f, 0.5f));
+				DotSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+				DotSlot->SetAutoSize(true);
+			}
+			MarkerDots.Add(Dot);
+		}
+
+		UImage* Dot = MarkerDots[Used];
+		Dot->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Dot->SetColorAndOpacity(Marker.Color);
+		if (UCanvasPanelSlot* DotSlot = Cast<UCanvasPanelSlot>(Dot->Slot))
+		{
+			DotSlot->SetPosition(Rotated);
+		}
+		++Used;
+	}
+
+	// Hide the unused tail of the pool.
+	for (int32 i = Used; i < MarkerDots.Num(); ++i)
+	{
+		MarkerDots[i]->SetVisibility(ESlateVisibility::Collapsed);
 	}
 }
 

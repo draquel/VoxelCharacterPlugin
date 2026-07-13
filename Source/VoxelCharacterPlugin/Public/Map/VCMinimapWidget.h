@@ -7,6 +7,7 @@
 #include "VCMinimapWidget.generated.h"
 
 class UVoxelMapSubsystem;
+class UVCMapMarkerRegistry;
 class UImage;
 class UTextBlock;
 class UCanvasPanel;
@@ -43,6 +44,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Minimap")
 	float UpdateInterval = 0.1f;
 
+	/** Max markers drawn on the minimap (highest priority first; dots only, no labels). */
+	UPROPERTY(EditDefaultsOnly, Category = "Minimap")
+	int32 MaxMarkers = 24;
+
+	/** Marker dot size in pixels. */
+	UPROPERTY(EditDefaultsOnly, Category = "Minimap")
+	float MarkerDotSize = 6.0f;
+
 protected:
 	virtual void NativeOnInitialized() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
@@ -56,6 +65,12 @@ private:
 
 	/** Create or recreate the dynamic texture. */
 	void EnsureTexture(int32 TexSize);
+
+	/**
+	 * Refresh marker dots from the marker registry: world offsets from the player are scaled to
+	 * pixels and rotated by the same angle as the map image, so dots stay glued to the terrain.
+	 */
+	void UpdateMarkers(const FVector& PlayerPos, float MapAngleDeg);
 
 	// Widget tree references
 	UPROPERTY()
@@ -83,7 +98,12 @@ private:
 	UPROPERTY()
 	TObjectPtr<UTexture2D> MapTexture;
 
+	/** Pooled marker dot widgets (created on demand, hidden when unused). */
+	UPROPERTY()
+	TArray<TObjectPtr<UImage>> MarkerDots;
+
 	TWeakObjectPtr<UVoxelMapSubsystem> MapSubsystem;
+	TWeakObjectPtr<UVCMapMarkerRegistry> MarkerRegistry;
 	float TimeSinceLastUpdate = 0.0f;
 	int32 CurrentTextureSize = 0;
 };
