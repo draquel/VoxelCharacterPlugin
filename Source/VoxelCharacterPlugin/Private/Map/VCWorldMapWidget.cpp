@@ -82,6 +82,22 @@ void UVCWorldMapWidget::BuildWidgetTree()
 		TextSlot->SetAlignment(FVector2D(0.5f, 1.0f));
 		TextSlot->SetAutoSize(true);
 	}
+
+	// North indicator above the map image (the map is north-up: world +X points up).
+	UTextBlock* NorthLabel = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("WorldMapNorth"));
+	NorthLabel->SetText(FText::FromString(TEXT("N")));
+	FSlateFontInfo NorthFont = NorthLabel->GetFont();
+	NorthFont.Size = 16;
+	NorthLabel->SetFont(NorthFont);
+	NorthLabel->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.3f, 0.3f, 1.0f)));
+	NorthLabel->SetJustification(ETextJustify::Center);
+	if (UCanvasPanelSlot* NorthSlot = RootCanvas->AddChildToCanvas(NorthLabel))
+	{
+		NorthSlot->SetAnchors(FAnchors(0.5f, 0.5f, 0.5f, 0.5f));
+		NorthSlot->SetAlignment(FVector2D(0.5f, 1.0f));
+		NorthSlot->SetPosition(FVector2D(0.0f, -0.5f * FMath::Clamp(MapTextureFixedSize, 256, 2048) - 6.0f));
+		NorthSlot->SetAutoSize(true);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -197,9 +213,10 @@ FReply UVCWorldMapWidget::NativeOnMouseMove(const FGeometry& InGeometry, const F
 		const FVector2D Delta = CurrentMousePos - LastMousePos;
 		LastMousePos = CurrentMousePos;
 
-		// Convert screen pixel delta to world delta
-		PanOffset.X -= Delta.X * RenderedWorldPerPixel;
-		PanOffset.Y -= Delta.Y * RenderedWorldPerPixel;
+		// Convert screen pixel delta to world delta (north-up: screen X = world +Y east,
+		// screen Y = world -X north). Content follows the mouse.
+		PanOffset.Y -= Delta.X * RenderedWorldPerPixel;
+		PanOffset.X += Delta.Y * RenderedWorldPerPixel;
 		bMapDirty = true;
 
 		return FReply::Handled();
@@ -287,8 +304,10 @@ void UVCWorldMapWidget::RebuildMapTexture()
 	const float ViewCenterX = PanOffset.X;
 	const float ViewCenterY = PanOffset.Y;
 
-	// World bounds of the texture
-	const float WorldMinX = ViewCenterX - ViewWorldExtent;
+	// World bounds of the texture. NORTH-UP orientation: world +X (north) points up on the
+	// map (screen -Y), world +Y (east) points right (screen +X) — matching the minimap's
+	// compass convention.
+	const float WorldMaxX = ViewCenterX + ViewWorldExtent;
 	const float WorldMinY = ViewCenterY - ViewWorldExtent;
 
 	// Iterate visible tiles and blit them into the texture
@@ -321,9 +340,9 @@ void UVCWorldMapWidget::RebuildMapTexture()
 					const float PixWorldX = TileWorldOrigin.X + PX * PixelWorldSize;
 					const float PixWorldY = TileWorldOrigin.Y + PY * PixelWorldSize;
 
-					// Map to texture pixel
-					const int32 DstX = FMath::FloorToInt((PixWorldX - WorldMinX) / RenderedWorldPerPixel);
-					const int32 DstY = FMath::FloorToInt((PixWorldY - WorldMinY) / RenderedWorldPerPixel);
+					// Map to texture pixel (north-up: east right, north up)
+					const int32 DstX = FMath::FloorToInt((PixWorldY - WorldMinY) / RenderedWorldPerPixel);
+					const int32 DstY = FMath::FloorToInt((WorldMaxX - PixWorldX) / RenderedWorldPerPixel);
 
 					if (DstX < 0 || DstX >= TexSize || DstY < 0 || DstY >= TexSize)
 					{
@@ -379,9 +398,9 @@ void UVCWorldMapWidget::UpdatePlayerMarker()
 
 	const FVector PlayerPos = PC->GetPawn()->GetActorLocation();
 
-	// Player's offset from the view center, in texture pixels
-	const float PixelOffsetX = (PlayerPos.X - PanOffset.X) / RenderedWorldPerPixel;
-	const float PixelOffsetY = (PlayerPos.Y - PanOffset.Y) / RenderedWorldPerPixel;
+	// Player's offset from the view center, in texture pixels (north-up: east right, north up)
+	const float PixelOffsetX = (PlayerPos.Y - PanOffset.Y) / RenderedWorldPerPixel;
+	const float PixelOffsetY = (PanOffset.X - PlayerPos.X) / RenderedWorldPerPixel;
 
 	// Position marker relative to canvas center (anchor is 0.5, 0.5)
 	UCanvasPanelSlot* MarkerSlot = Cast<UCanvasPanelSlot>(PlayerMarker->Slot);
@@ -443,8 +462,10 @@ void UVCWorldMapWidget::UpdateMarkers()
 			break;
 		}
 
-		// Same mapping as the player marker: world offset from the view centre, in texture pixels.
-		const FVector2D PixelOffset = (Marker.WorldPosition - PanOffset) / RenderedWorldPerPixel;
+		// Same mapping as the player marker (north-up: east right, north up).
+		const FVector2D PixelOffset(
+			(Marker.WorldPosition.Y - PanOffset.Y) / RenderedWorldPerPixel,
+			(PanOffset.X - Marker.WorldPosition.X) / RenderedWorldPerPixel);
 		if (FMath::Abs(PixelOffset.X) > HalfTex || FMath::Abs(PixelOffset.Y) > HalfTex)
 		{
 			continue; // outside the map image
