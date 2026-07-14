@@ -182,9 +182,8 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 		return false;
 	}
 
-	const IVoxelWorldMode* WorldMode = ChunkMgr->GetWorldMode();
 	const UVoxelWorldConfiguration* Config = ChunkMgr->GetConfiguration();
-	if (!WorldMode || !Config)
+	if (!Config)
 	{
 		return false;
 	}
@@ -193,10 +192,14 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 	const float WaterLevel = Config->WaterLevel;
 	const bool bHasWater = Config->bEnableWaterLevel;
 
-	// Helper: query terrain height and check if above water
+	// Helper: query terrain height and check if above water. GetGeneratedSurfaceHeight is the
+	// canonical analytic surface (continentalness AND terrain-conditioning zones): the raw
+	// IVoxelWorldMode::GetTerrainHeightAt misses POI-pad flattening, so spawns/settles on
+	// conditioner-FILLED ground landed below the real surface (inside the fill) and fell/traced
+	// into whatever lay beneath.
 	auto IsAboveWater = [&](float X, float Y, float& OutTerrainHeight) -> bool
 	{
-		OutTerrainHeight = WorldMode->GetTerrainHeightAt(X, Y, Config->NoiseParams);
+		OutTerrainHeight = ChunkMgr->GetGeneratedSurfaceHeight(X, Y);
 		return !bHasWater || OutTerrainHeight > WaterLevel;
 	};
 
