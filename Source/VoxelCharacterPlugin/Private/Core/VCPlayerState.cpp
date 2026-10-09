@@ -2,6 +2,8 @@
 
 #include "Core/VCPlayerState.h"
 #include "Core/VCCharacterAttributeSet.h"
+#include "Combat/VCCombatAttributeSet.h"
+#include "Combat/VCMeleeAttackAbility.h"
 #include "AbilitySystemComponent.h"
 #include "GameplayEffect.h"
 #include "VoxelCharacterPlugin.h"
@@ -13,6 +15,9 @@ AVCPlayerState::AVCPlayerState()
 	AbilitySystemComponent->SetReplicationMode(EGameplayEffectReplicationMode::Mixed);
 
 	CharacterAttributes = CreateDefaultSubobject<UVCCharacterAttributeSet>(TEXT("CharacterAttributes"));
+	CombatAttributes = CreateDefaultSubobject<UVCCombatAttributeSet>(TEXT("CombatAttributes"));
+
+	MeleeAttackAbilityClass = UVCMeleeAttackAbility::StaticClass();
 
 	// Net update frequency for ASC replication
 	SetNetUpdateFrequency(100.f);
@@ -48,6 +53,14 @@ void AVCPlayerState::HandleRespawnAttributeReset()
 		{
 			AbilitySystemComponent->ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
 		}
+	}
+	else
+	{
+		// No effect configured: restore vitals directly so a fresh avatar never starts at 0 health.
+		const float MaxHealth = AbilitySystemComponent->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxHealthAttribute());
+		const float MaxStamina = AbilitySystemComponent->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxStaminaAttribute());
+		AbilitySystemComponent->SetNumericAttributeBase(UVCCharacterAttributeSet::GetHealthAttribute(), MaxHealth);
+		AbilitySystemComponent->SetNumericAttributeBase(UVCCharacterAttributeSet::GetStaminaAttribute(), MaxStamina);
 	}
 
 	UE_LOG(LogVoxelCharacter, Log, TEXT("Respawn attribute reset applied for %s"), *GetPlayerName());

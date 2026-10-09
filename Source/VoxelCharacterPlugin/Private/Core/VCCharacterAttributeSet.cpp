@@ -74,12 +74,8 @@ void UVCCharacterAttributeSet::PostGameplayEffectExecute(const FGameplayEffectMo
 			const float NewHealth = FMath::Max(0.f, GetHealth() - DamageDone);
 			SetHealth(NewHealth);
 
-			if (NewHealth <= 0.f)
-			{
-				// Death handling — broadcast via GAS tag or delegate.
-				// Full death flow wired in Gate 3 character/playerstate.
-				UE_LOG(LogVoxelCharacter, Log, TEXT("Character health reached zero"));
-			}
+			// Zero health is handled by UVCCombatComponent (bound to the Health change delegate),
+			// which decides between Dead and Downed; the attribute set only does the arithmetic.
 		}
 	}
 }
