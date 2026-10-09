@@ -10,6 +10,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/WorldSettings.h"
 
 namespace VCEditModeTestHelpers
@@ -34,6 +35,18 @@ namespace VCEditModeTestHelpers
 		{
 			if (World)
 			{
+				// Route EndPlay while the world still exists: a character left for the GC runs its components'
+				// EndPlay with GetWorld() == null later (UInteractionComponent clears a timer there) and crashes
+				// the editor on the next map load.
+				TArray<AActor*> Actors;
+				for (TActorIterator<AActor> It(World); It; ++It)
+				{
+					Actors.Add(*It);
+				}
+				for (AActor* Actor : Actors)
+				{
+					World->DestroyActor(Actor);
+				}
 				GEngine->DestroyWorldContext(World);
 				World->DestroyWorld(false);
 			}
