@@ -226,8 +226,11 @@ Dead or downed characters ignore primary/secondary actions entirely.
 `bEditModeEnabled` is true (off by default). It is toggled by `IA_ToggleEditMode` (B) → `ToggleEditMode()`, by
 `SetEditModeEnabled()` from Blueprint/code, or by `vox.EditMode` in the game module. The flag is local input state,
 never replicated; the server still validates every `Server_RequestVoxelModification`. `OnEditModeChanged(bool)`
-drives the `EDIT` cue on `UVCVitalsWidget`. This is a stop-gap so attacking/interacting never digs; the plan is to
-bind edit to an item / mechanic later, which should replace the key, not the gate.
+drives the `EDIT` cue on `UVCVitalsWidget`. The toggle also mirrors into the VoxelWorlds console variable
+`voxel.Edit.PlayerInputs` (looked up by name, no dependency) so a map whose `AVoxelWorldTestActor` has
+`bEnableEditInputs` set (the demo's brush sphere) obeys the same key instead of polling the raw mouse. This is a
+stop-gap so attacking/interacting never digs; the plan is to bind edit to an item / mechanic later, which should
+replace the key, not the gate.
 
 Do not bypass this chain. New action types insert into the chain, they don't replace it.
 
