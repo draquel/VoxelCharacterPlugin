@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Core/VCCharacterBase.h"
+#include "HAL/IConsoleManager.h"
 #include "Core/VCPlayerState.h"
 #include "Core/VCCharacterAttributeSet.h"
 #include "Core/VCPlayerController.h"
@@ -56,7 +57,24 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+
 #endif
+
+namespace
+{
+	/**
+	 * Mirror edit mode into VoxelWorlds' runtime switch for the test-actor brush (voxel.Edit.PlayerInputs), so a map
+	 * whose AVoxelWorldTestActor has bEnableEditInputs set (the demo) obeys the same toggle instead of polling the
+	 * raw mouse buttons. Looked up by name: no module dependency, and a no-op where VoxelStreaming is absent.
+	 */
+	void ApplyEditModeToVoxelTools(bool bEnabled)
+	{
+		if (IConsoleVariable* Switch = IConsoleManager::Get().FindConsoleVariable(TEXT("voxel.Edit.PlayerInputs")))
+		{
+			Switch->Set(bEnabled ? 1 : 0, ECVF_SetByCode);
+		}
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -1309,6 +1327,13 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	{
 		EIC->BindAction(Config->IA_Use, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Use);
 	}
+	if (Config->IA_ToggleEditMode)
+	{
+		EIC->BindAction(Config->IA_ToggleEditMode, ETriggerEvent::Started, this, &AVCCharacterBase::Input_ToggleEditMode);
+	}
+
+	// Input is only set up for the local player: start the world's test brush in the same (off) state as edit mode.
+	ApplyEditModeToVoxelTools(bEditModeEnabled);
 	if (Config->IA_ScrollHotbar)
 	{
 		EIC->BindAction(Config->IA_ScrollHotbar, ETriggerEvent::Triggered, this, &AVCCharacterBase::Input_ScrollHotbar);
@@ -1388,7 +1413,7 @@ void AVCCharacterBase::Input_ToggleView(const FInputActionValue& Value)
 
 void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 {
-	// Priority chain: GAS ability -> equipped item action -> voxel dig -> fallback
+	// Priority chain: GAS ability -> [edit mode only] equipped item action -> voxel dig -> fallback
 	if (IsIncapacitated())
 	{
 		return;
@@ -1400,13 +1425,20 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 		return;
 	}
 
+	// Steps 2-3 carve terrain, so they only run while edit mode is on (IA_ToggleEditMode / vox.EditMode).
+	// Attacking and interacting with edit mode off must never touch voxels.
+	if (!bEditModeEnabled)
+	{
+		return;
+	}
+
 #if WITH_EQUIPMENT_PLUGIN
 	if (EquipmentManager)
 	{
 		static const FGameplayTag MainHandTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.MainHand"), false);
 		if (EquipmentManager->IsSlotOccupied(MainHandTag))
 		{
-			// Equipped tool: route to voxel destruction via trace
+			// Step 2: equipped tool: route to voxel destruction via trace
 			FHitResult Hit;
 			if (TraceForVoxel(Hit))
 			{
@@ -1426,7 +1458,7 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 	}
 #endif
 
-	// Fallback: unarmed voxel dig
+	// Step 3: unarmed voxel dig
 	FHitResult Hit;
 	if (TraceForVoxel(Hit))
 	{
@@ -1445,7 +1477,18 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 
 void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 {
-	// Priority chain: GAS ability -> equipped item alt -> voxel place -> fallback
+	// Priority chain: GAS ability -> [edit mode only] equipped item alt -> voxel place -> fallback
+	if (IsIncapacitated())
+	{
+		return;
+	}
+
+	// Every step below places a block: a no-op unless edit mode is on (IA_ToggleEditMode / vox.EditMode).
+	if (!bEditModeEnabled)
+	{
+		return;
+	}
+
 #if WITH_EQUIPMENT_PLUGIN
 	if (EquipmentManager)
 	{
@@ -1546,6 +1589,36 @@ void AVCCharacterBase::Input_Drop(const FInputActionValue& Value)
 void AVCCharacterBase::Input_Use(const FInputActionValue& Value)
 {
 	RequestUseActiveItem();
+}
+
+void AVCCharacterBase::Input_ToggleEditMode(const FInputActionValue& Value)
+{
+	ToggleEditMode();
+}
+
+// ---------------------------------------------------------------------------
+// Voxel edit mode
+// ---------------------------------------------------------------------------
+
+
+void AVCCharacterBase::SetEditModeEnabled(bool bEnabled)
+{
+	if (bEditModeEnabled == bEnabled)
+	{
+		return;
+	}
+	bEditModeEnabled = bEnabled;
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: voxel edit mode %s"), *GetName(), bEditModeEnabled ? TEXT("ON") : TEXT("OFF"));
+	if (IsLocallyControlled())
+	{
+		ApplyEditModeToVoxelTools(bEditModeEnabled);
+	}
+	OnEditModeChanged.Broadcast(bEditModeEnabled);
+}
+
+void AVCCharacterBase::ToggleEditMode()
+{
+	SetEditModeEnabled(!bEditModeEnabled);
 }
 
 // ---------------------------------------------------------------------------

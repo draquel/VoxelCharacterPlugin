@@ -208,3 +208,6 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCCombatantStateChanged, const FC
 
 /** A combatant was revived from Dead/Downed (server only). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnVCCombatantRevived);
+
+/** Voxel edit mode (dig / place on the mouse actions) was turned on or off. Local, never replicated. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCEditModeChanged, bool, bEnabled);

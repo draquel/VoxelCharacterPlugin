@@ -201,6 +201,30 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Voxel")
 	bool TraceForVoxel(FHitResult& OutHit, float MaxDistance = 500.f) const;
 
+	/**
+	 * Whether the primary / secondary actions may dig and place voxels. Off by default so attacking and
+	 * interacting never carve terrain; toggled with IA_ToggleEditMode (B) or vox.EditMode. Local input
+	 * state, not replicated: the server still validates every modification request it receives.
+	 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "VoxelCharacter|Voxel")
+	bool bEditModeEnabled = false;
+
+	/** Turn voxel edit mode on or off. Broadcasts OnEditModeChanged only when the state actually changes. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Voxel")
+	void SetEditModeEnabled(bool bEnabled);
+
+	/** @return True while the primary / secondary actions dig and place voxels. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Voxel")
+	bool IsEditModeEnabled() const { return bEditModeEnabled; }
+
+	/** Flip voxel edit mode (what the IA_ToggleEditMode key does). */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Voxel")
+	void ToggleEditMode();
+
+	/** Fired when edit mode is turned on or off (HUD cue binds here). */
+	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Voxel")
+	FOnVCEditModeChanged OnEditModeChanged;
+
 	// =================================================================
 	// Terrain Ready Spawn
 	// =================================================================
@@ -364,6 +388,7 @@ protected:
 	void Input_ScrollHotbar(const FInputActionValue& Value);
 	void Input_Drop(const FInputActionValue& Value);
 	void Input_Use(const FInputActionValue& Value);
+	void Input_ToggleEditMode(const FInputActionValue& Value);
 
 	UFUNCTION(Server, Reliable)
 	void Server_UseItemInSlot(int32 SlotIndex);

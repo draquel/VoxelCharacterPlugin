@@ -69,7 +69,9 @@ void UVCVitalsWidget::NativeDestruct()
 
 void UVCVitalsWidget::BuildWidgetTree()
 {
-	if (!WidgetTree)
+	// Idempotent: NativeOnInitialized only runs for widgets that have a player context, so a widget
+	// created without one (automation tests) builds its tree on the first InitWithCharacter instead.
+	if (!WidgetTree || HealthBar)
 	{
 		return;
 	}
@@ -79,12 +81,27 @@ void UVCVitalsWidget::BuildWidgetTree()
 	HealthBar = MakeBar(WidgetTree, Root, HealthText, FLinearColor(0.75f, 0.12f, 0.12f), TEXT("Health"));
 	StaminaBar = MakeBar(WidgetTree, Root, StaminaText, FLinearColor(0.15f, 0.6f, 0.2f), TEXT("Stamina"));
 
+	EditModeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("EditModeText"));
+	FSlateFontInfo EditFont = EditModeText->GetFont();
+	EditFont.Size = 14;
+	EditModeText->SetFont(EditFont);
+	EditModeText->SetText(FText::FromString(TEXT("EDIT")));
+	EditModeText->SetColorAndOpacity(FSlateColor(FLinearColor(1.f, 0.75f, 0.1f)));
+	EditModeText->SetShadowOffset(FVector2D(1.f, 1.f));
+	EditModeText->SetShadowColorAndOpacity(FLinearColor(0.f, 0.f, 0.f, 0.8f));
+	if (UVerticalBoxSlot* EditSlot = Root->AddChildToVerticalBox(EditModeText))
+	{
+		EditSlot->SetPadding(FMargin(2.f, 2.f, 0.f, 0.f));
+	}
+
 	SetHealth(0.f, 0.f);
 	SetStamina(0.f, 0.f);
+	SetEditModeShown(false);
 }
 
 void UVCVitalsWidget::InitWithCharacter(AVCCharacterBase* Character)
 {
+	BuildWidgetTree();
 	Unbind();
 	if (!Character)
 	{
@@ -96,6 +113,7 @@ void UVCVitalsWidget::InitWithCharacter(AVCCharacterBase* Character)
 	{
 		Character->CombatComponent->OnHealthChanged.AddDynamic(this, &UVCVitalsWidget::HandleHealthChanged);
 	}
+	Character->OnEditModeChanged.AddDynamic(this, &UVCVitalsWidget::HandleEditModeChanged);
 
 	if (UAbilitySystemComponent* ASC = Character->GetAbilitySystemComponent())
 	{
@@ -117,7 +135,9 @@ void UVCVitalsWidget::Unbind()
 		{
 			Character->CombatComponent->OnHealthChanged.RemoveDynamic(this, &UVCVitalsWidget::HandleHealthChanged);
 		}
+		Character->OnEditModeChanged.RemoveDynamic(this, &UVCVitalsWidget::HandleEditModeChanged);
 	}
+	SetEditModeShown(false);
 	if (UAbilitySystemComponent* ASC = BoundASC.Get())
 	{
 		ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetStaminaAttribute()).Remove(StaminaHandle);
@@ -133,6 +153,7 @@ void UVCVitalsWidget::RefreshFromCharacter()
 {
 	AVCCharacterBase* Character = BoundCharacter.Get();
 	UAbilitySystemComponent* ASC = BoundASC.Get();
+	SetEditModeShown(Character && Character->IsEditModeEnabled());
 	if (!Character || !ASC)
 	{
 		return;
@@ -146,6 +167,24 @@ void UVCVitalsWidget::RefreshFromCharacter()
 void UVCVitalsWidget::HandleHealthChanged(float NewHealth, float OldHealth, float MaxHealth)
 {
 	SetHealth(NewHealth, MaxHealth);
+}
+
+void UVCVitalsWidget::HandleEditModeChanged(bool bEnabled)
+{
+	SetEditModeShown(bEnabled);
+}
+
+bool UVCVitalsWidget::IsEditModeShown() const
+{
+	return EditModeText && EditModeText->GetVisibility() != ESlateVisibility::Collapsed;
+}
+
+void UVCVitalsWidget::SetEditModeShown(bool bShown)
+{
+	if (EditModeText)
+	{
+		EditModeText->SetVisibility(bShown ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
 }
 
 void UVCVitalsWidget::HandleStaminaChanged(const FOnAttributeChangeData& Data)

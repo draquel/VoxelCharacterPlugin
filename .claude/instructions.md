@@ -131,7 +131,7 @@ attacker builds FCGFDamageContext
 - **Consumables**: `IA_Use` (F) → `RequestUseActiveItem` → `Server_UseItemInSlot` → `UseItemInSlot` (authority): Consumable fragment required; per-definition cooldown on the pawn; applies `AttributeChanges` (instant transient effect), `ConsumeEffect`, `ConsumeAbility`; removes one when `bConsumeOnUse`.
 - **Items across death**: `HandleDied` → `CaptureItemSnapshotToPlayerState` (inventory slots + equipped items as the storage subsystem's item JSON, `FVCItemSnapshot` on `AVCPlayerState`); the new avatar's `PossessedBy` → `RestoreItemSnapshotFromPlayerState` (inventory by slot index, then re-equip through `TryEquipFromInventory`). Server only, not replicated.
 - **Callables for UI/scripts**: `EquipHotbarItem(slot)`, `UnequipSlotToInventory(tag)`, `RequestUseActiveItem()`; the inventory UI click-to-move path is unchanged.
-- **Vitals HUD**: `UVCVitalsWidget` (UI/) created by `AVCPlayerController::CreatePersistentWidgets`, rebound in `OnPossess` via `BindVitalsToPawn`; health from `UVCCombatComponent::OnHealthChanged`, stamina from the attribute delegates.
+- **Vitals HUD**: `UVCVitalsWidget` (UI/) created by `AVCPlayerController::CreatePersistentWidgets`, rebound in `OnPossess` via `BindVitalsToPawn`; health from `UVCCombatComponent::OnHealthChanged`, stamina from the attribute delegates, `EDIT` cue from `AVCCharacterBase::OnEditModeChanged` (`IsEditModeShown()` for tests/scripts).
 
 ### Death/Respawn Contract (implemented)
 
@@ -221,6 +221,16 @@ Primary/Secondary actions (LMB/RMB) route through a priority chain:
 3. Bare-hands fallback (punch/default)
 
 Dead or downed characters ignore primary/secondary actions entirely.
+
+**Voxel edit mode gate:** steps 2-3 carve terrain (tool dig, unarmed dig, block placement) and only run while
+`bEditModeEnabled` is true (off by default). It is toggled by `IA_ToggleEditMode` (B) → `ToggleEditMode()`, by
+`SetEditModeEnabled()` from Blueprint/code, or by `vox.EditMode` in the game module. The flag is local input state,
+never replicated; the server still validates every `Server_RequestVoxelModification`. `OnEditModeChanged(bool)`
+drives the `EDIT` cue on `UVCVitalsWidget`. The toggle also mirrors into the VoxelWorlds console variable
+`voxel.Edit.PlayerInputs` (looked up by name, no dependency) so a map whose `AVoxelWorldTestActor` has
+`bEnableEditInputs` set (the demo's brush sphere) obeys the same key instead of polling the raw mouse. This is a
+stop-gap so attacking/interacting never digs; the plan is to bind edit to an item / mechanic later, which should
+replace the key, not the gate.
 
 Do not bypass this chain. New action types insert into the chain, they don't replace it.
 
