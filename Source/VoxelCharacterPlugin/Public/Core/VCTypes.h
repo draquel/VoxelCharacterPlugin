@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
+#include "Types/CGFCombatTypes.h"
 #include "VCTypes.generated.h"
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,26 @@ enum class EVCInteractionScanProfile : uint8
 {
 	FirstPerson,
 	ThirdPerson,
+};
+
+/** What a combatant does when Health reaches zero (UVCCombatComponent::OutOfHealthPolicy). */
+UENUM(BlueprintType)
+enum class EVCOutOfHealthPolicy : uint8
+{
+	/** Die immediately: State.Dead, OnDied, no recovery short of Revive/respawn. */
+	Die,
+	/** Knocked out: State.Downed, OnDowned; recoverable with Revive, promoted to death by DownedTimeout. */
+	Downed,
+};
+
+/** Where AVCGameModeBase puts a player back after death. */
+UENUM(BlueprintType)
+enum class EVCRespawnPolicy : uint8
+{
+	/** Respawn where the player died (short test loops; the default for now). */
+	AtDeathLocation,
+	/** Respawn at a player start chosen by the game mode. */
+	AtPlayerStart,
 };
 
 // ---------------------------------------------------------------------------
@@ -131,3 +152,12 @@ struct VOXELCHARACTERPLUGIN_API FVCEquipmentSocketMapping
 // ---------------------------------------------------------------------------
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnVCViewModeChanged, EVCViewMode, OldMode, EVCViewMode, NewMode);
+
+/** Health attribute changed on a combatant (fires on server and on every client via attribute replication). */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnVCHealthChanged, float, NewHealth, float, OldHealth, float, MaxHealth);
+
+/** A combatant died or was knocked out. Context is the killing hit on the server; empty on clients. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCCombatantStateChanged, const FCGFDamageContext&, Context);
+
+/** A combatant was revived from Dead/Downed (server only). */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnVCCombatantRevived);

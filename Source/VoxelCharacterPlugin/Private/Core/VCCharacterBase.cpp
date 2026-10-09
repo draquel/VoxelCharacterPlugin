@@ -4,6 +4,11 @@
 #include "Core/VCPlayerState.h"
 #include "Core/VCCharacterAttributeSet.h"
 #include "Core/VCPlayerController.h"
+#include "Core/VCGameModeBase.h"
+#include "Combat/VCCombatComponent.h"
+#include "Utilities/CGFCombatStatics.h"
+#include "Tags/CGFGameplayTags.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Camera/VCCameraManager.h"
 #include "Camera/VCFirstPersonCameraMode.h"
 #include "Camera/VCThirdPersonCameraMode.h"
@@ -30,7 +35,6 @@
 #include "Detection/SphereOverlapDetection.h"
 #include "Subsystems/WorldItemPoolSubsystem.h"
 #include "Actors/WorldItem.h"
-#include "Tags/CGFGameplayTags.h"
 #endif
 
 #if WITH_EQUIPMENT_PLUGIN
@@ -113,6 +117,10 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 	InventoryComponent = CreateDefaultSubobject<UInventoryComponent>(TEXT("InventoryComponent"));
 #endif
 
+	// --- Combat ---
+	CombatComponent = CreateDefaultSubobject<UVCCombatComponent>(TEXT("CombatComponent"));
+	CombatComponent->FactionTag = CGFGameplayTags::Faction_Player;
+
 	// --- Body mesh defaults ---
 	GetMesh()->SetOwnerNoSee(false);
 
@@ -187,6 +195,12 @@ void AVCCharacterBase::BeginPlay()
 		EquipmentManager->OnItemUnequipped.AddDynamic(this, &AVCCharacterBase::HandleItemUnequipped);
 	}
 #endif
+
+	if (CombatComponent)
+	{
+		CombatComponent->OnDied.AddDynamic(this, &AVCCharacterBase::HandleDied);
+		CombatComponent->OnDowned.AddDynamic(this, &AVCCharacterBase::HandleDowned);
+	}
 
 	// --- Underwater Post-Process ---
 	{
@@ -346,6 +360,19 @@ void AVCCharacterBase::PossessedBy(AController* NewController)
 			}
 
 			BindAttributeChangeDelegates(ASC);
+
+			if (CombatComponent)
+			{
+				CombatComponent->InitializeWithAbilitySystem(ASC);
+
+				// A respawned avatar inherits the player state's ASC, which still carries the
+				// previous avatar's State.Dead / State.Downed tag and zero health.
+				if (ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Dead) || ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Downed))
+				{
+					CombatComponent->Revive(1.f);
+					PS->HandleRespawnAttributeReset();
+				}
+			}
 		}
 	}
 }
@@ -361,6 +388,10 @@ void AVCCharacterBase::OnRep_PlayerState()
 		{
 			ASC->InitAbilityActorInfo(PS, this);
 			BindAttributeChangeDelegates(ASC);
+			if (CombatComponent)
+			{
+				CombatComponent->InitializeWithAbilitySystem(ASC);
+			}
 		}
 	}
 }
@@ -399,6 +430,111 @@ void AVCCharacterBase::GrantDefaultAbilities(UAbilitySystemComponent* ASC)
 		if (AbilityClass)
 		{
 			ASC->GiveAbility(FGameplayAbilitySpec(AbilityClass, 1, INDEX_NONE, this));
+		}
+	}
+
+	if (PS->MeleeAttackAbilityClass)
+	{
+		ASC->GiveAbility(FGameplayAbilitySpec(PS->MeleeAttackAbilityClass, 1, INDEX_NONE, this));
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Combat
+// ---------------------------------------------------------------------------
+
+bool AVCCharacterBase::IsIncapacitated() const
+{
+	return CombatComponent && (ICGFDamageableInterface::Execute_IsDead(CombatComponent) || CombatComponent->IsDowned());
+}
+
+bool AVCCharacterBase::TryStartMeleeAttack()
+{
+	if (!CombatComponent || IsIncapacitated())
+	{
+		return false;
+	}
+
+	// Same view the server-side ability uses: eyes + control rotation, not the third-person camera
+	// (which sits metres behind the pawn and lags the control rotation by a frame).
+	// ECC_Pawn, not ECC_Visibility: the engine's Pawn and CharacterMesh profiles ignore Visibility,
+	// so a visibility trace passes straight through every character. Terrain still blocks Pawn.
+	FVector Start;
+	FRotator ViewRotation;
+	GetActorEyesViewPoint(Start, ViewRotation);
+	const FVector End = Start + ViewRotation.Vector() * AttackTargetRange;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCMeleeTarget), false, this);
+	FHitResult Hit;
+	if (!GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Pawn, Params))
+	{
+		return false;
+	}
+
+	AActor* HitActor = Hit.GetActor();
+	if (!HitActor || !UCGFCombatStatics::FindDamageable(HitActor).GetObject() || !UCGFCombatStatics::AreHostile(this, HitActor))
+	{
+		return false;
+	}
+
+	UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	if (!ASC)
+	{
+		return false;
+	}
+
+	// The ability is ServerOnly: on a client this sends the activation request to the server,
+	// which does its own sweep, so a client cannot fabricate a hit.
+	return ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(CGFGameplayTags::Ability_Attack_Melee));
+}
+
+void AVCCharacterBase::Incapacitate()
+{
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		Movement->StopMovementImmediately();
+		Movement->DisableMovement();
+	}
+	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
+	{
+		Capsule->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	}
+	if (AController* OwningController = GetController())
+	{
+		OwningController->SetIgnoreMoveInput(true);
+		OwningController->SetIgnoreLookInput(true);
+	}
+}
+
+void AVCCharacterBase::HandleDowned(const FCGFDamageContext& Context)
+{
+	Incapacitate();
+	BP_OnDowned(Context);
+}
+
+void AVCCharacterBase::HandleDied(const FCGFDamageContext& Context)
+{
+	Incapacitate();
+
+	if (USkeletalMeshComponent* Body = GetMesh())
+	{
+		if (Body->GetPhysicsAsset())
+		{
+			Body->SetCollisionProfileName(TEXT("Ragdoll"));
+			Body->SetSimulatePhysics(true);
+		}
+	}
+
+	BP_OnDied(Context);
+
+	if (HasAuthority())
+	{
+		if (AVCGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AVCGameModeBase>() : nullptr)
+		{
+			GameMode->HandlePlayerDied(GetController(), GetActorTransform());
+		}
+		else
+		{
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("%s died but the game mode is not an AVCGameModeBase; no respawn will be scheduled."), *GetName());
 		}
 	}
 }
@@ -1225,6 +1361,17 @@ void AVCCharacterBase::Input_ToggleView(const FInputActionValue& Value)
 void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 {
 	// Priority chain: GAS ability -> equipped item action -> voxel dig -> fallback
+	if (IsIncapacitated())
+	{
+		return;
+	}
+
+	// Step 1: a hostile combatant under the crosshair takes priority over digging.
+	if (TryStartMeleeAttack())
+	{
+		return;
+	}
+
 #if WITH_EQUIPMENT_PLUGIN
 	if (EquipmentManager)
 	{

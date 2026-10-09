@@ -18,6 +18,9 @@ This plugin provides the player character, controller, player state, camera syst
 | `AVCCharacterBase` | `UInventoryContainerComponent` (ItemInventoryPlugin) |
 | `AVCPlayerController` | `UInteractionScannerComponent` (InteractionPlugin) |
 | `AVCPlayerState` (+ ASC host) | `UEquipmentManagerComponent` (EquipmentPlugin) |
+| `AVCNPCCharacterBase` (+ own ASC) | |
+| `AVCGameModeBase` (respawn) | |
+| `UVCCombatComponent`, combat attribute set, damage execution/effect, melee ability | `ICGFDamageableInterface`, `FCGFDamageContext`, combat tags (CommonGameFramework) |
 | `UVCMovementComponent` | VoxelWorlds terrain queries |
 | `UVCCameraManager` + camera modes | `UAbilitySystemComponent` (GAS — owned by PlayerState but GAS is engine) |
 | `UVCAnimInstance` | `UGameplayEffect`, `UGameplayAbility` (GAS) |
@@ -51,7 +54,8 @@ All classes in this plugin use the `VC` prefix:
 ```
 Source/VoxelCharacterPlugin/
 ├── Public/
-│   ├── Core/           # Character, Controller, PlayerState, AnimInstance, AttributeSets
+│   ├── Core/           # Character, Controller, PlayerState, AnimInstance, AttributeSets, NPC base, GameMode
+│   ├── Combat/         # CombatComponent, CombatAttributeSet, DamageExecution/Effect, MeleeAttackAbility, CombatStatics
 │   ├── Camera/         # CameraManager, CameraModeBase, FP/TP modes
 │   ├── Movement/       # MovementComponent, VoxelNavigationHelper, custom modes
 │   ├── Integration/    # Interface bridges to other plugins
@@ -88,6 +92,8 @@ The `UAbilitySystemComponent` and all `UAttributeSet` subclasses are owned by `A
 
 **Rationale:** Respawn-based death mechanic. Attributes, cooldowns, and persistent gameplay effects survive character destruction.
 
+**Non-player pawns are the exception:** `AVCNPCCharacterBase` owns its ASC and attribute sets directly (no player state, death is final for the pawn). Anything that needs an ASC resolves it with `UAbilitySystemGlobals::GetAbilitySystemComponentFromActor` (honours `IAbilitySystemInterface`), never `FindComponentByClass` on the pawn — that returns null for players.
+
 ### Key Relationships
 
 - **Owner Actor:** `AVCPlayerState` (stable, never destroyed during gameplay)
@@ -97,17 +103,37 @@ The `UAbilitySystemComponent` and all `UAttributeSet` subclasses are owned by `A
 ### Attribute Sets
 
 - `UVCCharacterAttributeSet` — Health, MaxHealth, Stamina, MaxStamina, MoveSpeedMultiplier, MiningSpeed, InteractionRange, IncomingDamage (meta)
-- `UVCCombatAttributeSet` — (future) Damage, Defense, CritChance, CritMultiplier
+- `UVCCombatAttributeSet` — AttackPower, Defense (crit stays a weapon-fragment concern)
 
-### Death/Respawn Contract
+### Damage Pipeline (Combat/)
 
-1. Health reaches 0 → death triggered via `PostGameplayEffectExecute`
-2. GEs tagged with `DeathCleanseTags` are removed (temporary buffs)
-3. Persistent effects (curses, quest buffs) are NOT removed
-4. Character destroyed, new character spawned and possessed
-5. `PossessedBy` re-binds ASC avatar to new character
-6. `RespawnResetEffect` applied to reset vitals
-7. Equipment abilities re-granted on new avatar
+```
+attacker builds FCGFDamageContext
+  → UVCCombatStatics::ApplyDamageToActor
+  → UVCCombatComponent::ApplyDamage      (authority only; rejects dead / invulnerable / friendly / vetoed)
+  → UVCDamageEffect spec                 (SetByCaller.Damage + Damage.Type.* dynamic asset tag)
+  → UVCDamageExecution                   (Pure → Base; else max(0, Base + AttackPower − Defense)) → +IncomingDamage
+  → UVCCharacterAttributeSet::PostGameplayEffectExecute folds IncomingDamage into Health
+  → Health delegate → UVCCombatComponent: OnHealthChanged; at 0 → Dead or Downed per OutOfHealthPolicy
+```
+
+- `UVCCombatComponent` implements `ICGFDamageableInterface`; attackers find it with `UCGFCombatStatics::FindDamageable`. Every combatant pawn has one (player: `Faction.Player`; NPC: `Faction.Monster` by default).
+- Hostility is `UCGFCombatStatics::AreHostileFactions` (CommonGameFramework) and nowhere else.
+- `State.Dead` / `State.Downed` are replicated loose tags on the ASC (`EGameplayTagReplicationState::TagOnly`) and block ability activation; `bIsDead` / `bIsDowned` replicate on the component for client visuals.
+- `UVCMeleeAttackAbility` is `ServerOnly`; the client only requests activation by tag `Ability.Attack.Melee`. Damage comes from the main-hand `UItemFragment_Weapon` when present, else `UnarmedDamage`.
+- **Target traces use ECC_Pawn from `GetActorEyesViewPoint`**, never ECC_Visibility: the engine's Pawn and CharacterMesh profiles ignore Visibility, so a visibility trace passes through every character, and the third-person camera is metres behind the pawn.
+
+### Death/Respawn Contract (implemented)
+
+1. Health reaches 0 → `UVCCombatComponent::HandleOutOfHealth` (Health attribute delegate, authority)
+   - `OutOfHealthPolicy::Die` → `State.Dead`, `OnDied`, `Event.Combat.Died`
+   - `OutOfHealthPolicy::Downed` → `State.Downed`, `OnDowned`, recoverable with `Revive`; `DownedTimeout` promotes to death
+2. `AVCCharacterBase::HandleDied`: movement off, capsule passable, input ignored, ragdoll if a physics asset exists, `BP_OnDied`, then `AVCGameModeBase::HandlePlayerDied`
+3. After `RespawnDelay` the game mode destroys the pawn and restarts the controller at `ChooseRespawnTransform` (death location by default, or a player start)
+4. New avatar's `PossessedBy` re-binds the ASC; if the player state's ASC still carries `State.Dead`/`State.Downed` it calls `CombatComponent->Revive` and `HandleRespawnAttributeReset` (GEs tagged `DeathCleanseTags` removed; `RespawnResetEffect` applied, or vitals set to max directly when unset)
+5. Inventory and equipment live on the pawn today and are lost with it — ownership across death is settled by the equipment-loop feature
+
+The demo game mode must derive from `AVCGameModeBase` or no respawn is scheduled (a warning is logged).
 
 ### Rules for GAS Code
 
@@ -180,9 +206,11 @@ All input uses UE5 Enhanced Input. No legacy `BindAction`/`BindAxis` calls.
 
 Primary/Secondary actions (LMB/RMB) route through a priority chain:
 
-1. GAS ability activation (if an ability is bound and conditions met)
+1. GAS ability activation — implemented for melee: a hostile damageable within `AttackTargetRange` under the crosshair → `TryActivateAbilitiesByTag(Ability.Attack.Melee)`
 2. Equipped item action (tool mining, weapon attack, block placement)
 3. Bare-hands fallback (punch/default)
+
+Dead or downed characters ignore primary/secondary actions entirely.
 
 Do not bypass this chain. New action types insert into the chain, they don't replace it.
 

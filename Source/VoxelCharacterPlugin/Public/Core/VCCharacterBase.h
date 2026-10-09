@@ -20,6 +20,7 @@ class UCameraComponent;
 class UAbilitySystemComponent;
 class UVCInputConfig;
 class UVoxelCollisionManager;
+class UVCCombatComponent;
 struct FInputActionValue;
 
 #if WITH_INTERACTION_PLUGIN
@@ -78,6 +79,29 @@ public:
 	/** First-person arms mesh (visible only in FP mode). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Mesh")
 	TObjectPtr<USkeletalMeshComponent> FirstPersonArmsMesh;
+
+	/** Faction, damage intake and death/downed state. Bound to the player state's ASC on possession. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Combat")
+	TObjectPtr<UVCCombatComponent> CombatComponent;
+
+	/**
+	 * How far the primary-action trace looks for a hostile target before falling through to the
+	 * equipped-item / dig behaviour. Should match the melee ability's reach.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0"))
+	float AttackTargetRange = 250.f;
+
+	/** True once this avatar has died (or been downed). Input and movement are off. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
+	bool IsIncapacitated() const;
+
+	/**
+	 * Start the melee ability if a hostile damageable is within AttackTargetRange under the crosshair.
+	 * Step 1 of the primary-action chain; also callable from Blueprint / debug commands.
+	 * @return True if the ability activation was requested.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Combat")
+	bool TryStartMeleeAttack();
 
 	// --- Optional Integration Components ---
 	// Not UPROPERTY — UHT forbids UPROPERTY inside #if blocks.
@@ -261,6 +285,26 @@ protected:
 	/** Equipment changed — update animation type and visuals. */
 	UFUNCTION()
 	void HandleItemEquipped(const FItemInstance& Item, FGameplayTag SlotTag);
+
+	/** Combat component reports death: stop input/movement, present, hand the respawn to the game mode. */
+	UFUNCTION()
+	void HandleDied(const FCGFDamageContext& Context);
+
+	/** Combat component reports knock-out: stop input/movement, wait for a revive. */
+	UFUNCTION()
+	void HandleDowned(const FCGFDamageContext& Context);
+
+	/** Shared part of death and knock-out: movement off, capsule passable, input ignored. */
+	void Incapacitate();
+
+	/** Blueprint hook for death presentation (ragdoll, camera, UI). */
+	UFUNCTION(BlueprintImplementableEvent, Category = "VoxelCharacter|Combat", meta = (DisplayName = "On Died"))
+	void BP_OnDied(const FCGFDamageContext& Context);
+
+	/** Blueprint hook for knock-out presentation. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "VoxelCharacter|Combat", meta = (DisplayName = "On Downed"))
+	void BP_OnDowned(const FCGFDamageContext& Context);
+
 
 	UFUNCTION()
 	void HandleItemUnequipped(const FItemInstance& Item, FGameplayTag SlotTag);

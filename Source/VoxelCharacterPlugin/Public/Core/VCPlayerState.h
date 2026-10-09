@@ -10,6 +10,7 @@
 
 class UAbilitySystemComponent;
 class UVCCharacterAttributeSet;
+class UVCCombatAttributeSet;
 class UGameplayEffect;
 class UGameplayAbility;
 
@@ -33,6 +34,17 @@ public:
 	/** Direct access to the character attribute set. */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|GAS")
 	UVCCharacterAttributeSet* GetCharacterAttributes() const { return CharacterAttributes; }
+
+	/** Direct access to the combat attribute set (AttackPower, Defense). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|GAS")
+	UVCCombatAttributeSet* GetCombatAttributes() const { return CombatAttributes; }
+
+	/**
+	 * Melee attack ability granted alongside DefaultAbilities. Defaults to UVCMeleeAttackAbility
+	 * in C++ so the demo needs no Blueprint edit; None disables the native melee attack.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
+	TSubclassOf<UGameplayAbility> MeleeAttackAbilityClass;
 
 	// --- Death / Respawn ---
 
@@ -61,4 +73,7 @@ protected:
 
 	UPROPERTY()
 	TObjectPtr<UVCCharacterAttributeSet> CharacterAttributes;
+
+	UPROPERTY()
+	TObjectPtr<UVCCombatAttributeSet> CombatAttributes;
 };
