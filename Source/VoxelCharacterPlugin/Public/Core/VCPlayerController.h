@@ -95,6 +95,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|UI")
 	TSubclassOf<UUserWidget> WorldMapWidgetClass;
 
+	/** Health/stamina bars (bottom-left). Defaults to UVCVitalsWidget. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> VitalsWidgetClass;
+
 	// --- Debug Commands ---
 
 	/** Give an item to the possessed character's inventory by asset name substring. */
@@ -175,6 +179,12 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UUserWidget> WorldMapWidget;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> VitalsWidget;
+
+	/** Point the vitals widget at a (re)possessed character. */
+	void BindVitalsToPawn(APawn* InPawn);
 
 	bool bInventoryOpen = false;
 	bool bWorldMapOpen = false;

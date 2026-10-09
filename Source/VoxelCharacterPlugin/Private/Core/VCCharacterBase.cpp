@@ -44,6 +44,18 @@
 
 #if WITH_INVENTORY_PLUGIN
 #include "Components/InventoryComponent.h"
+#include "Subsystems/ItemDatabaseSubsystem.h"
+#include "Data/ItemDefinition.h"
+#include "Data/Fragments/ItemFragment_Consumable.h"
+#include "Data/Fragments/ItemFragment_Equipment.h"
+#include "Storage/ItemSerializationUtils.h"
+#include "Utilities/CGFGameplayEffectStatics.h"
+#include "Abilities/GameplayAbility.h"
+#include "Engine/GameInstance.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #endif
 
 // ---------------------------------------------------------------------------
@@ -361,17 +373,27 @@ void AVCCharacterBase::PossessedBy(AController* NewController)
 
 			BindAttributeChangeDelegates(ASC);
 
+			bool bRespawning = false;
 			if (CombatComponent)
 			{
 				CombatComponent->InitializeWithAbilitySystem(ASC);
 
 				// A respawned avatar inherits the player state's ASC, which still carries the
 				// previous avatar's State.Dead / State.Downed tag and zero health.
-				if (ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Dead) || ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Downed))
+				bRespawning = ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Dead) || ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Downed);
+				if (bRespawning)
 				{
 					CombatComponent->Revive(1.f);
-					PS->HandleRespawnAttributeReset();
 				}
+			}
+
+			// Items the previous avatar carried (captured in HandleDied). Before the vitals reset so
+			// equipment that raises MaxHealth is in place when health is set to the maximum.
+			RestoreItemSnapshotFromPlayerState();
+
+			if (bRespawning)
+			{
+				PS->HandleRespawnAttributeReset();
 			}
 		}
 	}
@@ -528,6 +550,8 @@ void AVCCharacterBase::HandleDied(const FCGFDamageContext& Context)
 
 	if (HasAuthority())
 	{
+		CaptureItemSnapshotToPlayerState();
+
 		if (AVCGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AVCGameModeBase>() : nullptr)
 		{
 			GameMode->HandlePlayerDied(GetController(), GetActorTransform());
@@ -1281,6 +1305,10 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	{
 		EIC->BindAction(Config->IA_HotbarSlot, ETriggerEvent::Started, this, &AVCCharacterBase::Input_HotbarSlot);
 	}
+	if (Config->IA_Use)
+	{
+		EIC->BindAction(Config->IA_Use, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Use);
+	}
 	if (Config->IA_ScrollHotbar)
 	{
 		EIC->BindAction(Config->IA_ScrollHotbar, ETriggerEvent::Triggered, this, &AVCCharacterBase::Input_ScrollHotbar);
@@ -1513,4 +1541,292 @@ void AVCCharacterBase::Input_ScrollHotbar(const FInputActionValue& Value)
 void AVCCharacterBase::Input_Drop(const FInputActionValue& Value)
 {
 	RequestDropActiveItem(1);
+}
+
+void AVCCharacterBase::Input_Use(const FInputActionValue& Value)
+{
+	RequestUseActiveItem();
+}
+
+// ---------------------------------------------------------------------------
+// Item actions
+// ---------------------------------------------------------------------------
+
+bool AVCCharacterBase::EquipHotbarItem(int32 HotbarSlot)
+{
+#if WITH_INVENTORY_PLUGIN && WITH_EQUIPMENT_PLUGIN
+	if (!InventoryComponent || !EquipmentManager)
+	{
+		return false;
+	}
+	const int32 Slot = HotbarSlot < 0 ? ActiveHotbarSlot : HotbarSlot;
+	const FItemInstance Item = InventoryComponent->GetItemInSlot(Slot);
+	if (!Item.IsValid())
+	{
+		return false;
+	}
+
+	UGameInstance* GI = GetGameInstance();
+	UItemDatabaseSubsystem* ItemDB = GI ? GI->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
+	const UItemDefinition* Def = ItemDB ? ItemDB->GetDefinition(Item.ItemDefinitionId) : nullptr;
+	const UItemFragment_Equipment* EquipFrag = Def ? Def->FindFragment<UItemFragment_Equipment>() : nullptr;
+	if (!EquipFrag || !EquipFrag->EquipmentSlotTag.IsValid())
+	{
+		UE_LOG(LogVoxelCharacter, Log, TEXT("EquipHotbarItem: slot %d holds %s, which is not equippable."), Slot, *Item.ItemDefinitionId.PrimaryAssetName.ToString());
+		return false;
+	}
+
+	// The manager routes to its server RPC when called on a client.
+	const EEquipmentResult Result = EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, EquipFrag->EquipmentSlotTag);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("EquipHotbarItem: %s -> %s: %s"), *Item.ItemDefinitionId.PrimaryAssetName.ToString(),
+		*EquipFrag->EquipmentSlotTag.ToString(), *UEnum::GetValueAsString(Result));
+	return Result == EEquipmentResult::Success;
+#else
+	return false;
+#endif
+}
+
+bool AVCCharacterBase::UnequipSlotToInventory(FGameplayTag SlotTag)
+{
+#if WITH_INVENTORY_PLUGIN && WITH_EQUIPMENT_PLUGIN
+	if (!InventoryComponent || !EquipmentManager || !SlotTag.IsValid())
+	{
+		return false;
+	}
+	const EEquipmentResult Result = EquipmentManager->TryUnequipToInventory(SlotTag, InventoryComponent);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("UnequipSlotToInventory: %s: %s"), *SlotTag.ToString(), *UEnum::GetValueAsString(Result));
+	return Result == EEquipmentResult::Success;
+#else
+	return false;
+#endif
+}
+
+void AVCCharacterBase::RequestUseActiveItem()
+{
+	if (IsIncapacitated())
+	{
+		return;
+	}
+	if (HasAuthority())
+	{
+		UseItemInSlot(ActiveHotbarSlot);
+	}
+	else
+	{
+		Server_UseItemInSlot(ActiveHotbarSlot);
+	}
+}
+
+void AVCCharacterBase::Server_UseItemInSlot_Implementation(int32 SlotIndex)
+{
+	UseItemInSlot(SlotIndex);
+}
+
+bool AVCCharacterBase::UseItemInSlot(int32 SlotIndex)
+{
+#if WITH_INVENTORY_PLUGIN
+	if (!HasAuthority() || !InventoryComponent || IsIncapacitated())
+	{
+		return false;
+	}
+
+	const FItemInstance Item = InventoryComponent->GetItemInSlot(SlotIndex);
+	if (!Item.IsValid())
+	{
+		return false;
+	}
+
+	UGameInstance* GI = GetGameInstance();
+	UItemDatabaseSubsystem* ItemDB = GI ? GI->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
+	UItemDefinition* Def = ItemDB ? ItemDB->GetDefinition(Item.ItemDefinitionId) : nullptr;
+	const UItemFragment_Consumable* Consumable = Def ? Def->FindFragment<UItemFragment_Consumable>() : nullptr;
+	if (!Consumable)
+	{
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("UseItemInSlot: %s is not consumable."), *Item.ItemDefinitionId.PrimaryAssetName.ToString());
+		return false;
+	}
+
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (const double* ReadyAt = ConsumableReadyTime.Find(Item.ItemDefinitionId))
+	{
+		if (Now < *ReadyAt)
+		{
+			UE_LOG(LogVoxelCharacter, Verbose, TEXT("UseItemInSlot: %s on cooldown for %.1fs."), *Item.ItemDefinitionId.PrimaryAssetName.ToString(), *ReadyAt - Now);
+			return false;
+		}
+	}
+
+	UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	if (!ASC)
+	{
+		return false;
+	}
+
+	bool bDidSomething = false;
+	if (Consumable->AttributeChanges.Num() > 0)
+	{
+		bDidSomething |= UCGFGameplayEffectStatics::ApplyInstantAttributeModifiers(ASC, Consumable->AttributeChanges, Def);
+	}
+	if (Consumable->ConsumeEffect)
+	{
+		FGameplayEffectContextHandle Context = ASC->MakeEffectContext();
+		Context.AddSourceObject(Def);
+		ASC->ApplyGameplayEffectToSelf(Consumable->ConsumeEffect->GetDefaultObject<UGameplayEffect>(), 1.f, Context);
+		bDidSomething = true;
+	}
+	if (Consumable->ConsumeAbility)
+	{
+		FGameplayAbilitySpec Spec(Consumable->ConsumeAbility, 1, INDEX_NONE, this);
+		ASC->GiveAbilityAndActivateOnce(Spec);
+		bDidSomething = true;
+	}
+
+	if (!bDidSomething)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("UseItemInSlot: %s has a Consumable fragment with nothing to apply."), *Item.ItemDefinitionId.PrimaryAssetName.ToString());
+		return false;
+	}
+
+	if (Consumable->CooldownDuration > 0.f)
+	{
+		ConsumableReadyTime.Add(Item.ItemDefinitionId, Now + Consumable->CooldownDuration);
+	}
+	if (Consumable->bConsumeOnUse)
+	{
+		InventoryComponent->TryRemoveItem(Item.InstanceId, 1);
+	}
+
+	UE_LOG(LogVoxelCharacter, Log, TEXT("UseItemInSlot: used %s from slot %d."), *Item.ItemDefinitionId.PrimaryAssetName.ToString(), SlotIndex);
+	return true;
+#else
+	return false;
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Items across death
+// ---------------------------------------------------------------------------
+
+#if WITH_INVENTORY_PLUGIN
+namespace
+{
+	FString ItemToJson(const FItemInstance& Item)
+	{
+		FString Out;
+		const TSharedPtr<FJsonObject> Json = FItemSerializationUtils::SerializeItemInstance(Item);
+		if (Json.IsValid())
+		{
+			const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Out);
+			FJsonSerializer::Serialize(Json.ToSharedRef(), Writer);
+		}
+		return Out;
+	}
+
+	FItemInstance ItemFromJson(const FString& JsonText, UObject* Outer)
+	{
+		TSharedPtr<FJsonObject> Json;
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonText);
+		if (!FJsonSerializer::Deserialize(Reader, Json) || !Json.IsValid())
+		{
+			return FItemInstance();
+		}
+		return FItemSerializationUtils::DeserializeItemInstance(Json, Outer);
+	}
+}
+#endif
+
+void AVCCharacterBase::CaptureItemSnapshotToPlayerState()
+{
+#if WITH_INVENTORY_PLUGIN
+	AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
+	if (!HasAuthority() || !PS)
+	{
+		return;
+	}
+
+	FVCItemSnapshot& Snapshot = PS->PendingItemSnapshot;
+	Snapshot.Reset();
+
+	if (InventoryComponent)
+	{
+		for (int32 SlotIndex = 0; SlotIndex < InventoryComponent->MaxSlots; ++SlotIndex)
+		{
+			const FItemInstance Item = InventoryComponent->GetItemInSlot(SlotIndex);
+			if (Item.IsValid())
+			{
+				FVCSnapshotInventoryEntry& Entry = Snapshot.Inventory.AddDefaulted_GetRef();
+				Entry.SlotIndex = SlotIndex;
+				Entry.ItemJson = ItemToJson(Item);
+			}
+		}
+	}
+
+#if WITH_EQUIPMENT_PLUGIN
+	if (EquipmentManager)
+	{
+		for (const FGameplayTag& SlotTag : EquipmentManager->GetOccupiedSlotTags())
+		{
+			const FItemInstance Item = EquipmentManager->GetEquippedItem(SlotTag);
+			if (Item.IsValid())
+			{
+				FVCSnapshotEquipmentEntry& Entry = Snapshot.Equipment.AddDefaulted_GetRef();
+				Entry.SlotTag = SlotTag;
+				Entry.ItemJson = ItemToJson(Item);
+			}
+		}
+	}
+#endif
+
+	PS->bHasPendingItemSnapshot = !Snapshot.IsEmpty();
+	UE_LOG(LogVoxelCharacter, Log, TEXT("CaptureItemSnapshot: %d inventory slots, %d equipped items."), Snapshot.Inventory.Num(), Snapshot.Equipment.Num());
+#endif
+}
+
+bool AVCCharacterBase::RestoreItemSnapshotFromPlayerState()
+{
+#if WITH_INVENTORY_PLUGIN
+	AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
+	if (!HasAuthority() || !PS || !PS->bHasPendingItemSnapshot || !InventoryComponent)
+	{
+		return false;
+	}
+
+	const FVCItemSnapshot Snapshot = PS->PendingItemSnapshot;
+	PS->PendingItemSnapshot.Reset();
+	PS->bHasPendingItemSnapshot = false;
+
+	int32 Restored = 0;
+	for (const FVCSnapshotInventoryEntry& Entry : Snapshot.Inventory)
+	{
+		const FItemInstance Item = ItemFromJson(Entry.ItemJson, InventoryComponent);
+		if (Item.IsValid() && InventoryComponent->TryAddItem(Item, Entry.SlotIndex) == EInventoryOperationResult::Success)
+		{
+			++Restored;
+		}
+	}
+
+#if WITH_EQUIPMENT_PLUGIN
+	if (EquipmentManager)
+	{
+		for (const FVCSnapshotEquipmentEntry& Entry : Snapshot.Equipment)
+		{
+			// Through the inventory so the manager's validation and GAS path run exactly as for a normal equip.
+			const FItemInstance Item = ItemFromJson(Entry.ItemJson, InventoryComponent);
+			if (!Item.IsValid() || InventoryComponent->TryAddItem(Item) != EInventoryOperationResult::Success)
+			{
+				continue;
+			}
+			if (EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, Entry.SlotTag) == EEquipmentResult::Success)
+			{
+				++Restored;
+			}
+		}
+	}
+#endif
+
+	UE_LOG(LogVoxelCharacter, Log, TEXT("RestoreItemSnapshot: %d of %d items restored."), Restored, Snapshot.Inventory.Num() + Snapshot.Equipment.Num());
+	return Restored > 0;
+#else
+	return false;
+#endif
 }

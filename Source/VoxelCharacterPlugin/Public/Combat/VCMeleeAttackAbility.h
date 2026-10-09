@@ -46,9 +46,19 @@ protected:
 	virtual void ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 		const FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
 
-	/** Resolve damage, type, attack speed and item id from the equipped main-hand item, or unarmed defaults. */
-	void ResolveAttackParameters(const AActor* Avatar, float& OutDamage, FGameplayTag& OutDamageType,
-		float& OutAttackSpeed, FGuid& OutItemInstanceId) const;
+	/** Everything one swing needs, resolved from the main-hand weapon fragment or unarmed defaults. */
+	struct FAttackParameters
+	{
+		float Damage = 0.f;
+		FGameplayTag DamageType;
+		float AttackSpeed = 1.f;
+		float CritChance = 0.f;
+		float CritMultiplier = 1.f;
+		FGuid ItemInstanceId;
+	};
+
+	/** Resolve damage, type, attack speed, crit and item id from the equipped main-hand item, or unarmed defaults. */
+	FAttackParameters ResolveAttackParameters(const AActor* Avatar) const;
 
 	/** World time of the last activation that got past the rate limit. */
 	double LastAttackTimeSeconds = -1.0;

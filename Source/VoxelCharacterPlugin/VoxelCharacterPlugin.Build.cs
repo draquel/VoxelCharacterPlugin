@@ -32,6 +32,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"VoxelCore",
 				"VoxelStreaming",
 				"VoxelMap",
+				"Json",
 			}
 		);
 

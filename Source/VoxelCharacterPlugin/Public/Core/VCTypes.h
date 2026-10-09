@@ -147,6 +147,53 @@ struct VOXELCHARACTERPLUGIN_API FVCEquipmentSocketMapping
 	FName ArmsSocket;
 };
 
+/** One inventory slot captured when a player dies, as the storage subsystem's JSON so it carries instance fragments. */
+USTRUCT(BlueprintType)
+struct VOXELCHARACTERPLUGIN_API FVCSnapshotInventoryEntry
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
+	int32 SlotIndex = -1;
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
+	FString ItemJson;
+};
+
+/** One equipped item captured when a player dies. */
+USTRUCT(BlueprintType)
+struct VOXELCHARACTERPLUGIN_API FVCSnapshotEquipmentEntry
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
+	FGameplayTag SlotTag;
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
+	FString ItemJson;
+};
+
+/**
+ * Everything a player was carrying, captured on the player state when the avatar dies and
+ * restored onto the next avatar. Pawn-owned inventory/equipment components die with the pawn;
+ * this keeps the player's items across the respawn. Same serialization as the storage
+ * subsystem, so a save system can persist it as-is.
+ */
+USTRUCT(BlueprintType)
+struct VOXELCHARACTERPLUGIN_API FVCItemSnapshot
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
+	TArray<FVCSnapshotInventoryEntry> Inventory;
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
+	TArray<FVCSnapshotEquipmentEntry> Equipment;
+
+	bool IsEmpty() const { return Inventory.Num() == 0 && Equipment.Num() == 0; }
+	void Reset() { Inventory.Reset(); Equipment.Reset(); }
+};
+
 // ---------------------------------------------------------------------------
 // Delegates
 // ---------------------------------------------------------------------------

@@ -32,25 +32,24 @@ UVCMeleeAttackAbility::UVCMeleeAttackAbility()
 	ActivationBlockedTags.AddTag(CGFGameplayTags::State_Downed);
 }
 
-void UVCMeleeAttackAbility::ResolveAttackParameters(const AActor* Avatar, float& OutDamage, FGameplayTag& OutDamageType,
-	float& OutAttackSpeed, FGuid& OutItemInstanceId) const
+UVCMeleeAttackAbility::FAttackParameters UVCMeleeAttackAbility::ResolveAttackParameters(const AActor* Avatar) const
 {
-	OutDamage = UnarmedDamage;
-	OutDamageType = CGFGameplayTags::Damage_Type_Physical;
-	OutAttackSpeed = UnarmedAttackSpeed;
-	OutItemInstanceId.Invalidate();
+	FAttackParameters Out;
+	Out.Damage = UnarmedDamage;
+	Out.DamageType = CGFGameplayTags::Damage_Type_Physical;
+	Out.AttackSpeed = UnarmedAttackSpeed;
 
 #if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
 	const UEquipmentManagerComponent* Equipment = Avatar ? Avatar->FindComponentByClass<UEquipmentManagerComponent>() : nullptr;
 	if (!Equipment)
 	{
-		return;
+		return Out;
 	}
 
 	const FItemInstance MainHand = Equipment->GetEquippedItem(CGFGameplayTags::Equipment_Slot_MainHand);
 	if (!MainHand.IsValid())
 	{
-		return;
+		return Out;
 	}
 
 	const UWorld* World = Avatar->GetWorld();
@@ -61,21 +60,24 @@ void UVCMeleeAttackAbility::ResolveAttackParameters(const AActor* Avatar, float&
 	if (!Weapon)
 	{
 		// A tool or shield in the main hand still swings, at unarmed numbers.
-		OutItemInstanceId = MainHand.InstanceId;
-		return;
+		Out.ItemInstanceId = MainHand.InstanceId;
+		return Out;
 	}
 
-	OutDamage = Weapon->BaseDamage;
+	Out.Damage = Weapon->BaseDamage;
 	if (Weapon->DamageType.IsValid())
 	{
-		OutDamageType = Weapon->DamageType;
+		Out.DamageType = Weapon->DamageType;
 	}
 	if (Weapon->AttackSpeed > 0.f)
 	{
-		OutAttackSpeed = Weapon->AttackSpeed;
+		Out.AttackSpeed = Weapon->AttackSpeed;
 	}
-	OutItemInstanceId = MainHand.InstanceId;
+	Out.CritChance = FMath::Clamp(Weapon->CritChance, 0.f, 1.f);
+	Out.CritMultiplier = FMath::Max(1.f, Weapon->CritMultiplier);
+	Out.ItemInstanceId = MainHand.InstanceId;
 #endif
+	return Out;
 }
 
 void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
@@ -95,16 +97,12 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 		return;
 	}
 
-	float Damage = 0.f;
-	FGameplayTag DamageType;
-	float AttackSpeed = 1.f;
-	FGuid ItemInstanceId;
-	ResolveAttackParameters(Avatar, Damage, DamageType, AttackSpeed, ItemInstanceId);
+	const FAttackParameters Attack = ResolveAttackParameters(Avatar);
 
 	// Rate limit: one swing per 1/AttackSpeed seconds. Cheaper and simpler than a cooldown effect
 	// until attack animations give the swing a real duration.
 	const double Now = World->GetTimeSeconds();
-	const double Interval = 1.0 / FMath::Max(0.01f, AttackSpeed);
+	const double Interval = 1.0 / FMath::Max(0.01f, Attack.AttackSpeed);
 	if (LastAttackTimeSeconds >= 0.0 && (Now - LastAttackTimeSeconds) < Interval)
 	{
 		EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
@@ -134,14 +132,27 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 		return;
 	}
 
-	FCGFDamageContext Context = UVCCombatStatics::MakeDamageContext(Avatar, Avatar, Damage, DamageType);
+	// Crit is rolled here, on the server, from the weapon fragment's numbers; the context tag lets
+	// UI / cues react and the damage execution treats it like any other base damage.
+	float Damage = Attack.Damage;
+	const bool bCritical = Attack.CritChance > 0.f && FMath::FRand() < Attack.CritChance;
+	if (bCritical)
+	{
+		Damage *= Attack.CritMultiplier;
+	}
+
+	FCGFDamageContext Context = UVCCombatStatics::MakeDamageContext(Avatar, Avatar, Damage, Attack.DamageType);
 	Context.HitLocation = Hit.ImpactPoint;
 	Context.HitNormal = Hit.ImpactNormal;
-	Context.SourceItemInstanceId = ItemInstanceId;
+	Context.SourceItemInstanceId = Attack.ItemInstanceId;
+	if (bCritical)
+	{
+		Context.ContextTags.AddTag(CGFGameplayTags::Damage_Critical);
+	}
 
 	const ECGFDamageResult Result = UVCCombatStatics::ApplyDamageToActor(HitActor, Context);
-	UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s melee → %s: %.1f %s (%s)"), *GetNameSafe(Avatar), *GetNameSafe(HitActor),
-		Damage, *DamageType.ToString(), *UEnum::GetValueAsString(Result));
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s melee -> %s: %.1f %s%s (%s)"), *GetNameSafe(Avatar), *GetNameSafe(HitActor),
+		Damage, *Attack.DamageType.ToString(), bCritical ? TEXT(" CRIT") : TEXT(""), *UEnum::GetValueAsString(Result));
 
 	EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 }
