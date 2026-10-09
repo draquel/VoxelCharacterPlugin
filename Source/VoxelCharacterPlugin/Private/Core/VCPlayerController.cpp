@@ -1,6 +1,8 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Core/VCPlayerController.h"
+#include "UI/VCVitalsWidget.h"
+#include "Core/VCCharacterBase.h"
 #include "Input/VCInputConfig.h"
 #include "Movement/VCVoxelNavigationHelper.h"
 #include "Engine/Engine.h"
@@ -68,6 +70,8 @@ void AVCPlayerController::OnPossess(APawn* InPawn)
 	{
 		AddInputMappingContext(InputConfig->IMC_Gameplay, 0);
 	}
+
+	BindVitalsToPawn(InPawn);
 
 	// Initialize hotbar with the possessed pawn's inventory
 #if WITH_INVENTORY_PLUGIN
@@ -238,6 +242,14 @@ void AVCPlayerController::UpdateHotbarSelection(int32 SlotIndex)
 #endif
 }
 
+void AVCPlayerController::BindVitalsToPawn(APawn* InPawn)
+{
+	if (UVCVitalsWidget* Vitals = Cast<UVCVitalsWidget>(VitalsWidget))
+	{
+		Vitals->InitWithCharacter(Cast<AVCCharacterBase>(InPawn));
+	}
+}
+
 void AVCPlayerController::CreatePersistentWidgets()
 {
 	UE_LOG(LogVoxelCharacter, Log, TEXT("CreatePersistentWidgets: IsLocal=%s, Pawn=%s"),
@@ -304,6 +316,25 @@ void AVCPlayerController::CreatePersistentWidgets()
 		}
 	}
 #endif
+
+	// Vitals (bottom-left, always visible, Z-order 1)
+	{
+		TSubclassOf<UUserWidget> ClassToUse = VitalsWidgetClass;
+		if (!ClassToUse)
+		{
+			ClassToUse = UVCVitalsWidget::StaticClass();
+		}
+		VitalsWidget = CreateWidget<UUserWidget>(this, ClassToUse);
+		if (VitalsWidget)
+		{
+			VitalsWidget->AddToViewport(1);
+			VitalsWidget->SetAnchorsInViewport(FAnchors(0.0f, 1.0f, 0.0f, 1.0f));
+			VitalsWidget->SetAlignmentInViewport(FVector2D(0.0f, 1.0f));
+			VitalsWidget->SetPositionInViewport(FVector2D(24.f, -24.f), false);
+			VitalsWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+			BindVitalsToPawn(GetPawn());
+		}
+	}
 
 	// Minimap (top-right corner, always visible, Z-order 1)
 	{

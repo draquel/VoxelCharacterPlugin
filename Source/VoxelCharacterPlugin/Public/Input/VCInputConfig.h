@@ -71,6 +71,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_Drop;
 
+	/** Digital — F key — use (consume) the active hotbar item. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_Use;
+
 	// ==================== Mapping Contexts ====================
 
 	/** Base gameplay context — always active at priority 0. */

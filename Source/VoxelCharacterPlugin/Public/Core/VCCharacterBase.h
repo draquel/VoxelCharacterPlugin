@@ -157,6 +157,43 @@ public:
 	TArray<FVCEquipmentSocketMapping> EquipmentSocketMappings;
 
 	// =================================================================
+	// Item actions (client-safe: route through the owning component's server RPCs)
+	// =================================================================
+
+	/**
+	 * Equip the item in a hotbar slot into the slot its Equipment fragment names.
+	 * @param HotbarSlot Slot index; -1 = the active hotbar slot.
+	 * @return True if the request was issued (the server decides the outcome).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
+	bool EquipHotbarItem(int32 HotbarSlot = -1);
+
+	/** Unequip an equipment slot back into the inventory. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
+	bool UnequipSlotToInventory(FGameplayTag SlotTag);
+
+	/** Use (consume) the active hotbar item. Client: sends the server request. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Inventory")
+	void RequestUseActiveItem();
+
+	/**
+	 * Server: use the item in an inventory slot. Requires a Consumable fragment; honours its
+	 * cooldown; applies AttributeChanges, ConsumeEffect and ConsumeAbility; removes one from the
+	 * stack when bConsumeOnUse.
+	 * @return True if the item was used.
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Inventory")
+	bool UseItemInSlot(int32 SlotIndex);
+
+	/** Server: copy inventory + equipment onto the player state so the next avatar gets them. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Items")
+	void CaptureItemSnapshotToPlayerState();
+
+	/** Server: restore a pending snapshot from the player state into this avatar, then clear it. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Items")
+	bool RestoreItemSnapshotFromPlayerState();
+
+	// =================================================================
 	// Voxel Interaction
 	// =================================================================
 
@@ -326,6 +363,13 @@ protected:
 	void Input_HotbarSlot(const FInputActionValue& Value);
 	void Input_ScrollHotbar(const FInputActionValue& Value);
 	void Input_Drop(const FInputActionValue& Value);
+	void Input_Use(const FInputActionValue& Value);
+
+	UFUNCTION(Server, Reliable)
+	void Server_UseItemInSlot(int32 SlotIndex);
+
+	/** Server: next world time at which a consumable definition may be used again. */
+	TMap<FPrimaryAssetId, double> ConsumableReadyTime;
 
 	/** Resolve the InputConfig from the owning PlayerController. */
 	const UVCInputConfig* GetInputConfig() const;

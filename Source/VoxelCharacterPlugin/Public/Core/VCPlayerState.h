@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerState.h"
 #include "AbilitySystemInterface.h"
 #include "GameplayTagContainer.h"
+#include "Core/VCTypes.h"
 #include "VCPlayerState.generated.h"
 
 class UAbilitySystemComponent;
@@ -66,6 +67,16 @@ public:
 
 	/** True after default abilities have been granted (prevents re-grant). */
 	bool bAbilitiesGranted = false;
+
+	// --- Items across death ---
+
+	/** Items the dying avatar was carrying; consumed by the next avatar's PossessedBy. Server only. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
+	FVCItemSnapshot PendingItemSnapshot;
+
+	/** True while PendingItemSnapshot waits for a new avatar. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
+	bool bHasPendingItemSnapshot = false;
 
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|GAS")

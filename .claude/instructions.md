@@ -55,7 +55,8 @@ All classes in this plugin use the `VC` prefix:
 Source/VoxelCharacterPlugin/
 ├── Public/
 │   ├── Core/           # Character, Controller, PlayerState, AnimInstance, AttributeSets, NPC base, GameMode
-│   ├── Combat/         # CombatComponent, CombatAttributeSet, DamageExecution/Effect, MeleeAttackAbility, CombatStatics
+│   ├── Combat/         # CombatComponent, CombatAttributeSet, DamageExecution/Effect, MeleeAttackAbility, CombatStatics, EquipmentStatEffect
+│   ├── UI/             # VitalsWidget (health/stamina bars, programmatic)
 │   ├── Camera/         # CameraManager, CameraModeBase, FP/TP modes
 │   ├── Movement/       # MovementComponent, VoxelNavigationHelper, custom modes
 │   ├── Integration/    # Interface bridges to other plugins
@@ -122,6 +123,15 @@ attacker builds FCGFDamageContext
 - `State.Dead` / `State.Downed` are replicated loose tags on the ASC (`EGameplayTagReplicationState::TagOnly`) and block ability activation; `bIsDead` / `bIsDowned` replicate on the component for client visuals.
 - `UVCMeleeAttackAbility` is `ServerOnly`; the client only requests activation by tag `Ability.Attack.Melee`. Damage comes from the main-hand `UItemFragment_Weapon` when present, else `UnarmedDamage`.
 - **Target traces use ECC_Pawn from `GetActorEyesViewPoint`**, never ECC_Visibility: the engine's Pawn and CharacterMesh profiles ignore Visibility, so a visibility trace passes through every character, and the third-person camera is metres behind the pawn.
+- Crit is rolled on the server in the melee ability from the weapon fragment (`CritChance`, `CritMultiplier`); a critical hit carries `Damage.Critical` in `FCGFDamageContext::ContextTags`.
+
+### Item loop integration (feature 2)
+
+- **Equipment stats**: `UVCEquipmentStatEffect` (Combat/) is the project's SetByCaller.Stat.* effect; its keys are the native tags in `Core/VCGameplayTags.h` (`SetByCaller.Stat.MaxHealth|MaxStamina|MoveSpeedMultiplier|MiningSpeed|InteractionRange|AttackPower|Defense`). Adding a modifiable attribute = one tag + one `AddStatModifier` line. Configured in `Config/DefaultGame.ini` under `EquipmentGASSettings`.
+- **Consumables**: `IA_Use` (F) → `RequestUseActiveItem` → `Server_UseItemInSlot` → `UseItemInSlot` (authority): Consumable fragment required; per-definition cooldown on the pawn; applies `AttributeChanges` (instant transient effect), `ConsumeEffect`, `ConsumeAbility`; removes one when `bConsumeOnUse`.
+- **Items across death**: `HandleDied` → `CaptureItemSnapshotToPlayerState` (inventory slots + equipped items as the storage subsystem's item JSON, `FVCItemSnapshot` on `AVCPlayerState`); the new avatar's `PossessedBy` → `RestoreItemSnapshotFromPlayerState` (inventory by slot index, then re-equip through `TryEquipFromInventory`). Server only, not replicated.
+- **Callables for UI/scripts**: `EquipHotbarItem(slot)`, `UnequipSlotToInventory(tag)`, `RequestUseActiveItem()`; the inventory UI click-to-move path is unchanged.
+- **Vitals HUD**: `UVCVitalsWidget` (UI/) created by `AVCPlayerController::CreatePersistentWidgets`, rebound in `OnPossess` via `BindVitalsToPawn`; health from `UVCCombatComponent::OnHealthChanged`, stamina from the attribute delegates.
 
 ### Death/Respawn Contract (implemented)
 
@@ -131,7 +141,7 @@ attacker builds FCGFDamageContext
 2. `AVCCharacterBase::HandleDied`: movement off, capsule passable, input ignored, ragdoll if a physics asset exists, `BP_OnDied`, then `AVCGameModeBase::HandlePlayerDied`
 3. After `RespawnDelay` the game mode destroys the pawn and restarts the controller at `ChooseRespawnTransform` (death location by default, or a player start)
 4. New avatar's `PossessedBy` re-binds the ASC; if the player state's ASC still carries `State.Dead`/`State.Downed` it calls `CombatComponent->Revive` and `HandleRespawnAttributeReset` (GEs tagged `DeathCleanseTags` removed; `RespawnResetEffect` applied, or vitals set to max directly when unset)
-5. Inventory and equipment live on the pawn today and are lost with it — ownership across death is settled by the equipment-loop feature
+5. Inventory and equipment live on the pawn and are destroyed with it; `CaptureItemSnapshotToPlayerState` / `RestoreItemSnapshotFromPlayerState` carry them across the respawn (see "Item loop integration")
 
 The demo game mode must derive from `AVCGameModeBase` or no respawn is scheduled (a warning is logged).
 
