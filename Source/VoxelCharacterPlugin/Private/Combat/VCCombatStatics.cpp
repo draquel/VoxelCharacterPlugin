@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Combat/VCCombatStatics.h"
+#include "Combat/VCDamageReceiverInterface.h"
 #include "Combat/VCCombatComponent.h"
 #include "GameFramework/Actor.h"
 
@@ -11,8 +12,16 @@ UVCCombatComponent* UVCCombatStatics::FindCombatComponent(AActor* Actor)
 
 ECGFDamageResult UVCCombatStatics::ApplyDamageToActor(AActor* Target, const FCGFDamageContext& Context)
 {
-	UVCCombatComponent* Combat = FindCombatComponent(Target);
-	return Combat ? Combat->ApplyDamage(Context) : ECGFDamageResult::Rejected_NoTarget;
+	if (UVCCombatComponent* Combat = FindCombatComponent(Target))
+	{
+		return Combat->ApplyDamage(Context);
+	}
+	// No ability system: breakable props and the like take hits through the receiver interface.
+	if (IsValid(Target) && Target->Implements<UVCDamageReceiver>())
+	{
+		return IVCDamageReceiver::Execute_ReceiveDamage(Target, Context);
+	}
+	return ECGFDamageResult::Rejected_NoTarget;
 }
 
 FCGFDamageContext UVCCombatStatics::MakeDamageContext(AActor* Instigator, AActor* Causer, float BaseDamage,

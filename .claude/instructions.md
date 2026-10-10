@@ -131,7 +131,7 @@ attacker builds FCGFDamageContext
 - **Consumables**: `IA_Use` (F) → `RequestUseActiveItem` → `Server_UseItemInSlot` → `UseItemInSlot` (authority): Consumable fragment required; per-definition cooldown on the pawn; applies `AttributeChanges` (instant transient effect), `ConsumeEffect`, `ConsumeAbility`; removes one when `bConsumeOnUse`.
 - **Items across death**: `HandleDied` → `CaptureItemSnapshotToPlayerState` (inventory slots + equipped items as the storage subsystem's item JSON, `FVCItemSnapshot` on `AVCPlayerState`); the new avatar's `PossessedBy` → `RestoreItemSnapshotFromPlayerState` (inventory by slot index, then re-equip through `TryEquipFromInventory`). Server only, not replicated.
 - **Callables for UI/scripts**: `EquipHotbarItem(slot)`, `UnequipSlotToInventory(tag)`, `RequestUseActiveItem()`; the inventory UI click-to-move path is unchanged.
-- **Vitals HUD**: `UVCVitalsWidget` (UI/) created by `AVCPlayerController::CreatePersistentWidgets`, rebound in `OnPossess` via `BindVitalsToPawn`; health from `UVCCombatComponent::OnHealthChanged`, stamina from the attribute delegates, `EDIT` cue from `AVCCharacterBase::OnEditModeChanged` (`IsEditModeShown()` for tests/scripts).
+- **Vitals HUD**: `UVCVitalsWidget` (UI/) created by `AVCPlayerController::CreatePersistentWidgets`, rebound in `OnPossess` via `BindVitalsToPawn`; health from `UVCCombatComponent::OnHealthChanged`, stamina from the attribute delegates, `EDIT` cue from `AVCCharacterBase::OnEditModeChanged` (`IsEditModeShown()` for tests/scripts). Placed with anchors + alignment + padding like the other HUD widgets; NEVER `SetPositionInViewport` on a bottom-anchored widget (it lands off-screen). Verify HUD visually with the console command `Shot showui` (plain `Shot` / `pie_screenshot` omit UMG).
 
 ### Progression + objective HUD (feature 4)
 
@@ -146,6 +146,11 @@ attacker builds FCGFDamageContext
 - Freeze every NPC with the cvar `vc.AI.Enabled 0` (QA) or per NPC with `SetAIEnabled(false)`.
 - Give an NPC a loop with `SetPatrolRoute(points)`; without one it guards its spawn point (`SetLeashOrigin`). `LeashDistance` is measured from the nearest route point (or the leash origin).
 - The dungeon layer (VoxelWorldPOI) implements the path provider over its grid; the surface epic can plug in a voxel pathfinder the same way.
+
+### Damage without an ability system + weapon wear (feature 5b)
+
+- `IVCDamageReceiver` (Combat/): `UVCCombatStatics::ApplyDamageToActor` routes to the combat component when the actor has one, else to this interface (breakable props). Implementers also implement `ICGFDamageableInterface` so target rules see them (`Faction.Object` is hostile to everyone).
+- `UVCMeleeAttackAbility::ApplyWeaponWear` (after a landed hit, `WITH_EQUIPMENT_PLUGIN`): `ApplyDurabilityLoss(MainHand, DegradeRate)`; a weapon at zero durability that was not destroyed swings at `WornOutDamageMultiplier`.
 
 ### Death/Respawn Contract (implemented)
 

@@ -16,6 +16,8 @@
 #include "Subsystems/ItemDatabaseSubsystem.h"
 #include "Data/ItemDefinition.h"
 #include "Data/Fragments/ItemFragment_Weapon.h"
+#include "Data/Fragments/ItemFragment_Durability.h"
+#include "Types/ItemInstanceFragments.h"
 #include "Engine/GameInstance.h"
 #endif
 
@@ -76,8 +78,48 @@ UVCMeleeAttackAbility::FAttackParameters UVCMeleeAttackAbility::ResolveAttackPar
 	Out.CritChance = FMath::Clamp(Weapon->CritChance, 0.f, 1.f);
 	Out.CritMultiplier = FMath::Max(1.f, Weapon->CritMultiplier);
 	Out.ItemInstanceId = MainHand.InstanceId;
+
+	// Feature 5b: a weapon worn down to zero (without DestroyAtZero) still swings, at half damage.
+	if (Definition->FindFragment<UItemFragment_Durability>())
+	{
+		if (const UInstanceFragment_DurabilityState* State = MainHand.FindFragment<UInstanceFragment_DurabilityState>())
+		{
+			if (State->CurrentDurability <= 0.f)
+			{
+				Out.Damage *= WornOutDamageMultiplier;
+				Out.bWornOut = true;
+			}
+		}
+	}
 #endif
 	return Out;
+}
+
+void UVCMeleeAttackAbility::ApplyWeaponWear(AActor* Avatar) const
+{
+#if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
+	UEquipmentManagerComponent* Equipment = Avatar ? Avatar->FindComponentByClass<UEquipmentManagerComponent>() : nullptr;
+	if (!Equipment)
+	{
+		return;
+	}
+	const FItemInstance MainHand = Equipment->GetEquippedItem(CGFGameplayTags::Equipment_Slot_MainHand);
+	if (!MainHand.IsValid())
+	{
+		return;
+	}
+	const UWorld* World = Avatar->GetWorld();
+	const UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+	const UItemDatabaseSubsystem* ItemDB = GameInstance ? GameInstance->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
+	const UItemDefinition* Definition = ItemDB ? ItemDB->GetDefinition(MainHand.ItemDefinitionId) : nullptr;
+	const UItemFragment_Durability* Durability = Definition ? Definition->FindFragment<UItemFragment_Durability>() : nullptr;
+	if (!Durability || Durability->DegradeRate <= 0.f)
+	{
+		return;
+	}
+	const float Remaining = Equipment->ApplyDurabilityLoss(CGFGameplayTags::Equipment_Slot_MainHand, Durability->DegradeRate);
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s weapon wear: -%.1f -> %.1f"), *GetNameSafe(Avatar), Durability->DegradeRate, Remaining);
+#endif
 }
 
 void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
@@ -128,6 +170,9 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 	if (!HitActor || !UCGFCombatStatics::FindDamageable(HitActor).GetObject() || !UCGFCombatStatics::AreHostile(Avatar, HitActor))
 	{
 		// Swung at nothing hostile. Still a valid activation (the swing happened), just no hit.
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s melee missed: hit %s (%s) at (%.0f, %.0f, %.0f) dist %.0f, from (%.0f, %.0f, %.0f) toward %s"), *GetNameSafe(Avatar),
+			*GetNameSafe(HitActor), HitActor ? *GetNameSafe(Hit.GetComponent()) : TEXT("-"), Hit.ImpactPoint.X, Hit.ImpactPoint.Y, Hit.ImpactPoint.Z, Hit.Distance,
+			ViewLocation.X, ViewLocation.Y, ViewLocation.Z, *ViewRotation.ToCompactString());
 		EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 		return;
 	}
@@ -151,8 +196,13 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 	}
 
 	const ECGFDamageResult Result = UVCCombatStatics::ApplyDamageToActor(HitActor, Context);
-	UE_LOG(LogVoxelCharacter, Log, TEXT("%s melee -> %s: %.1f %s%s (%s)"), *GetNameSafe(Avatar), *GetNameSafe(HitActor),
-		Damage, *Attack.DamageType.ToString(), bCritical ? TEXT(" CRIT") : TEXT(""), *UEnum::GetValueAsString(Result));
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s melee -> %s: %.1f %s%s%s (%s)"), *GetNameSafe(Avatar), *GetNameSafe(HitActor),
+		Damage, *Attack.DamageType.ToString(), bCritical ? TEXT(" CRIT") : TEXT(""), Attack.bWornOut ? TEXT(" WORN") : TEXT(""), *UEnum::GetValueAsString(Result));
+	if (Result == ECGFDamageResult::Applied)
+	{
+		// Feature 5b: every landed hit wears the main-hand weapon by its DegradeRate.
+		ApplyWeaponWear(Avatar);
+	}
 
 	EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 }

@@ -394,9 +394,11 @@ void AVCPlayerController::CreatePersistentWidgets()
 		if (VitalsWidget)
 		{
 			VitalsWidget->AddToViewport(1);
+			// Anchor + alignment + padding, like the hotbar and minimap. SetPositionInViewport on a
+			// bottom-anchored widget pushed it off-screen (the HUD was invisible until feature 5b).
 			VitalsWidget->SetAnchorsInViewport(FAnchors(0.0f, 1.0f, 0.0f, 1.0f));
 			VitalsWidget->SetAlignmentInViewport(FVector2D(0.0f, 1.0f));
-			VitalsWidget->SetPositionInViewport(FVector2D(24.f, -24.f), false);
+			VitalsWidget->SetPadding(FMargin(24.f, 0.f, 0.f, 24.f));
 			VitalsWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 			BindVitalsToPawn(GetPawn());
 		}

@@ -25,10 +25,11 @@ public:
 	static UVCCombatComponent* FindCombatComponent(AActor* Actor);
 
 	/**
-	 * Server-only. Apply a hit to an actor through its combat component.
+	 * Server-only. Apply a hit to an actor through its combat component, or through
+	 * IVCDamageReceiver when it has none (breakable props).
 	 * @param Target  Actor to damage.
 	 * @param Context The hit.
-	 * @return Rejected_NoTarget if the actor has no combat component; otherwise the component's result.
+	 * @return Rejected_NoTarget if the actor has neither; otherwise the receiver's result.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Combat")
 	static ECGFDamageResult ApplyDamageToActor(AActor* Target, const FCGFDamageContext& Context);
