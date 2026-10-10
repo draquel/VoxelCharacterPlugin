@@ -147,6 +147,11 @@ attacker builds FCGFDamageContext
 - Give an NPC a loop with `SetPatrolRoute(points)`; without one it guards its spawn point (`SetLeashOrigin`). `LeashDistance` is measured from the nearest route point (or the leash origin).
 - The dungeon layer (VoxelWorldPOI) implements the path provider over its grid; the surface epic can plug in a voxel pathfinder the same way.
 
+### Damage without an ability system + weapon wear (feature 5b)
+
+- `IVCDamageReceiver` (Combat/): `UVCCombatStatics::ApplyDamageToActor` routes to the combat component when the actor has one, else to this interface (breakable props). Implementers also implement `ICGFDamageableInterface` so target rules see them (`Faction.Object` is hostile to everyone).
+- `UVCMeleeAttackAbility::ApplyWeaponWear` (after a landed hit, `WITH_EQUIPMENT_PLUGIN`): `ApplyDurabilityLoss(MainHand, DegradeRate)`; a weapon at zero durability that was not destroyed swings at `WornOutDamageMultiplier`.
+
 ### Death/Respawn Contract (implemented)
 
 1. Health reaches 0 → `UVCCombatComponent::HandleOutOfHealth` (Health attribute delegate, authority)

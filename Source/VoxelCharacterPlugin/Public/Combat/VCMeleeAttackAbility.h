@@ -42,6 +42,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0.01"))
 	float UnarmedAttackSpeed = 1.f;
 
+	/** Damage multiplier for a weapon at zero durability that was not destroyed (feature 5b). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0", ClampMax = "1"))
+	float WornOutDamageMultiplier = 0.5f;
+
 protected:
 	virtual void ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 		const FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
@@ -55,7 +59,11 @@ protected:
 		float CritChance = 0.f;
 		float CritMultiplier = 1.f;
 		FGuid ItemInstanceId;
+		bool bWornOut = false;
 	};
+
+	/** After a landed hit: wear the main-hand weapon by its Durability fragment's DegradeRate (authority). */
+	void ApplyWeaponWear(AActor* Avatar) const;
 
 	/** Resolve damage, type, attack speed, crit and item id from the equipped main-hand item, or unarmed defaults. */
 	FAttackParameters ResolveAttackParameters(const AActor* Avatar) const;
