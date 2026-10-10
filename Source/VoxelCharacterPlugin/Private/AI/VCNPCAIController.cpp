@@ -328,6 +328,8 @@ void AVCNPCAIController::SetPathTo(const FVector& Goal)
 	CurrentPath.Reset();
 	PathIndex = 0;
 	LastPathGoal = Goal;
+	BestWaypointDistance = TNumericLimits<float>::Max();
+	LastProgressTime = -1.0;
 	if (!MyPawn)
 	{
 		return;
@@ -351,13 +353,36 @@ bool AVCNPCAIController::FollowPath(float DeltaSeconds)
 	{
 		return false;
 	}
+	const UWorld* World = GetWorld();
+	const double Now = World ? World->GetTimeSeconds() : 0.0;
 	while (PathIndex < CurrentPath.Num() && FVector::Dist2D(MyPawn->GetActorLocation(), CurrentPath[PathIndex]) <= AcceptanceRadius)
 	{
 		++PathIndex;
+		BestWaypointDistance = TNumericLimits<float>::Max();
+		LastProgressTime = Now;
 	}
 	if (PathIndex >= CurrentPath.Num())
 	{
 		return false; // arrived
+	}
+	// Stuck on a prop or a corner: give up on this waypoint rather than pushing forever.
+	const float Distance = FVector::Dist2D(MyPawn->GetActorLocation(), CurrentPath[PathIndex]);
+	if (Distance < BestWaypointDistance - 5.f)
+	{
+		BestWaypointDistance = Distance;
+		LastProgressTime = Now;
+	}
+	else if (LastProgressTime >= 0.0 && Now - LastProgressTime > StuckSeconds)
+	{
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s AI: stuck %.1fs short of waypoint %d — skipping."), *MyPawn->GetName(), Distance, PathIndex);
+		++PathIndex;
+		BestWaypointDistance = TNumericLimits<float>::Max();
+		LastProgressTime = Now;
+		return PathIndex < CurrentPath.Num();
+	}
+	if (LastProgressTime < 0.0)
+	{
+		LastProgressTime = Now;
 	}
 	const FVector To = CurrentPath[PathIndex] - MyPawn->GetActorLocation();
 	const FVector Dir = FVector(To.X, To.Y, 0.f).GetSafeNormal();

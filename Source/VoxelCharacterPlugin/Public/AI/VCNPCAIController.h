@@ -97,6 +97,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
 	float RepathDistance = 200.f;
 
+	/** Seconds without progress toward the current waypoint before it is skipped (blocked by a prop / corner). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0.5"))
+	float StuckSeconds = 2.0f;
+
 	// --- Setup ---
 
 	/** World points walked as a loop. Empty = stand guard at the spawn point. */
@@ -183,4 +187,7 @@ protected:
 	double LastThinkTime = -1.0;
 	double PatrolWaitUntil = 0.0;
 	bool bAIEnabledLocal = true;
+	// Stuck detection: the best distance to the current waypoint and when it last improved.
+	float BestWaypointDistance = TNumericLimits<float>::Max();
+	double LastProgressTime = -1.0;
 };
