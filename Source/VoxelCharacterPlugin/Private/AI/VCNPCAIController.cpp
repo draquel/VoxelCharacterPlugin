@@ -4,6 +4,7 @@
 #include "AI/VCPathProvider.h"
 #include "Core/VCNPCCharacterBase.h"
 #include "Tags/CGFGameplayTags.h"
+#include "Interfaces/CGFLightBearerInterface.h"
 #include "Utilities/CGFCombatStatics.h"
 #include "VoxelCharacterPlugin.h"
 
@@ -261,6 +262,12 @@ void AVCNPCAIController::Think()
 	}
 }
 
+bool AVCNPCAIController::IsWithinSight(float Distance, float InSightRadius, bool bTargetLit, float InLitMultiplier)
+{
+	const float Reach = bTargetLit ? InSightRadius * FMath::Max(InLitMultiplier, 1.f) : InSightRadius;
+	return Distance <= Reach;
+}
+
 AActor* AVCNPCAIController::FindTarget() const
 {
 	APawn* MyPawn = GetPawn();
@@ -271,8 +278,10 @@ AActor* AVCNPCAIController::FindTarget() const
 	}
 	TArray<FOverlapResult> Overlaps;
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCNPCSight), false, MyPawn);
+	// Gather out to the lit-target reach; unlit candidates are filtered back to SightRadius below.
+	const float GatherRadius = SightRadius * FMath::Max(LitTargetSightMultiplier, 1.f);
 	World->OverlapMultiByObjectType(Overlaps, MyPawn->GetActorLocation(), FQuat::Identity,
-		FCollisionObjectQueryParams(ECC_Pawn), FCollisionShape::MakeSphere(SightRadius), Params);
+		FCollisionObjectQueryParams(ECC_Pawn), FCollisionShape::MakeSphere(GatherRadius), Params);
 
 	AActor* Best = nullptr;
 	float BestDist = TNumericLimits<float>::Max();
@@ -288,6 +297,12 @@ AActor* AVCNPCAIController::FindTarget() const
 			continue;
 		}
 		const float Dist = FVector::Dist(Other->GetActorLocation(), MyPawn->GetActorLocation());
+		const bool bLit = Other->Implements<UCGFLightBearerInterface>()
+			&& ICGFLightBearerInterface::Execute_GetCarriedLightLevel(Other) > 0.f;
+		if (!IsWithinSight(Dist, SightRadius, bLit, LitTargetSightMultiplier))
+		{
+			continue;
+		}
 		if (Dist < BestDist && HasLineOfSight(Other))
 		{
 			Best = Other;

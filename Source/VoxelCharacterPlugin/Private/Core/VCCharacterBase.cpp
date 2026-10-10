@@ -48,6 +48,7 @@
 #include "Subsystems/ItemDatabaseSubsystem.h"
 #include "Data/ItemDefinition.h"
 #include "Data/Fragments/ItemFragment_Consumable.h"
+#include "Data/Fragments/ItemFragment_LightSource.h"
 #include "Data/Fragments/ItemFragment_Equipment.h"
 #include "Storage/ItemSerializationUtils.h"
 #include "Utilities/CGFGameplayEffectStatics.h"
@@ -125,6 +126,7 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 		OffHand.SlotDisplayName = NSLOCTEXT("VoxelCharacter", "OffHand", "Off Hand");
 		OffHand.AttachSocket = FName("hand_l");
 		OffHand.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Weapon")));
+		OffHand.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Light"))); // torches (feature 7)
 		EquipmentManager->AvailableSlots.Add(OffHand);
 
 		FEquipmentSlotDefinition Head;
@@ -223,6 +225,8 @@ void AVCCharacterBase::BeginPlay()
 	{
 		EquipmentManager->OnItemEquipped.AddDynamic(this, &AVCCharacterBase::HandleItemEquipped);
 		EquipmentManager->OnItemUnequipped.AddDynamic(this, &AVCCharacterBase::HandleItemUnequipped);
+		EquipmentManager->OnCarriedLightChanged.AddDynamic(this, &AVCCharacterBase::HandleCarriedLightChanged);
+		EquipmentManager->OnItemBroken.AddDynamic(this, &AVCCharacterBase::HandleItemBroken);
 	}
 #endif
 
@@ -1159,6 +1163,70 @@ void AVCCharacterBase::HandleItemUnequipped(const FItemInstance& Item, FGameplay
 		ActiveItemAnimType = EVCEquipmentAnimType::Unarmed;
 	}
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// Carried light (feature 7)
+// ---------------------------------------------------------------------------
+
+float AVCCharacterBase::GetCarriedLightLevel_Implementation() const
+{
+#if WITH_EQUIPMENT_PLUGIN
+	return EquipmentManager ? EquipmentManager->GetCarriedLightLevel() : 0.f;
+#else
+	return 0.f;
+#endif
+}
+
+bool AVCCharacterBase::ConsumeCarriedLightFuel_Implementation(float Seconds)
+{
+#if WITH_EQUIPMENT_PLUGIN
+	return EquipmentManager && HasAuthority() && EquipmentManager->ConsumeCarriedLightFuel(Seconds);
+#else
+	return false;
+#endif
+}
+
+bool AVCCharacterBase::GetCarriedLightFuel(float& OutFuel, float& OutMaxFuel) const
+{
+	OutFuel = 0.f;
+	OutMaxFuel = 0.f;
+#if WITH_EQUIPMENT_PLUGIN
+	FGameplayTag SlotTag;
+	return EquipmentManager && EquipmentManager->GetCarriedLight(SlotTag, OutFuel, OutMaxFuel);
+#else
+	return false;
+#endif
+}
+
+void AVCCharacterBase::HandleCarriedLightChanged(FGameplayTag SlotTag, bool bLit, float FuelSeconds, float MaxFuel)
+{
+	// Report the strongest light, not the slot that changed: unequipping one torch while another burns stays lit.
+	float Fuel = FuelSeconds, Max = MaxFuel;
+	const bool bAnyLit = GetCarriedLightFuel(Fuel, Max);
+	OnCarriedLightChanged.Broadcast(bAnyLit, bAnyLit ? Fuel : 0.f, bAnyLit ? Max : 0.f);
+}
+
+void AVCCharacterBase::HandleItemBroken(FGameplayTag SlotTag, const FItemInstance& Item)
+{
+#if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
+	UGameInstance* GameInstance = GetGameInstance();
+	UItemDatabaseSubsystem* ItemDB = GameInstance ? GameInstance->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
+	const UItemDefinition* Def = ItemDB ? ItemDB->GetDefinition(Item.ItemDefinitionId) : nullptr;
+	if (Def && Def->FindFragment<UItemFragment_LightSource>())
+	{
+		UE_LOG(LogVoxelCharacter, Log, TEXT("%s: carried light %s burnt out."), *GetName(), *Item.ItemDefinitionId.PrimaryAssetName.ToString());
+		Client_LightBurntOut();
+	}
+#endif
+}
+
+void AVCCharacterBase::Client_LightBurntOut_Implementation()
+{
+	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	{
+		PC->ShowToast(NSLOCTEXT("VCHud", "TorchBurntOut", "Your torch burnt out"), 4.0f);
+	}
 }
 
 // ---------------------------------------------------------------------------

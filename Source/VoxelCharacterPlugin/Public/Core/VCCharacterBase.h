@@ -8,6 +8,7 @@
 #include "Core/VCTypes.h"
 #include "Types/CGFItemTypes.h"
 #include "Interfaces/CGFInventoryInterface.h"
+#include "Interfaces/CGFLightBearerInterface.h"
 #include "Integration/VCInventoryBridge.h"
 #include "Integration/VCInteractionBridge.h"
 #include "Integration/VCEquipmentBridge.h"
@@ -47,6 +48,7 @@ UCLASS()
 class VOXELCHARACTERPLUGIN_API AVCCharacterBase : public ACharacter,
 	public IAbilitySystemInterface,
 	public ICGFInventoryInterface,
+	public ICGFLightBearerInterface,
 	public IVCInventoryBridge,
 	public IVCInteractionBridge,
 	public IVCEquipmentBridge,
@@ -63,6 +65,23 @@ public:
 	// --- ICGFInventoryInterface ---
 	virtual UActorComponent* GetInventoryComponent_Implementation() const override;
 	virtual TArray<UActorComponent*> GetInventoryComponents_Implementation() const override;
+
+	// --- ICGFLightBearerInterface (feature 7: the equipped torch is the light) ---
+	virtual float GetCarriedLightLevel_Implementation() const override;
+	virtual bool ConsumeCarriedLightFuel_Implementation(float Seconds) override;
+
+	/**
+	 * Fuel of the carried light (the equipped light item's durability).
+	 * @param OutFuel     Seconds left (0 when the light needs no fuel).
+	 * @param OutMaxFuel  Capacity (0 when the light needs no fuel).
+	 * @return True while a lit light source is equipped.
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Light")
+	bool GetCarriedLightFuel(float& OutFuel, float& OutMaxFuel) const;
+
+	/** Fired on every machine when the carried light lights, goes dark, or its fuel moves (HUD binds here). */
+	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Light")
+	FOnVCCarriedLightChanged OnCarriedLightChanged;
 
 	// =================================================================
 	// Components
@@ -369,6 +388,18 @@ protected:
 
 	UFUNCTION()
 	void HandleItemUnequipped(const FItemInstance& Item, FGameplayTag SlotTag);
+
+	/** Equipment manager reports a carried-light change: forward to OnCarriedLightChanged. */
+	UFUNCTION()
+	void HandleCarriedLightChanged(FGameplayTag SlotTag, bool bLit, float FuelSeconds, float MaxFuel);
+
+	/** Equipment manager removed a worn-out item (authority): a burnt-out torch tells the owner. */
+	UFUNCTION()
+	void HandleItemBroken(FGameplayTag SlotTag, const FItemInstance& Item);
+
+	/** Owning client: show the "torch burnt out" toast. */
+	UFUNCTION(Client, Reliable)
+	void Client_LightBurntOut();
 
 	// =================================================================
 	// Input Callbacks
