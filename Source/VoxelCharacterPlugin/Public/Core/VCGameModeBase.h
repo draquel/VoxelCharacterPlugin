@@ -55,8 +55,22 @@ public:
 	UFUNCTION(BlueprintNativeEvent, Category = "VoxelCharacter|Respawn")
 	FTransform ChooseRespawnTransform(AController* Controller, const FTransform& DeathTransform, bool& bOutUsePlayerStart) const;
 
+	/**
+	 * Pure: the transform a policy resolves to (upright, unit scale).
+	 * @param Policy          The game mode's policy.
+	 * @param bHasRestPoint   The player has rested somewhere.
+	 * @param RestPoint       Where (valid when bHasRestPoint).
+	 * @param DeathTransform  Where they died.
+	 * @param bOutUsePlayerStart True to let the engine pick a player start instead.
+	 */
+	static FTransform ResolveRespawnTransform(EVCRespawnPolicy Policy, bool bHasRestPoint, const FTransform& RestPoint,
+		const FTransform& DeathTransform, bool& bOutUsePlayerStart);
+
 protected:
 	virtual void Logout(AController* Exiting) override;
+
+	/** Respawns adjust out of small overlaps (a bench, a slope) instead of failing to spawn. */
+	virtual APawn* SpawnDefaultPawnAtTransform_Implementation(AController* NewPlayer, const FTransform& SpawnTransform) override;
 
 	struct FPendingRespawn
 	{

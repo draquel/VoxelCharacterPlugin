@@ -87,6 +87,8 @@ enum class EVCRespawnPolicy : uint8
 	AtDeathLocation,
 	/** Respawn at a player start chosen by the game mode. */
 	AtPlayerStart,
+	/** Respawn at the last rest point (campsite) the player rested at; the death location until there is one (feature 8). */
+	AtLastRest,
 };
 
 // ---------------------------------------------------------------------------

@@ -84,6 +84,52 @@ public:
 	FOnVCCarriedLightChanged OnCarriedLightChanged;
 
 	// =================================================================
+	// Surface gameplay (feature 8): gathering, crafting, rest points
+	// =================================================================
+
+	/** Current MiningSpeed attribute (1 bare-handed; pickaxes add to it). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Gather")
+	float GetMiningSpeed() const;
+
+	/** True while an equipped tool lets the primary action dig without edit mode (MiningSpeed above 1). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Gather")
+	bool HasDiggingTool() const;
+
+	/** The point a chop aims at: a little ahead of the character at chest height. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Gather")
+	FVector GetChopAimPoint() const;
+
+	/**
+	 * Chop the harvestable scatter instance (a tree) nearest the aim point, if the local scatter has
+	 * one; the server re-checks and yields. No edit mode or tool needed. @return True when a chop was sent.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Gather")
+	bool TryChopScatter();
+
+	/** Authority: restore health and stamina to their maximums (resting). */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Rest")
+	void RestoreVitals();
+
+	/** Rest at a rest point (ICGFRestPointInterface) within interaction range. Routes to the server. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Rest")
+	void RequestRest(AActor* RestPoint);
+
+	/** Sleep until morning at a rest point within interaction range. Routes to the server. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Rest")
+	void RequestSleep(AActor* RestPoint);
+
+	/**
+	 * Craft a recipe, by hand (null station) or at a rest point's station within interaction range.
+	 * Routes to the server; the result comes back as a toast.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Craft")
+	void RequestCraft(FPrimaryAssetId RecipeId, AActor* Station);
+
+	/** Is the actor a rest point within interaction range of this character. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Rest")
+	bool IsRestPointInRange(const AActor* RestPoint) const;
+
+	// =================================================================
 	// Components
 	// =================================================================
 
@@ -423,6 +469,27 @@ protected:
 
 	UFUNCTION(Server, Reliable)
 	void Server_UseItemInSlot(int32 SlotIndex);
+
+	UFUNCTION(Server, Reliable)
+	void Server_RestAt(AActor* RestPoint);
+
+	UFUNCTION(Server, Reliable)
+	void Server_ChopScatter(const FVector& AimPoint);
+
+	UFUNCTION(Server, Reliable)
+	void Server_SleepAt(AActor* RestPoint);
+
+	UFUNCTION(Server, Reliable)
+	void Server_CraftRecipe(FPrimaryAssetId RecipeId, AActor* Station);
+
+	/** Owning client: a craft finished (or failed) — toast. */
+	UFUNCTION(Client, Reliable)
+	void Client_CraftResult(const FText& RecipeName, bool bSuccess, const FText& Reason);
+
+	/** Server: place a Placeable item from the inventory in front of the character. */
+	bool TryPlaceItem(int32 SlotIndex, const FItemInstance& Item, const class UItemFragment_Placeable& Placeable);
+
+	void Input_Craft(const FInputActionValue& Value);
 
 	/** Server: next world time at which a consumable definition may be used again. */
 	TMap<FPrimaryAssetId, double> ConsumableReadyTime;

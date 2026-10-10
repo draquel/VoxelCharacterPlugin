@@ -79,6 +79,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_ToggleEditMode;
 
+	/** Digital — C key — open / close the hand-crafting panel (feature 8). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_Craft;
+
 	// ==================== Mapping Contexts ====================
 
 	/** Base gameplay context — always active at priority 0. */

@@ -56,6 +56,46 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
 	void ToggleInventoryUI();
 
+	/** Open / close the hand-crafting panel (C key; feature 8). */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void ToggleCraftingUI();
+
+	/** Open the campsite panel for a rest point (the server confirms the interaction first). */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void OpenCampsiteUI(AActor* RestPoint);
+
+	/** Close the campsite panel. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void CloseCampsiteUI();
+
+	/** Server -> owning client: show the campsite panel for a rest point the player just used. */
+	UFUNCTION(Client, Reliable)
+	void Client_OpenCampsite(AActor* RestPoint);
+
+	/** Server -> owning client: a dig yielded items (Count 0 = plain message). Toast "+N Name". */
+	UFUNCTION(Client, Reliable)
+	void Client_NotifyGathered(const FText& ItemName, int32 Count);
+
+	/** @return True while the campsite panel is open. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
+	bool IsCampsiteUIOpen() const { return bCampsiteOpen; }
+
+	/** @return True while the hand-crafting panel is open. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
+	bool IsCraftingUIOpen() const { return bCraftingOpen; }
+
+	/** What digging yields (feature 8). None = digging gives nothing. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Gather")
+	TObjectPtr<class UVCGatherTable> GatherTable;
+
+	/** Override class for the hand-crafting panel (None = UVCCraftingPanelWidget). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> CraftingPanelWidgetClass;
+
+	/** Override class for the campsite panel (None = UVCCampsiteWidget). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> CampsiteWidgetClass;
+
 	/** Toggle the full-screen world map overlay. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
 	void ToggleWorldMapUI();
@@ -227,6 +267,40 @@ private:
 
 	bool bInventoryOpen = false;
 	bool bWorldMapOpen = false;
+	bool bCraftingOpen = false;
+	bool bCampsiteOpen = false;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> CraftingPanelWidget;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> CampsiteWidget;
+
+	/** Authority: turn a dug voxel material into items for the pawn (feature 8). */
+	void GatherFromVoxel(uint8 MaterialId);
+
+	/** Authority: give the pawn Count of an item (drops it at the feet when full) and toast "+N Name". */
+	void GiveGatheredItem(FPrimaryAssetId ItemId, int32 Count);
+
+public:
+	/**
+	 * Authority: a chop hit on the scatter instance nearest AimPoint (feature 8). Yields the harvest
+	 * entry's items per hit and removes the instance on every machine after HitsToRemove hits.
+	 * @return True when a harvestable instance was in range.
+	 */
+	bool ChopScatterAt(const FVector& AimPoint);
+
+	/** Search radius around the aim point for a harvestable scatter instance (world units). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Gather", meta = (ClampMin = "50.0"))
+	float ChopSearchRadius = 220.0f;
+
+	/** Every machine: remove the harvested instance nearest Location from the local scatter. */
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_ScatterHarvested(const FVector& Location);
+
+private:
+	/** Chop hits per instance (keyed by the instance base, rounded), authority. */
+	TMap<FIntVector, int32> ChopHits;
 
 	// --- Click-to-move item management ---
 
