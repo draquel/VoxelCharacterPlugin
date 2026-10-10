@@ -36,6 +36,19 @@ bool FVCSurface_GatherTable::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Stone pickaxe (1.5): tool yield"), UVCGatherTable::YieldFor(Stone, 1.5f, 1.5f), 2);
 	TestEqual(TEXT("Iron pickaxe (2.0): tool yield"), UVCGatherTable::YieldFor(Stone, 2.0f, 1.5f), 2);
 	TestEqual(TEXT("Wood is one either way"), UVCGatherTable::YieldFor(Wood, 2.0f, 1.5f), 1);
+
+	// Chopping scatter trees: category lookup and the tool multiplier.
+	FVCHarvestEntry Tree;
+	Tree.Category = TEXT("Tree");
+	Tree.ItemId = Wood.ItemId;
+	Tree.BaseYield = 1;
+	Tree.ToolYield = 2;
+	Tree.HitsToRemove = 3;
+	Table->HarvestEntries.Add(Tree);
+	TestNotNull(TEXT("Trees are harvestable"), Table->FindHarvest(TEXT("Tree")));
+	TestNull(TEXT("Rocks are not"), Table->FindHarvest(TEXT("Rock")));
+	TestEqual(TEXT("Bare-hand chop"), UVCGatherTable::HarvestYieldFor(Tree, 1.0f, 1.5f), 1);
+	TestEqual(TEXT("Tool chop"), UVCGatherTable::HarvestYieldFor(Tree, 1.5f, 1.5f), 2);
 	return true;
 }
 

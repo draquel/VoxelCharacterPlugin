@@ -5,6 +5,7 @@
 #include "UI/VCVitalsWidget.h"
 #include "Core/VCCharacterBase.h"
 #include "Gathering/VCGatherTable.h"
+#include "VoxelScatterManager.h"
 #include "UI/VCCampsiteWidget.h"
 #include "UI/VCCraftingPanelWidget.h"
 #include "AbilitySystemComponent.h"
@@ -1288,32 +1289,87 @@ void AVCPlayerController::GatherFromVoxel(uint8 MaterialId)
 		return;
 	}
 	const int32 Count = UVCGatherTable::YieldFor(*Entry, Digger->GetMiningSpeed(), GatherTable->ToolMiningSpeedThreshold);
-	if (Count <= 0)
+	UE_LOG(LogVoxelCharacter, Log, TEXT("Gathered %d x %s from material %d"), Count, *Entry->ItemId.PrimaryAssetName.ToString(), MaterialId);
+	GiveGatheredItem(Entry->ItemId, Count);
+#endif
+}
+
+void AVCPlayerController::GiveGatheredItem(FPrimaryAssetId ItemId, int32 Count)
+{
+#if WITH_INVENTORY_PLUGIN
+	APawn* Gatherer = GetPawn();
+	if (!Gatherer || !ItemId.IsValid() || Count <= 0)
 	{
 		return;
 	}
 	UGameInstance* GameInstance = GetGameInstance();
 	UItemDatabaseSubsystem* ItemDB = GameInstance ? GameInstance->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
-	UInventoryComponent* Inventory = Digger->FindComponentByClass<UInventoryComponent>();
-	const UItemDefinition* Def = ItemDB ? ItemDB->GetDefinition(Entry->ItemId) : nullptr;
+	UInventoryComponent* Inventory = Gatherer->FindComponentByClass<UInventoryComponent>();
+	const UItemDefinition* Def = ItemDB ? ItemDB->GetDefinition(ItemId) : nullptr;
 	if (!Def || !Inventory)
 	{
 		return;
 	}
-	FItemInstance Item = ItemDB->CreateItemInstance(Entry->ItemId, Count);
+	FItemInstance Item = ItemDB->CreateItemInstance(ItemId, Count);
 	if (Inventory->TryAddItem(Item) != EInventoryOperationResult::Success)
 	{
 #if WITH_INTERACTION_PLUGIN
 		// Full: it lands at the player's feet as a pickup instead of vanishing.
 		if (UWorldItemPoolSubsystem* Pool = GetWorld()->GetSubsystem<UWorldItemPoolSubsystem>())
 		{
-			Pool->SpawnWorldItem(Item, Digger->GetActorLocation() + Digger->GetActorForwardVector() * 80.f);
+			Pool->SpawnWorldItem(Item, Gatherer->GetActorLocation() + Gatherer->GetActorForwardVector() * 80.f);
 		}
 #endif
 	}
-	UE_LOG(LogVoxelCharacter, Log, TEXT("Gathered %d x %s from material %d"), Count, *Entry->ItemId.PrimaryAssetName.ToString(), MaterialId);
 	Client_NotifyGathered(Def->DisplayName, Count);
 #endif
+}
+
+bool AVCPlayerController::ChopScatterAt(const FVector& AimPoint)
+{
+	AVCCharacterBase* Chopper = Cast<AVCCharacterBase>(GetPawn());
+	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelScatterManager* Scatter = ChunkMgr ? ChunkMgr->GetScatterManager() : nullptr;
+	if (!HasAuthority() || !Chopper || !Scatter || !GatherTable)
+	{
+		return false;
+	}
+	FScatterHarvestResult Found;
+	if (!Scatter->HarvestScatterNear(AimPoint, ChopSearchRadius, /*bRemove=*/false, Found))
+	{
+		return false;
+	}
+	const FVCHarvestEntry* Entry = GatherTable->FindHarvest(Found.HarvestCategory);
+	if (!Entry)
+	{
+		return false;
+	}
+	const FVector Base = Found.InstanceTransform.GetLocation();
+	const FIntVector Key(FMath::RoundToInt(Base.X), FMath::RoundToInt(Base.Y), FMath::RoundToInt(Base.Z));
+	int32& Hits = ChopHits.FindOrAdd(Key);
+	++Hits;
+	const int32 Count = UVCGatherTable::HarvestYieldFor(*Entry, Chopper->GetMiningSpeed(), GatherTable->ToolMiningSpeedThreshold);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("Chop %d/%d on '%s' (%s) at %s: +%d %s"), Hits, Entry->HitsToRemove, *Found.Name,
+		*Found.HarvestCategory.ToString(), *Base.ToCompactString(), Count, *Entry->ItemId.PrimaryAssetName.ToString());
+	GiveGatheredItem(Entry->ItemId, Count);
+	if (Hits >= Entry->HitsToRemove)
+	{
+		ChopHits.Remove(Key);
+		Multicast_ScatterHarvested(Base);
+	}
+	return true;
+}
+
+void AVCPlayerController::Multicast_ScatterHarvested_Implementation(const FVector& Location)
+{
+	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelScatterManager* Scatter = ChunkMgr ? ChunkMgr->GetScatterManager() : nullptr;
+	FScatterHarvestResult Removed;
+	if (Scatter)
+	{
+		// Scatter is local to each machine: each one removes its own copy of the instance.
+		Scatter->HarvestScatterNear(Location, 60.f, /*bRemove=*/true, Removed);
+	}
 }
 
 void AVCPlayerController::Client_NotifyGathered_Implementation(const FText& ItemName, int32 Count)

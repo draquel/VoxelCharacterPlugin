@@ -279,6 +279,29 @@ private:
 	/** Authority: turn a dug voxel material into items for the pawn (feature 8). */
 	void GatherFromVoxel(uint8 MaterialId);
 
+	/** Authority: give the pawn Count of an item (drops it at the feet when full) and toast "+N Name". */
+	void GiveGatheredItem(FPrimaryAssetId ItemId, int32 Count);
+
+public:
+	/**
+	 * Authority: a chop hit on the scatter instance nearest AimPoint (feature 8). Yields the harvest
+	 * entry's items per hit and removes the instance on every machine after HitsToRemove hits.
+	 * @return True when a harvestable instance was in range.
+	 */
+	bool ChopScatterAt(const FVector& AimPoint);
+
+	/** Search radius around the aim point for a harvestable scatter instance (world units). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Gather", meta = (ClampMin = "50.0"))
+	float ChopSearchRadius = 220.0f;
+
+	/** Every machine: remove the harvested instance nearest Location from the local scatter. */
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_ScatterHarvested(const FVector& Location);
+
+private:
+	/** Chop hits per instance (keyed by the instance base, rounded), authority. */
+	TMap<FIntVector, int32> ChopHits;
+
 	// --- Click-to-move item management ---
 
 	/** Distinguishes whether the held slot is from inventory or equipment. */

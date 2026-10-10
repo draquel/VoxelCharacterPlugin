@@ -29,6 +29,33 @@ struct VOXELCHARACTERPLUGIN_API FVCGatherEntry
 	int32 ToolYield = 1;
 };
 
+/** One harvestable scatter category (FScatterDefinition::HarvestCategory) and what chopping it yields. */
+USTRUCT(BlueprintType)
+struct VOXELCHARACTERPLUGIN_API FVCHarvestEntry
+{
+	GENERATED_BODY()
+
+	/** Scatter harvest category ("Tree"). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Harvest")
+	FName Category;
+
+	/** Item definition given per hit. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Harvest", meta = (AllowedTypes = "ItemDefinition"))
+	FPrimaryAssetId ItemId;
+
+	/** Items per hit bare-handed. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Harvest", meta = (ClampMin = "0"))
+	int32 BaseYield = 1;
+
+	/** Items per hit with a tool (MiningSpeed at or above the table's threshold). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Harvest", meta = (ClampMin = "0"))
+	int32 ToolYield = 2;
+
+	/** Hits before the instance is removed from the world. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Harvest", meta = (ClampMin = "1"))
+	int32 HitsToRemove = 3;
+};
+
 /**
  * Voxel resource gathering (feature 8): which dug voxel materials become which items, and how many.
  * The player controller reads the voxel under the dig before the brush runs and consults this table
@@ -42,6 +69,22 @@ class VOXELCHARACTERPLUGIN_API UVCGatherTable : public UDataAsset
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Gather")
 	TArray<FVCGatherEntry> Entries;
+
+	/** Chopping scatter (trees): category → item per hit, hits to fell. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Gather")
+	TArray<FVCHarvestEntry> HarvestEntries;
+
+	/** The harvest entry for a scatter category, or null when chopping it yields nothing. */
+	const FVCHarvestEntry* FindHarvest(FName Category) const
+	{
+		return HarvestEntries.FindByPredicate([Category](const FVCHarvestEntry& E) { return E.Category == Category; });
+	}
+
+	/** Pure: items a chop yields for an entry at a mining speed. */
+	static int32 HarvestYieldFor(const FVCHarvestEntry& Entry, float MiningSpeed, float Threshold)
+	{
+		return MiningSpeed + KINDA_SMALL_NUMBER >= Threshold ? Entry.ToolYield : Entry.BaseYield;
+	}
 
 	/** MiningSpeed (attribute) at or above which a dig counts as tool-assisted (pickaxes add +0.5 / +1.0). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Gather", meta = (ClampMin = "1.0"))

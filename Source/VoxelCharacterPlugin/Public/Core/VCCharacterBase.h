@@ -95,6 +95,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Gather")
 	bool HasDiggingTool() const;
 
+	/** The point a chop aims at: a little ahead of the character at chest height. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Gather")
+	FVector GetChopAimPoint() const;
+
+	/**
+	 * Chop the harvestable scatter instance (a tree) nearest the aim point, if the local scatter has
+	 * one; the server re-checks and yields. No edit mode or tool needed. @return True when a chop was sent.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Gather")
+	bool TryChopScatter();
+
 	/** Authority: restore health and stamina to their maximums (resting). */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Rest")
 	void RestoreVitals();
@@ -461,6 +472,9 @@ protected:
 
 	UFUNCTION(Server, Reliable)
 	void Server_RestAt(AActor* RestPoint);
+
+	UFUNCTION(Server, Reliable)
+	void Server_ChopScatter(const FVector& AimPoint);
 
 	UFUNCTION(Server, Reliable)
 	void Server_SleepAt(AActor* RestPoint);

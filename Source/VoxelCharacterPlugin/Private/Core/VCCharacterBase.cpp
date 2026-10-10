@@ -27,6 +27,7 @@
 #include "VoxelCoordinates.h"
 #include "VoxelWorldConfiguration.h"
 #include "VoxelChunkManager.h"
+#include "VoxelScatterManager.h"
 #include "VoxelCollisionManager.h"
 #include "VoxelCharacterPlugin.h"
 #include "Engine/Engine.h"
@@ -1501,6 +1502,12 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 		return;
 	}
 
+	// Step 1b: a harvestable scatter instance (a tree) in front of the character is chopped, not dug.
+	if (TryChopScatter())
+	{
+		return;
+	}
+
 	// Steps 2-3 carve terrain, so they only run while edit mode is on (IA_ToggleEditMode / vox.EditMode)
 	// or a digging tool is equipped (feature 8: a pickaxe is the gathering mechanic). Attacking and
 	// interacting with neither must never touch voxels.
@@ -1920,6 +1927,52 @@ bool AVCCharacterBase::TryPlaceItem(int32 SlotIndex, const FItemInstance& Item, 
 #else
 	return false;
 #endif
+}
+
+FVector AVCCharacterBase::GetChopAimPoint() const
+{
+	const FRotator View = GetControlRotation();
+	const FVector Forward = FRotator(0.f, View.Yaw, 0.f).Vector();
+	return GetActorLocation() + Forward * 160.f;
+}
+
+bool AVCCharacterBase::TryChopScatter()
+{
+	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelScatterManager* Scatter = ChunkMgr ? ChunkMgr->GetScatterManager() : nullptr;
+	const AVCPlayerController* PC = Cast<AVCPlayerController>(GetController());
+	if (!Scatter || !PC)
+	{
+		return false;
+	}
+	// Local check first so a swing at empty ground still digs; the server re-validates.
+	const FVector AimPoint = GetChopAimPoint();
+	FScatterHarvestResult Found;
+	if (!Scatter->HarvestScatterNear(AimPoint, PC->ChopSearchRadius, /*bRemove=*/false, Found))
+	{
+		return false;
+	}
+	if (HasAuthority())
+	{
+		Server_ChopScatter_Implementation(AimPoint);
+	}
+	else
+	{
+		Server_ChopScatter(AimPoint);
+	}
+	return true;
+}
+
+void AVCCharacterBase::Server_ChopScatter_Implementation(const FVector& AimPoint)
+{
+	if (IsIncapacitated())
+	{
+		return;
+	}
+	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	{
+		PC->ChopScatterAt(AimPoint);
+	}
 }
 
 float AVCCharacterBase::GetMiningSpeed() const
