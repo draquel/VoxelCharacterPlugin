@@ -194,6 +194,25 @@ struct VOXELCHARACTERPLUGIN_API FVCItemSnapshot
 	void Reset() { Inventory.Reset(); Equipment.Reset(); }
 };
 
+/**
+ * Player progression counters (feature 4: dungeon objectives). Replicated on AVCPlayerState so
+ * they survive death / respawn and reach the owning client for HUD toasts. Plain data so a save
+ * system can persist it as-is; XP / levels are deliberately not here (not on the roadmap).
+ */
+USTRUCT(BlueprintType)
+struct VOXELCHARACTERPLUGIN_API FVCProgressionStats
+{
+	GENERATED_BODY()
+
+	/** Dungeons whose objective this player completed. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Progression")
+	int32 DungeonsCleared = 0;
+
+	/** Dungeon bosses this player killed (the killing blow). */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Progression")
+	int32 BossesKilled = 0;
+};
+
 // ---------------------------------------------------------------------------
 // Delegates
 // ---------------------------------------------------------------------------
@@ -211,3 +230,6 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnVCCombatantRevived);
 
 /** Voxel edit mode (dig / place on the mouse actions) was turned on or off. Local, never replicated. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCEditModeChanged, bool, bEnabled);
+
+/** The player state's progression counters changed (server on write, clients on replication). */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCProgressionChanged, const FVCProgressionStats&, Stats);

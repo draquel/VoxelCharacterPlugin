@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Core/VCPlayerController.h"
+#include "Core/VCPlayerState.h"
 #include "UI/VCVitalsWidget.h"
 #include "Core/VCCharacterBase.h"
 #include "Input/VCInputConfig.h"
@@ -240,6 +241,71 @@ void AVCPlayerController::UpdateHotbarSelection(int32 SlotIndex)
 		Hotbar->SetActiveSlot(SlotIndex);
 	}
 #endif
+}
+
+void AVCPlayerController::SetObjectiveText(const FText& Text)
+{
+	if (UVCVitalsWidget* Vitals = Cast<UVCVitalsWidget>(VitalsWidget))
+	{
+		Vitals->SetObjective(Text);
+	}
+}
+
+void AVCPlayerController::ClearObjectiveText()
+{
+	if (UVCVitalsWidget* Vitals = Cast<UVCVitalsWidget>(VitalsWidget))
+	{
+		Vitals->ClearObjective();
+	}
+}
+
+void AVCPlayerController::ShowToast(const FText& Text, float Duration)
+{
+	if (UVCVitalsWidget* Vitals = Cast<UVCVitalsWidget>(VitalsWidget))
+	{
+		Vitals->ShowToast(Text, Duration);
+	}
+}
+
+FText AVCPlayerController::GetObjectiveText() const
+{
+	const UVCVitalsWidget* Vitals = Cast<UVCVitalsWidget>(VitalsWidget);
+	return Vitals ? Vitals->GetObjectiveText() : FText::GetEmpty();
+}
+
+void AVCPlayerController::InitPlayerState()
+{
+	Super::InitPlayerState();
+	BindProgression();
+}
+
+void AVCPlayerController::OnRep_PlayerState()
+{
+	Super::OnRep_PlayerState();
+	BindProgression();
+}
+
+void AVCPlayerController::BindProgression()
+{
+	AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
+	if (!PS || !IsLocalController())
+	{
+		return;
+	}
+	if (!PS->OnProgressionChanged.IsAlreadyBound(this, &AVCPlayerController::HandleProgressionChanged))
+	{
+		PS->OnProgressionChanged.AddDynamic(this, &AVCPlayerController::HandleProgressionChanged);
+	}
+	LastProgression = PS->GetProgression();
+}
+
+void AVCPlayerController::HandleProgressionChanged(const FVCProgressionStats& Stats)
+{
+	if (Stats.DungeonsCleared > LastProgression.DungeonsCleared)
+	{
+		ShowToast(FText::Format(NSLOCTEXT("VCHud", "DungeonClearedToast", "Dungeon cleared! ({0})"), Stats.DungeonsCleared), 4.0f);
+	}
+	LastProgression = Stats;
 }
 
 void AVCPlayerController::BindVitalsToPawn(APawn* InPawn)

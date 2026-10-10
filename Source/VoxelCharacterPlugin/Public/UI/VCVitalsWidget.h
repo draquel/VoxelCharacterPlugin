@@ -35,6 +35,32 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
 	bool IsEditModeShown() const;
 
+	/** Show an objective line above the bars (feature 4). Empty text hides it. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void SetObjective(const FText& Text);
+
+	/** Hide the objective line. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void ClearObjective();
+
+	/** @return The objective line's current text (empty when hidden). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
+	FText GetObjectiveText() const;
+
+	/**
+	 * Flash a short message (e.g. "Dungeon cleared!") for Duration seconds; a new toast replaces
+	 * the current one. Duration <= 0 keeps it until the next toast or ClearToast.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void ShowToast(const FText& Text, float Duration = 3.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void ClearToast();
+
+	/** @return True while a toast is visible. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
+	bool IsToastShown() const;
+
 protected:
 	virtual void NativeOnInitialized() override;
 	virtual void NativeDestruct() override;
@@ -71,6 +97,16 @@ protected:
 	/** "EDIT" cue; collapsed while edit mode is off. */
 	UPROPERTY()
 	TObjectPtr<UTextBlock> EditModeText;
+
+	/** Objective line (top of the stack); collapsed when empty. */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> ObjectiveText;
+
+	/** Toast line; collapsed until ShowToast, hidden again by the toast timer. */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> ToastText;
+
+	FTimerHandle ToastTimerHandle;
 
 	TWeakObjectPtr<AVCCharacterBase> BoundCharacter;
 	TWeakObjectPtr<UAbilitySystemComponent> BoundASC;
