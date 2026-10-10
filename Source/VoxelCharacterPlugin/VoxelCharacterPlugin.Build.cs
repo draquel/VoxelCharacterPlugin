@@ -20,6 +20,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"GameplayTasks",
 				"CommonGameFramework",
 				"NetCore",
+				"AIModule",
 			}
 		);
 

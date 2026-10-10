@@ -139,6 +139,14 @@ attacker builds FCGFDamageContext
 - **HUD**: `UVCVitalsWidget` gained an objective line (`SetObjective` / `ClearObjective` / `GetObjectiveText`) and a timed toast (`ShowToast(Text, Duration)` / `ClearToast` / `IsToastShown`), both above the bars. `AVCPlayerController` forwards them (`SetObjectiveText`, `ClearObjectiveText`, `ShowToast`, `GetObjectiveText`) and binds the player state's progression delegate in `InitPlayerState` / `OnRep_PlayerState` to toast "Dungeon cleared! (N)".
 - **Who calls it**: gameplay layers above this plugin (VoxelWorldPOI's dungeon objective actor) push objective text to the local controller and call `AddDungeonCleared` on the killer's player state. This plugin knows nothing about dungeons.
 
+### NPC AI (feature 5)
+
+- `AVCNPCAIController` (AI/): patrol → chase → attack → return state machine, server only, no Behavior Tree, no navmesh. Perception = sphere overlap on `ECC_Pawn` within `SightRadius` + a Visibility line trace eyes-to-eyes (pawn profiles ignore Visibility, so only world geometry blocks). Movement = `AddMovementInput` along waypoints from an `IVCPathProvider` (`SetPathProvider`; straight lines without one). Attacks = `TryActivateAbilitiesByTag(Ability.Attack.Melee)` on `AttackCooldown` after facing the target, so the pawn's own `UVCMeleeAttackAbility` (unarmed damage + AttackPower) applies. `DecideState` is a pure static function over `FVCNPCAIDecisionInput` (tested).
+- `AVCNPCCharacterBase` now defaults `AIControllerClass` to it with `AutoPossessAI = PlacedInWorldOrSpawned`, orients to movement (walk speed 300), `bAIEnabled` (false = training dummy) and a topple death visual (`ToppleSeconds`) when there is no physics asset. Dying also freezes the controller.
+- Freeze every NPC with the cvar `vc.AI.Enabled 0` (QA) or per NPC with `SetAIEnabled(false)`.
+- Give an NPC a loop with `SetPatrolRoute(points)`; without one it guards its spawn point (`SetLeashOrigin`). `LeashDistance` is measured from the nearest route point (or the leash origin).
+- The dungeon layer (VoxelWorldPOI) implements the path provider over its grid; the surface epic can plug in a voxel pathfinder the same way.
+
 ### Death/Respawn Contract (implemented)
 
 1. Health reaches 0 → `UVCCombatComponent::HandleOutOfHealth` (Health attribute delegate, authority)
