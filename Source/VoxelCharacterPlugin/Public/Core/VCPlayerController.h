@@ -99,6 +99,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
 	TSubclassOf<UUserWidget> VitalsWidgetClass;
 
+	/**
+	 * Optional HUD clock (top-centre), any UUserWidget — the world-clock plugin's widget in the demo.
+	 * None = no clock. This plugin never reads the time itself.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> ClockWidgetClass;
+
 	// --- Objective / toast HUD (feature 4) ---
 
 	/** Show an objective line on the HUD (local; gameplay systems call this on the owning client's controller). */
@@ -193,6 +200,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UUserWidget> InteractionPromptWidget;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> ClockWidget;
 
 	UPROPERTY()
 	TObjectPtr<UUserWidget> InventoryPanelWidget;
