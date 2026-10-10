@@ -170,6 +170,9 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 	if (!HitActor || !UCGFCombatStatics::FindDamageable(HitActor).GetObject() || !UCGFCombatStatics::AreHostile(Avatar, HitActor))
 	{
 		// Swung at nothing hostile. Still a valid activation (the swing happened), just no hit.
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s melee missed: hit %s (%s) at (%.0f, %.0f, %.0f) dist %.0f, from (%.0f, %.0f, %.0f) toward %s"), *GetNameSafe(Avatar),
+			*GetNameSafe(HitActor), HitActor ? *GetNameSafe(Hit.GetComponent()) : TEXT("-"), Hit.ImpactPoint.X, Hit.ImpactPoint.Y, Hit.ImpactPoint.Z, Hit.Distance,
+			ViewLocation.X, ViewLocation.Y, ViewLocation.Z, *ViewRotation.ToCompactString());
 		EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 		return;
 	}
