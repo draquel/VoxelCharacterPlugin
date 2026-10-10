@@ -423,6 +423,20 @@ void AVCPlayerController::CreatePersistentWidgets()
 		UE_LOG(LogVoxelCharacter, Log, TEXT("CreatePersistentWidgets: MinimapWidget=%s"),
 			MinimapWidget ? TEXT("created") : TEXT("FAILED"));
 	}
+
+	// Optional clock (feature 6): whatever widget the game assigns, anchored top-centre.
+	if (ClockWidgetClass && !ClockWidget)
+	{
+		ClockWidget = CreateWidget<UUserWidget>(this, ClockWidgetClass);
+		if (ClockWidget)
+		{
+			ClockWidget->AddToViewport(1);
+			ClockWidget->SetAnchorsInViewport(FAnchors(0.5f, 0.0f, 0.5f, 0.0f));
+			ClockWidget->SetAlignmentInViewport(FVector2D(0.5f, 0.0f));
+			ClockWidget->SetPadding(FMargin(0.f, 12.f, 0.f, 0.f));
+			ClockWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+		}
+	}
 }
 
 void AVCPlayerController::ShowInventoryPanels()
