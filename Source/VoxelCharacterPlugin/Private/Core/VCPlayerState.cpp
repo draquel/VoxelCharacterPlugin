@@ -7,6 +7,7 @@
 #include "AbilitySystemComponent.h"
 #include "GameplayEffect.h"
 #include "VoxelCharacterPlugin.h"
+#include "Net/UnrealNetwork.h"
 
 AVCPlayerState::AVCPlayerState()
 {
@@ -26,6 +27,35 @@ AVCPlayerState::AVCPlayerState()
 UAbilitySystemComponent* AVCPlayerState::GetAbilitySystemComponent() const
 {
 	return AbilitySystemComponent;
+}
+
+void AVCPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(AVCPlayerState, Progression);
+}
+
+void AVCPlayerState::AddDungeonCleared(bool bBossKilled)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("AddDungeonCleared called without authority on %s — ignored."), *GetName());
+		return;
+	}
+	++Progression.DungeonsCleared;
+	if (bBossKilled)
+	{
+		++Progression.BossesKilled;
+	}
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s progression: dungeons cleared %d, bosses killed %d."),
+		*GetPlayerName(), Progression.DungeonsCleared, Progression.BossesKilled);
+	// OnRep only fires on clients — broadcast locally for the server / standalone.
+	OnProgressionChanged.Broadcast(Progression);
+}
+
+void AVCPlayerState::OnRep_Progression()
+{
+	OnProgressionChanged.Broadcast(Progression);
 }
 
 void AVCPlayerState::HandleRespawnAttributeReset()

@@ -133,6 +133,12 @@ attacker builds FCGFDamageContext
 - **Callables for UI/scripts**: `EquipHotbarItem(slot)`, `UnequipSlotToInventory(tag)`, `RequestUseActiveItem()`; the inventory UI click-to-move path is unchanged.
 - **Vitals HUD**: `UVCVitalsWidget` (UI/) created by `AVCPlayerController::CreatePersistentWidgets`, rebound in `OnPossess` via `BindVitalsToPawn`; health from `UVCCombatComponent::OnHealthChanged`, stamina from the attribute delegates, `EDIT` cue from `AVCCharacterBase::OnEditModeChanged` (`IsEditModeShown()` for tests/scripts).
 
+### Progression + objective HUD (feature 4)
+
+- **Counters**: `FVCProgressionStats { DungeonsCleared, BossesKilled }` (Core/VCTypes.h) replicated on `AVCPlayerState` (`Progression`, `OnRep_Progression`); authority writes through `AddDungeonCleared(bBossKilled)`; `OnProgressionChanged` fires on the server and on replication. No XP / levels. Save systems persist the struct as-is.
+- **HUD**: `UVCVitalsWidget` gained an objective line (`SetObjective` / `ClearObjective` / `GetObjectiveText`) and a timed toast (`ShowToast(Text, Duration)` / `ClearToast` / `IsToastShown`), both above the bars. `AVCPlayerController` forwards them (`SetObjectiveText`, `ClearObjectiveText`, `ShowToast`, `GetObjectiveText`) and binds the player state's progression delegate in `InitPlayerState` / `OnRep_PlayerState` to toast "Dungeon cleared! (N)".
+- **Who calls it**: gameplay layers above this plugin (VoxelWorldPOI's dungeon objective actor) push objective text to the local controller and call `AddDungeonCleared` on the killer's player state. This plugin knows nothing about dungeons.
+
 ### Death/Respawn Contract (implemented)
 
 1. Health reaches 0 → `UVCCombatComponent::HandleOutOfHealth` (Health attribute delegate, authority)

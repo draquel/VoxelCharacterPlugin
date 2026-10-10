@@ -99,6 +99,24 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
 	TSubclassOf<UUserWidget> VitalsWidgetClass;
 
+	// --- Objective / toast HUD (feature 4) ---
+
+	/** Show an objective line on the HUD (local; gameplay systems call this on the owning client's controller). */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void SetObjectiveText(const FText& Text);
+
+	/** Hide the objective line. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void ClearObjectiveText();
+
+	/** Flash a short HUD message for Duration seconds (local). */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void ShowToast(const FText& Text, float Duration = 3.0f);
+
+	/** @return The HUD's current objective text (empty when none). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
+	FText GetObjectiveText() const;
+
 	// --- Debug Commands ---
 
 	/** Give an item to the possessed character's inventory by asset name substring. */
@@ -138,6 +156,17 @@ protected:
 	virtual void BeginPlay() override;
 	virtual void OnPossess(APawn* InPawn) override;
 	virtual void OnUnPossess() override;
+	virtual void InitPlayerState() override;
+	virtual void OnRep_PlayerState() override;
+
+	/** Bind the player state's progression delegate (server via InitPlayerState, clients via OnRep_PlayerState). */
+	void BindProgression();
+
+	UFUNCTION()
+	void HandleProgressionChanged(const FVCProgressionStats& Stats);
+
+	/** Last counters seen, so the toast says what changed. */
+	FVCProgressionStats LastProgression;
 
 	/** Add a mapping context with the given priority. */
 	void AddInputMappingContext(const UInputMappingContext* Context, int32 Priority);

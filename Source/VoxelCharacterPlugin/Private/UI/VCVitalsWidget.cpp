@@ -6,6 +6,8 @@
 #include "Combat/VCCombatComponent.h"
 #include "AbilitySystemComponent.h"
 #include "Blueprint/WidgetTree.h"
+#include "Engine/World.h"
+#include "TimerManager.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Components/Overlay.h"
@@ -77,6 +79,26 @@ void UVCVitalsWidget::BuildWidgetTree()
 	}
 	UVerticalBox* Root = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("VitalsRoot"));
 	WidgetTree->RootWidget = Root;
+
+	// Toast + objective sit above the bars: the eye lands on them first, and they never shift the bars.
+	auto MakeLine = [&](const TCHAR* Name, int32 FontSize, const FLinearColor& Color) -> UTextBlock*
+	{
+		UTextBlock* Text = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), Name);
+		FSlateFontInfo Font = Text->GetFont();
+		Font.Size = FontSize;
+		Text->SetFont(Font);
+		Text->SetColorAndOpacity(FSlateColor(Color));
+		Text->SetShadowOffset(FVector2D(1.f, 1.f));
+		Text->SetShadowColorAndOpacity(FLinearColor(0.f, 0.f, 0.f, 0.8f));
+		Text->SetVisibility(ESlateVisibility::Collapsed);
+		if (UVerticalBoxSlot* LineSlot = Root->AddChildToVerticalBox(Text))
+		{
+			LineSlot->SetPadding(FMargin(2.f, 0.f, 0.f, 6.f));
+		}
+		return Text;
+	};
+	ToastText = MakeLine(TEXT("ToastText"), 20, FLinearColor(1.f, 0.9f, 0.3f));
+	ObjectiveText = MakeLine(TEXT("ObjectiveText"), 14, FLinearColor(0.85f, 0.95f, 1.f));
 
 	HealthBar = MakeBar(WidgetTree, Root, HealthText, FLinearColor(0.75f, 0.12f, 0.12f), TEXT("Health"));
 	StaminaBar = MakeBar(WidgetTree, Root, StaminaText, FLinearColor(0.15f, 0.6f, 0.2f), TEXT("Stamina"));
@@ -177,6 +199,63 @@ void UVCVitalsWidget::HandleEditModeChanged(bool bEnabled)
 bool UVCVitalsWidget::IsEditModeShown() const
 {
 	return EditModeText && EditModeText->GetVisibility() != ESlateVisibility::Collapsed;
+}
+
+void UVCVitalsWidget::SetObjective(const FText& Text)
+{
+	BuildWidgetTree();
+	if (!ObjectiveText)
+	{
+		return;
+	}
+	ObjectiveText->SetText(Text);
+	ObjectiveText->SetVisibility(Text.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+}
+
+void UVCVitalsWidget::ClearObjective()
+{
+	SetObjective(FText::GetEmpty());
+}
+
+FText UVCVitalsWidget::GetObjectiveText() const
+{
+	return (ObjectiveText && ObjectiveText->GetVisibility() != ESlateVisibility::Collapsed) ? ObjectiveText->GetText() : FText::GetEmpty();
+}
+
+void UVCVitalsWidget::ShowToast(const FText& Text, float Duration)
+{
+	BuildWidgetTree();
+	if (!ToastText)
+	{
+		return;
+	}
+	ToastText->SetText(Text);
+	ToastText->SetVisibility(Text.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ToastTimerHandle);
+		if (Duration > 0.f && !Text.IsEmpty())
+		{
+			World->GetTimerManager().SetTimer(ToastTimerHandle, this, &UVCVitalsWidget::ClearToast, Duration, false);
+		}
+	}
+}
+
+void UVCVitalsWidget::ClearToast()
+{
+	if (ToastText)
+	{
+		ToastText->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ToastTimerHandle);
+	}
+}
+
+bool UVCVitalsWidget::IsToastShown() const
+{
+	return ToastText && ToastText->GetVisibility() != ESlateVisibility::Collapsed;
 }
 
 void UVCVitalsWidget::SetEditModeShown(bool bShown)

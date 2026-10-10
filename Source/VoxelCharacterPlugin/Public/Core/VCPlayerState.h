@@ -78,7 +78,32 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
 	bool bHasPendingItemSnapshot = false;
 
+	// --- Progression (feature 4: dungeon objectives) ---
+
+	/** @return The replicated progression counters. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Progression")
+	const FVCProgressionStats& GetProgression() const { return Progression; }
+
+	/**
+	 * Authority: record a cleared dungeon objective for this player.
+	 * @param bBossKilled True when this player landed the killing blow on the boss.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Progression")
+	void AddDungeonCleared(bool bBossKilled = true);
+
+	/** Fires on the server when counters change and on every client when they replicate. */
+	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Progression")
+	FOnVCProgressionChanged OnProgressionChanged;
+
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
 protected:
+	UFUNCTION()
+	void OnRep_Progression();
+
+	UPROPERTY(ReplicatedUsing = OnRep_Progression, BlueprintReadOnly, Category = "VoxelCharacter|Progression")
+	FVCProgressionStats Progression;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
 	TObjectPtr<UAbilitySystemComponent> AbilitySystemComponent;
 
