@@ -116,9 +116,21 @@ void UVCVitalsWidget::BuildWidgetTree()
 		EditSlot->SetPadding(FMargin(2.f, 2.f, 0.f, 0.f));
 	}
 
+	CarriedLightText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("CarriedLightText"));
+	FSlateFontInfo LightFont = CarriedLightText->GetFont();
+	LightFont.Size = 14;
+	CarriedLightText->SetFont(LightFont);
+	CarriedLightText->SetShadowOffset(FVector2D(1.f, 1.f));
+	CarriedLightText->SetShadowColorAndOpacity(FLinearColor(0.f, 0.f, 0.f, 0.8f));
+	if (UVerticalBoxSlot* LightSlot = Root->AddChildToVerticalBox(CarriedLightText))
+	{
+		LightSlot->SetPadding(FMargin(2.f, 2.f, 0.f, 0.f));
+	}
+
 	SetHealth(0.f, 0.f);
 	SetStamina(0.f, 0.f);
 	SetEditModeShown(false);
+	SetCarriedLight(false, 0.f, 0.f);
 }
 
 void UVCVitalsWidget::InitWithCharacter(AVCCharacterBase* Character)
@@ -136,6 +148,7 @@ void UVCVitalsWidget::InitWithCharacter(AVCCharacterBase* Character)
 		Character->CombatComponent->OnHealthChanged.AddDynamic(this, &UVCVitalsWidget::HandleHealthChanged);
 	}
 	Character->OnEditModeChanged.AddDynamic(this, &UVCVitalsWidget::HandleEditModeChanged);
+	Character->OnCarriedLightChanged.AddDynamic(this, &UVCVitalsWidget::HandleCarriedLightChanged);
 
 	if (UAbilitySystemComponent* ASC = Character->GetAbilitySystemComponent())
 	{
@@ -158,8 +171,10 @@ void UVCVitalsWidget::Unbind()
 			Character->CombatComponent->OnHealthChanged.RemoveDynamic(this, &UVCVitalsWidget::HandleHealthChanged);
 		}
 		Character->OnEditModeChanged.RemoveDynamic(this, &UVCVitalsWidget::HandleEditModeChanged);
+		Character->OnCarriedLightChanged.RemoveDynamic(this, &UVCVitalsWidget::HandleCarriedLightChanged);
 	}
 	SetEditModeShown(false);
+	SetCarriedLight(false, 0.f, 0.f);
 	if (UAbilitySystemComponent* ASC = BoundASC.Get())
 	{
 		ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetStaminaAttribute()).Remove(StaminaHandle);
@@ -176,6 +191,12 @@ void UVCVitalsWidget::RefreshFromCharacter()
 	AVCCharacterBase* Character = BoundCharacter.Get();
 	UAbilitySystemComponent* ASC = BoundASC.Get();
 	SetEditModeShown(Character && Character->IsEditModeEnabled());
+	if (Character)
+	{
+		float Fuel = 0.f, MaxFuel = 0.f;
+		const bool bLit = Character->GetCarriedLightFuel(Fuel, MaxFuel);
+		SetCarriedLight(bLit, Fuel, MaxFuel);
+	}
 	if (!Character || !ASC)
 	{
 		return;
@@ -194,6 +215,50 @@ void UVCVitalsWidget::HandleHealthChanged(float NewHealth, float OldHealth, floa
 void UVCVitalsWidget::HandleEditModeChanged(bool bEnabled)
 {
 	SetEditModeShown(bEnabled);
+}
+
+void UVCVitalsWidget::HandleCarriedLightChanged(bool bLit, float FuelSeconds, float MaxFuel)
+{
+	SetCarriedLight(bLit, FuelSeconds, MaxFuel);
+}
+
+FText UVCVitalsWidget::FormatCarriedLight(bool bLit, float FuelSeconds, float MaxFuel)
+{
+	if (!bLit)
+	{
+		return FText::GetEmpty();
+	}
+	if (MaxFuel <= 0.f)
+	{
+		return NSLOCTEXT("VCHud", "TorchLit", "Torch lit");
+	}
+	const int32 Whole = FMath::CeilToInt(FMath::Max(FuelSeconds, 0.f));
+	return FText::Format(NSLOCTEXT("VCHud", "TorchFuel", "Torch {0}:{1}"), Whole / 60,
+		FText::FromString(FString::Printf(TEXT("%02d"), Whole % 60)));
+}
+
+void UVCVitalsWidget::SetCarriedLight(bool bLit, float FuelSeconds, float MaxFuel)
+{
+	if (!CarriedLightText)
+	{
+		return;
+	}
+	const FText Text = FormatCarriedLight(bLit, FuelSeconds, MaxFuel);
+	CarriedLightText->SetText(Text);
+	// Amber while burning, red for the last minute.
+	const bool bLow = MaxFuel > 0.f && FuelSeconds < 60.f;
+	CarriedLightText->SetColorAndOpacity(FSlateColor(bLow ? FLinearColor(1.f, 0.35f, 0.2f) : FLinearColor(1.f, 0.72f, 0.3f)));
+	CarriedLightText->SetVisibility(Text.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+}
+
+bool UVCVitalsWidget::IsCarriedLightShown() const
+{
+	return CarriedLightText && CarriedLightText->GetVisibility() != ESlateVisibility::Collapsed;
+}
+
+FText UVCVitalsWidget::GetCarriedLightText() const
+{
+	return IsCarriedLightShown() ? CarriedLightText->GetText() : FText::GetEmpty();
 }
 
 bool UVCVitalsWidget::IsEditModeShown() const

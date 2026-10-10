@@ -97,6 +97,20 @@ bool FVCNPCAI_StateDecision::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// A lit light bearer is noticed from farther (feature 7); unlit targets keep the base radius.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCNPCAI_LitTargetSight, "VoxelCharacter.AI.LitTargetSight", VC_NPCAI_FLAGS)
+bool FVCNPCAI_LitTargetSight::RunTest(const FString& Parameters)
+{
+	TestTrue(TEXT("Unlit inside the base radius"), AVCNPCAIController::IsWithinSight(1000.f, 1200.f, false, 1.5f));
+	TestFalse(TEXT("Unlit beyond the base radius"), AVCNPCAIController::IsWithinSight(1400.f, 1200.f, false, 1.5f));
+	TestTrue(TEXT("Lit at 1.4x is noticed"), AVCNPCAIController::IsWithinSight(1680.f, 1200.f, true, 1.5f));
+	TestFalse(TEXT("Lit beyond 1.5x is not"), AVCNPCAIController::IsWithinSight(1900.f, 1200.f, true, 1.5f));
+	TestTrue(TEXT("Multiplier never shrinks the reach"), AVCNPCAIController::IsWithinSight(1100.f, 1200.f, true, 0.5f));
+	return true;
+}
+
 #undef VC_NPCAI_FLAGS
 
 #endif // WITH_AUTOMATION_TESTS

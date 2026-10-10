@@ -145,6 +145,12 @@ attacker builds FCGFDamageContext
 - `AVCNPCAIController` (AI/): patrol → chase → attack → return state machine, server only, no Behavior Tree, no navmesh. Perception = sphere overlap on `ECC_Pawn` within `SightRadius` + a Visibility line trace eyes-to-eyes (pawn profiles ignore Visibility, so only world geometry blocks). Movement = `AddMovementInput` along waypoints from an `IVCPathProvider` (`SetPathProvider`; straight lines without one). Attacks = `TryActivateAbilitiesByTag(Ability.Attack.Melee)` on `AttackCooldown` after facing the target, so the pawn's own `UVCMeleeAttackAbility` (unarmed damage + AttackPower) applies. `DecideState` is a pure static function over `FVCNPCAIDecisionInput` (tested).
 - `AVCNPCCharacterBase` now defaults `AIControllerClass` to it with `AutoPossessAI = PlacedInWorldOrSpawned`, orients to movement (walk speed 300), `bAIEnabled` (false = training dummy) and a topple death visual (`ToppleSeconds`) when there is no physics asset. Dying also freezes the controller.
 - Freeze every NPC with the cvar `vc.AI.Enabled 0` (QA) or per NPC with `SetAIEnabled(false)`.
+- Light (feature 7): a hostile implementing `ICGFLightBearerInterface` with a lit light is gathered out to `SightRadius * LitTargetSightMultiplier` (1.5); unlit candidates keep the base radius (`IsWithinSight`, pure, tested). No darkness malus yet.
+
+### Carried light (feature 7)
+
+- `AVCCharacterBase` implements `ICGFLightBearerInterface` (CommonGameFramework) on top of the equipment manager's carried-light API: `GetCarriedLightLevel` (every machine), `ConsumeCarriedLightFuel` (authority), plus `GetCarriedLightFuel(Fuel, Max)` and the `OnCarriedLightChanged(bLit, Fuel, Max)` delegate (forwarded from `UEquipmentManagerComponent::OnCarriedLightChanged`, reporting the strongest light). The off-hand slot accepts `Item.Category.Light`.
+- `UVCVitalsWidget` shows "Torch M:SS" (amber, red under a minute) under the EDIT cue while a light burns (`FormatCarriedLight`, pure). A burnt-out light item (`OnItemBroken` on the authority) reaches the owning client through `Client_LightBurntOut` → toast "Your torch burnt out".
 - Give an NPC a loop with `SetPatrolRoute(points)`; without one it guards its spawn point (`SetLeashOrigin`). `LeashDistance` is measured from the nearest route point (or the leash origin).
 - The dungeon layer (VoxelWorldPOI) implements the path provider over its grid; the surface epic can plug in a voxel pathfinder the same way.
 

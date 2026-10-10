@@ -231,5 +231,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnVCCombatantRevived);
 /** Voxel edit mode (dig / place on the mouse actions) was turned on or off. Local, never replicated. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCEditModeChanged, bool, bEnabled);
 
+/** The carried light changed (feature 7): lit / dark, fuel seconds left and capacity (0 / 0 when it needs no fuel). */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnVCCarriedLightChanged, bool, bLit, float, FuelSeconds, float, MaxFuel);
+
 /** The player state's progression counters changed (server on write, clients on replication). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCProgressionChanged, const FVCProgressionStats&, Stats);

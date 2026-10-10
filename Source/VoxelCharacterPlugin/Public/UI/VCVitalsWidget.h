@@ -19,7 +19,8 @@ struct FOnAttributeChangeData;
  *
  * Health comes from UVCCombatComponent::OnHealthChanged; stamina straight from the attribute
  * change delegate on the character's ability system. An "EDIT" cue under the bars follows
- * AVCCharacterBase::OnEditModeChanged so the player can see when the mouse actions carve terrain.
+ * AVCCharacterBase::OnEditModeChanged so the player can see when the mouse actions carve terrain;
+ * a "Torch M:SS" line (feature 7) follows OnCarriedLightChanged while a light item burns.
  */
 UCLASS()
 class VOXELCHARACTERPLUGIN_API UVCVitalsWidget : public UUserWidget
@@ -30,6 +31,17 @@ public:
 	/** Bind to a character's combat component and ability system. Null unbinds. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
 	void InitWithCharacter(AVCCharacterBase* Character);
+
+	/** @return True while the carried-light line is visible. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
+	bool IsCarriedLightShown() const;
+
+	/** @return The carried-light line's text (empty when hidden). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
+	FText GetCarriedLightText() const;
+
+	/** Pure: the fuel readout for a lit light ("Torch 9:32"; "Torch lit" without a gauge). */
+	static FText FormatCarriedLight(bool bLit, float FuelSeconds, float MaxFuel);
 
 	/** @return True while the "EDIT" cue is visible (mirrors the bound character's edit mode). */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
@@ -75,6 +87,11 @@ protected:
 	UFUNCTION()
 	void HandleEditModeChanged(bool bEnabled);
 
+	UFUNCTION()
+	void HandleCarriedLightChanged(bool bLit, float FuelSeconds, float MaxFuel);
+
+	void SetCarriedLight(bool bLit, float FuelSeconds, float MaxFuel);
+
 	void HandleStaminaChanged(const FOnAttributeChangeData& Data);
 	void HandleMaxStaminaChanged(const FOnAttributeChangeData& Data);
 
@@ -97,6 +114,10 @@ protected:
 	/** "EDIT" cue; collapsed while edit mode is off. */
 	UPROPERTY()
 	TObjectPtr<UTextBlock> EditModeText;
+
+	/** "Torch M:SS" fuel line; collapsed while nothing lit is carried. */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> CarriedLightText;
 
 	/** Objective line (top of the stack); collapsed when empty. */
 	UPROPERTY()

@@ -65,6 +65,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
 	float SightRadius = 1200.f;
 
+	/**
+	 * A hostile carrying a lit light (ICGFLightBearerInterface, feature 7) is noticed from this many times
+	 * SightRadius: a torch is a trade-off, not a free buff. 1 = no bonus.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "1.0"))
+	float LitTargetSightMultiplier = 1.5f;
+
 	/** Seconds without line of sight before the target is dropped. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
 	float LoseSightSeconds = 4.f;
@@ -138,6 +145,14 @@ public:
 	 */
 	static EVCNPCAIState DecideState(const FVCNPCAIDecisionInput& In, EVCNPCAIState Current,
 		float InMeleeRange, float InLoseSightSeconds, float InLeashDistance);
+
+	/**
+	 * Pure: is a candidate at Distance within sight, given whether it carries a lit light.
+	 * @param InSightRadius   Base sight radius.
+	 * @param bTargetLit      The candidate carries a lit light source.
+	 * @param InLitMultiplier LitTargetSightMultiplier.
+	 */
+	static bool IsWithinSight(float Distance, float InSightRadius, bool bTargetLit, float InLitMultiplier);
 
 protected:
 	virtual void OnPossess(APawn* InPawn) override;
