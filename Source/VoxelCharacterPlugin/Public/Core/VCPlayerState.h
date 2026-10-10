@@ -78,6 +78,20 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
 	bool bHasPendingItemSnapshot = false;
 
+	// --- Rest point (feature 8: campsites) ---
+
+	/** Authority: remember where the player last rested (the AtLastRest respawn policy uses it). */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Rest")
+	void SetRespawnPoint(const FTransform& Point);
+
+	/** Authority: forget the rest point (back to the policy's fallback). */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Rest")
+	void ClearRespawnPoint();
+
+	/** @return True and the point when the player has rested somewhere. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Rest")
+	bool GetRespawnPoint(FTransform& OutPoint) const;
+
 	// --- Progression (feature 4: dungeon objectives) ---
 
 	/** @return The replicated progression counters. */
@@ -103,6 +117,10 @@ protected:
 
 	UPROPERTY(ReplicatedUsing = OnRep_Progression, BlueprintReadOnly, Category = "VoxelCharacter|Progression")
 	FVCProgressionStats Progression;
+
+	/** Last rest point (server only; survives the avatar like the item snapshot). */
+	FTransform RespawnPoint;
+	bool bHasRespawnPoint = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
 	TObjectPtr<UAbilitySystemComponent> AbilitySystemComponent;

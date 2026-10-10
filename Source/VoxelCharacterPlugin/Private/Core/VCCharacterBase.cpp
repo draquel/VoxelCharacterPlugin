@@ -9,6 +9,7 @@
 #include "Combat/VCCombatComponent.h"
 #include "Utilities/CGFCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
+#include "Interfaces/CGFRestPointInterface.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Camera/VCCameraManager.h"
 #include "Camera/VCFirstPersonCameraMode.h"
@@ -49,6 +50,9 @@
 #include "Data/ItemDefinition.h"
 #include "Data/Fragments/ItemFragment_Consumable.h"
 #include "Data/Fragments/ItemFragment_LightSource.h"
+#include "Data/Fragments/ItemFragment_Placeable.h"
+#include "Data/CraftingRecipe.h"
+#include "Subsystems/CraftingSubsystem.h"
 #include "Data/Fragments/ItemFragment_Equipment.h"
 #include "Storage/ItemSerializationUtils.h"
 #include "Utilities/CGFGameplayEffectStatics.h"
@@ -1395,6 +1399,10 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	{
 		EIC->BindAction(Config->IA_Use, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Use);
 	}
+	if (Config->IA_Craft)
+	{
+		EIC->BindAction(Config->IA_Craft, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Craft);
+	}
 	if (Config->IA_ToggleEditMode)
 	{
 		EIC->BindAction(Config->IA_ToggleEditMode, ETriggerEvent::Started, this, &AVCCharacterBase::Input_ToggleEditMode);
@@ -1493,9 +1501,10 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 		return;
 	}
 
-	// Steps 2-3 carve terrain, so they only run while edit mode is on (IA_ToggleEditMode / vox.EditMode).
-	// Attacking and interacting with edit mode off must never touch voxels.
-	if (!bEditModeEnabled)
+	// Steps 2-3 carve terrain, so they only run while edit mode is on (IA_ToggleEditMode / vox.EditMode)
+	// or a digging tool is equipped (feature 8: a pickaxe is the gathering mechanic). Attacking and
+	// interacting with neither must never touch voxels.
+	if (!bEditModeEnabled && !HasDiggingTool())
 	{
 		return;
 	}
@@ -1526,7 +1535,11 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 	}
 #endif
 
-	// Step 3: unarmed voxel dig
+	// Step 3: unarmed voxel dig (edit mode only; a tool was handled above)
+	if (!bEditModeEnabled)
+	{
+		return;
+	}
 	FHitResult Hit;
 	if (TraceForVoxel(Hit))
 	{
@@ -1780,6 +1793,10 @@ bool AVCCharacterBase::UseItemInSlot(int32 SlotIndex)
 	UGameInstance* GI = GetGameInstance();
 	UItemDatabaseSubsystem* ItemDB = GI ? GI->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
 	UItemDefinition* Def = ItemDB ? ItemDB->GetDefinition(Item.ItemDefinitionId) : nullptr;
+	if (const UItemFragment_Placeable* Placeable = Def ? Def->FindFragment<UItemFragment_Placeable>() : nullptr)
+	{
+		return TryPlaceItem(SlotIndex, Item, *Placeable);
+	}
 	const UItemFragment_Consumable* Consumable = Def ? Def->FindFragment<UItemFragment_Consumable>() : nullptr;
 	if (!Consumable)
 	{
@@ -1842,6 +1859,224 @@ bool AVCCharacterBase::UseItemInSlot(int32 SlotIndex)
 #else
 	return false;
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// Surface gameplay (feature 8): placing, gathering helpers, rest, crafting
+// ---------------------------------------------------------------------------
+
+bool AVCCharacterBase::TryPlaceItem(int32 SlotIndex, const FItemInstance& Item, const UItemFragment_Placeable& Placeable)
+{
+#if WITH_INVENTORY_PLUGIN
+	UWorld* World = GetWorld();
+	if (!World || !HasAuthority() || !InventoryComponent)
+	{
+		return false;
+	}
+	UClass* ActorClass = Placeable.ActorClass.LoadSynchronous();
+	if (!ActorClass)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("TryPlaceItem: %s has no ActorClass."), *Item.ItemDefinitionId.PrimaryAssetName.ToString());
+		return false;
+	}
+
+	// Aim point: PlaceDistance ahead on the horizontal view direction, then straight down to the ground.
+	FVector Eyes;
+	FRotator View;
+	GetActorEyesViewPoint(Eyes, View);
+	const FVector Forward = FRotator(0.f, View.Yaw, 0.f).Vector();
+	const FVector Ahead = GetActorLocation() + Forward * Placeable.PlaceDistance;
+	FHitResult Hit;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCPlaceItem), false, this);
+	const bool bHit = World->LineTraceSingleByChannel(Hit, Ahead + FVector(0.f, 0.f, 200.f), Ahead - FVector(0.f, 0.f, 400.f), ECC_Visibility, Params);
+	if (!bHit || !Placeable.AcceptsGround(Hit.ImpactNormal))
+	{
+		UE_LOG(LogVoxelCharacter, Log, TEXT("TryPlaceItem: no level ground ahead for %s."), *Item.ItemDefinitionId.PrimaryAssetName.ToString());
+		if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+		{
+			PC->Client_NotifyGathered(NSLOCTEXT("VCPlace", "NoGround", "Needs level ground ahead"), 0);
+		}
+		return false;
+	}
+
+	// Face the player.
+	const FRotator Facing(0.f, View.Yaw + 180.f, 0.f);
+	const FVector Location = Hit.ImpactPoint + FVector(0.f, 0.f, Placeable.PlacementOffsetZ);
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+	SpawnParams.Owner = this;
+	AActor* Placed = World->SpawnActor<AActor>(ActorClass, Location, Facing, SpawnParams);
+	if (!Placed)
+	{
+		return false;
+	}
+	if (Placeable.bConsumeOnPlace)
+	{
+		InventoryComponent->TryRemoveItem(Item.InstanceId, 1);
+	}
+	UE_LOG(LogVoxelCharacter, Log, TEXT("TryPlaceItem: placed %s (%s) at %s."), *Item.ItemDefinitionId.PrimaryAssetName.ToString(),
+		*Placed->GetName(), *Location.ToCompactString());
+	return true;
+#else
+	return false;
+#endif
+}
+
+float AVCCharacterBase::GetMiningSpeed() const
+{
+	const UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	return ASC ? ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetMiningSpeedAttribute()) : 1.f;
+}
+
+bool AVCCharacterBase::HasDiggingTool() const
+{
+#if WITH_EQUIPMENT_PLUGIN
+	static const FGameplayTag MainHandTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.MainHand"), false);
+	if (!EquipmentManager || !EquipmentManager->IsSlotOccupied(MainHandTag))
+	{
+		return false;
+	}
+	return GetMiningSpeed() > 1.f + KINDA_SMALL_NUMBER;
+#else
+	return false;
+#endif
+}
+
+void AVCCharacterBase::RestoreVitals()
+{
+	UAbilitySystemComponent* ASC = HasAuthority() ? GetAbilitySystemComponent() : nullptr;
+	if (!ASC)
+	{
+		return;
+	}
+	ASC->SetNumericAttributeBase(UVCCharacterAttributeSet::GetHealthAttribute(),
+		ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxHealthAttribute()));
+	ASC->SetNumericAttributeBase(UVCCharacterAttributeSet::GetStaminaAttribute(),
+		ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxStaminaAttribute()));
+}
+
+bool AVCCharacterBase::IsRestPointInRange(const AActor* RestPoint) const
+{
+	if (!RestPoint || !RestPoint->Implements<UCGFRestPointInterface>())
+	{
+		return false;
+	}
+	const float Range = FMath::Max(GetInteractionRange(), 400.f) + 100.f; // the actor's origin may sit behind its mesh
+	return FVector::Dist(RestPoint->GetActorLocation(), GetActorLocation()) <= Range;
+}
+
+void AVCCharacterBase::RequestRest(AActor* RestPoint)
+{
+	if (HasAuthority())
+	{
+		Server_RestAt_Implementation(RestPoint);
+	}
+	else
+	{
+		Server_RestAt(RestPoint);
+	}
+}
+
+void AVCCharacterBase::RequestSleep(AActor* RestPoint)
+{
+	if (HasAuthority())
+	{
+		Server_SleepAt_Implementation(RestPoint);
+	}
+	else
+	{
+		Server_SleepAt(RestPoint);
+	}
+}
+
+void AVCCharacterBase::RequestCraft(FPrimaryAssetId RecipeId, AActor* Station)
+{
+	if (HasAuthority())
+	{
+		Server_CraftRecipe_Implementation(RecipeId, Station);
+	}
+	else
+	{
+		Server_CraftRecipe(RecipeId, Station);
+	}
+}
+
+void AVCCharacterBase::Server_RestAt_Implementation(AActor* RestPoint)
+{
+	if (IsIncapacitated() || !IsRestPointInRange(RestPoint))
+	{
+		return;
+	}
+	const bool bRested = ICGFRestPointInterface::Execute_Rest(RestPoint, this);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s rests at %s: %s"), *GetName(), *RestPoint->GetName(), bRested ? TEXT("ok") : TEXT("refused"));
+	Client_CraftResult(NSLOCTEXT("VCRest", "Rest", "Rest"), bRested,
+		bRested ? NSLOCTEXT("VCRest", "Rested", "You feel rested") : NSLOCTEXT("VCRest", "RestRefused", "You cannot rest here"));
+}
+
+void AVCCharacterBase::Server_SleepAt_Implementation(AActor* RestPoint)
+{
+	if (IsIncapacitated() || !IsRestPointInRange(RestPoint))
+	{
+		return;
+	}
+	const bool bSlept = ICGFRestPointInterface::Execute_SleepUntilMorning(RestPoint, this);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s sleeps at %s: %s"), *GetName(), *RestPoint->GetName(), bSlept ? TEXT("ok") : TEXT("refused"));
+	Client_CraftResult(NSLOCTEXT("VCRest", "Sleep", "Sleep"), bSlept,
+		bSlept ? NSLOCTEXT("VCRest", "Slept", "A new day") : NSLOCTEXT("VCRest", "SleepRefused", "Not tired yet (sleep at night)"));
+}
+
+void AVCCharacterBase::Server_CraftRecipe_Implementation(FPrimaryAssetId RecipeId, AActor* Station)
+{
+#if WITH_INVENTORY_PLUGIN
+	if (IsIncapacitated() || !InventoryComponent)
+	{
+		return;
+	}
+	UGameInstance* GameInstance = GetGameInstance();
+	UCraftingSubsystem* Crafting = GameInstance ? GameInstance->GetSubsystem<UCraftingSubsystem>() : nullptr;
+	const UCraftingRecipe* Recipe = Crafting ? Crafting->FindRecipe(RecipeId) : nullptr;
+	if (!Recipe)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("Server_CraftRecipe: unknown recipe %s"), *RecipeId.ToString());
+		return;
+	}
+	// A station only counts when it is a rest point within reach; anything else crafts by hand.
+	FGameplayTag StationTag;
+	if (Station && IsRestPointInRange(Station))
+	{
+		StationTag = ICGFRestPointInterface::Execute_GetCraftingStationTag(Station);
+	}
+	const ECraftResult Result = Crafting->Craft(InventoryComponent, Recipe, StationTag);
+	const FText Name = Recipe->DisplayName.IsEmpty() ? FText::FromName(Recipe->OutputItemId.PrimaryAssetName) : Recipe->DisplayName;
+	FText Reason;
+	switch (Result)
+	{
+	case ECraftResult::Success:            Reason = NSLOCTEXT("VCCraft", "Crafted", "Crafted {0}"); break;
+	case ECraftResult::WrongStation:       Reason = NSLOCTEXT("VCCraft", "WrongStation", "{0} needs a campfire"); break;
+	case ECraftResult::MissingIngredients: Reason = NSLOCTEXT("VCCraft", "Missing", "Not enough materials for {0}"); break;
+	case ECraftResult::NoRoomForOutput:    Reason = NSLOCTEXT("VCCraft", "NoRoom", "No room for {0}"); break;
+	default:                               Reason = NSLOCTEXT("VCCraft", "Failed", "Cannot craft {0}"); break;
+	}
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s crafts %s at station '%s': %s"), *GetName(), *RecipeId.PrimaryAssetName.ToString(),
+		*StationTag.ToString(), *UEnum::GetValueAsString(Result));
+	Client_CraftResult(Name, Result == ECraftResult::Success, FText::Format(Reason, Name));
+#endif
+}
+
+void AVCCharacterBase::Client_CraftResult_Implementation(const FText& RecipeName, bool bSuccess, const FText& Reason)
+{
+	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	{
+		PC->ShowToast(Reason, bSuccess ? 3.0f : 2.5f);
+	}
+}
+
+void AVCCharacterBase::Input_Craft(const FInputActionValue& Value)
+{
+	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	{
+		PC->ToggleCraftingUI();
+	}
 }
 
 // ---------------------------------------------------------------------------

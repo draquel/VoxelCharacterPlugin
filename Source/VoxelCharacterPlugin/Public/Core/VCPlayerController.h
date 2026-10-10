@@ -56,6 +56,46 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
 	void ToggleInventoryUI();
 
+	/** Open / close the hand-crafting panel (C key; feature 8). */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void ToggleCraftingUI();
+
+	/** Open the campsite panel for a rest point (the server confirms the interaction first). */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void OpenCampsiteUI(AActor* RestPoint);
+
+	/** Close the campsite panel. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void CloseCampsiteUI();
+
+	/** Server -> owning client: show the campsite panel for a rest point the player just used. */
+	UFUNCTION(Client, Reliable)
+	void Client_OpenCampsite(AActor* RestPoint);
+
+	/** Server -> owning client: a dig yielded items (Count 0 = plain message). Toast "+N Name". */
+	UFUNCTION(Client, Reliable)
+	void Client_NotifyGathered(const FText& ItemName, int32 Count);
+
+	/** @return True while the campsite panel is open. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
+	bool IsCampsiteUIOpen() const { return bCampsiteOpen; }
+
+	/** @return True while the hand-crafting panel is open. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
+	bool IsCraftingUIOpen() const { return bCraftingOpen; }
+
+	/** What digging yields (feature 8). None = digging gives nothing. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Gather")
+	TObjectPtr<class UVCGatherTable> GatherTable;
+
+	/** Override class for the hand-crafting panel (None = UVCCraftingPanelWidget). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> CraftingPanelWidgetClass;
+
+	/** Override class for the campsite panel (None = UVCCampsiteWidget). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> CampsiteWidgetClass;
+
 	/** Toggle the full-screen world map overlay. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
 	void ToggleWorldMapUI();
@@ -227,6 +267,17 @@ private:
 
 	bool bInventoryOpen = false;
 	bool bWorldMapOpen = false;
+	bool bCraftingOpen = false;
+	bool bCampsiteOpen = false;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> CraftingPanelWidget;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> CampsiteWidget;
+
+	/** Authority: turn a dug voxel material into items for the pawn (feature 8). */
+	void GatherFromVoxel(uint8 MaterialId);
 
 	// --- Click-to-move item management ---
 

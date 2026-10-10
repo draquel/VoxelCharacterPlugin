@@ -58,6 +58,30 @@ void AVCPlayerState::OnRep_Progression()
 	OnProgressionChanged.Broadcast(Progression);
 }
 
+void AVCPlayerState::SetRespawnPoint(const FTransform& Point)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	RespawnPoint = Point;
+	bHasRespawnPoint = true;
+}
+
+void AVCPlayerState::ClearRespawnPoint()
+{
+	if (HasAuthority())
+	{
+		bHasRespawnPoint = false;
+	}
+}
+
+bool AVCPlayerState::GetRespawnPoint(FTransform& OutPoint) const
+{
+	OutPoint = RespawnPoint;
+	return bHasRespawnPoint;
+}
+
 void AVCPlayerState::HandleRespawnAttributeReset()
 {
 	if (!AbilitySystemComponent)

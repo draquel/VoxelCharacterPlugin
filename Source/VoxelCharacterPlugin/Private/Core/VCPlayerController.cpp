@@ -4,6 +4,11 @@
 #include "Core/VCPlayerState.h"
 #include "UI/VCVitalsWidget.h"
 #include "Core/VCCharacterBase.h"
+#include "Gathering/VCGatherTable.h"
+#include "UI/VCCampsiteWidget.h"
+#include "UI/VCCraftingPanelWidget.h"
+#include "AbilitySystemComponent.h"
+#include "Core/VCCharacterAttributeSet.h"
 #include "Input/VCInputConfig.h"
 #include "Movement/VCVoxelNavigationHelper.h"
 #include "Engine/Engine.h"
@@ -1189,9 +1194,16 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 		Brush.FalloffType = EVoxelBrushFalloff::Smooth;
 		Brush.DensityDelta = 80;
 
+		// What is being dug, read before the brush empties it (feature 8: gathering).
+		const uint8 DugMaterial = ChunkMgr->GetEditMergedVoxelAtWorldPosition(VoxelWorldPos).MaterialID;
+
 		EditMgr->BeginEditOperation(TEXT("Player dig"));
-		EditMgr->ApplyBrushEdit(VoxelWorldPos, Brush, EEditMode::Subtract);
+		const int32 Modified = EditMgr->ApplyBrushEdit(VoxelWorldPos, Brush, EEditMode::Subtract);
 		EditMgr->EndEditOperation();
+		if (Modified > 0)
+		{
+			GatherFromVoxel(DugMaterial);
+		}
 
 		UE_LOG(LogVoxelCharacter, Verbose, TEXT("Voxel destroyed at [%d,%d,%d]"),
 			VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z);
@@ -1264,6 +1276,143 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 	{
 		Client_NotifyVoxelEditBlocked(RejectedVoxels);
 	}
+}
+
+void AVCPlayerController::GatherFromVoxel(uint8 MaterialId)
+{
+#if WITH_INVENTORY_PLUGIN
+	AVCCharacterBase* Digger = Cast<AVCCharacterBase>(GetPawn());
+	const FVCGatherEntry* Entry = GatherTable ? GatherTable->Find(MaterialId) : nullptr;
+	if (!Digger || !Entry || !Entry->ItemId.IsValid())
+	{
+		return;
+	}
+	const int32 Count = UVCGatherTable::YieldFor(*Entry, Digger->GetMiningSpeed(), GatherTable->ToolMiningSpeedThreshold);
+	if (Count <= 0)
+	{
+		return;
+	}
+	UGameInstance* GameInstance = GetGameInstance();
+	UItemDatabaseSubsystem* ItemDB = GameInstance ? GameInstance->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
+	UInventoryComponent* Inventory = Digger->FindComponentByClass<UInventoryComponent>();
+	const UItemDefinition* Def = ItemDB ? ItemDB->GetDefinition(Entry->ItemId) : nullptr;
+	if (!Def || !Inventory)
+	{
+		return;
+	}
+	FItemInstance Item = ItemDB->CreateItemInstance(Entry->ItemId, Count);
+	if (Inventory->TryAddItem(Item) != EInventoryOperationResult::Success)
+	{
+#if WITH_INTERACTION_PLUGIN
+		// Full: it lands at the player's feet as a pickup instead of vanishing.
+		if (UWorldItemPoolSubsystem* Pool = GetWorld()->GetSubsystem<UWorldItemPoolSubsystem>())
+		{
+			Pool->SpawnWorldItem(Item, Digger->GetActorLocation() + Digger->GetActorForwardVector() * 80.f);
+		}
+#endif
+	}
+	UE_LOG(LogVoxelCharacter, Log, TEXT("Gathered %d x %s from material %d"), Count, *Entry->ItemId.PrimaryAssetName.ToString(), MaterialId);
+	Client_NotifyGathered(Def->DisplayName, Count);
+#endif
+}
+
+void AVCPlayerController::Client_NotifyGathered_Implementation(const FText& ItemName, int32 Count)
+{
+	ShowToast(Count > 0 ? FText::Format(NSLOCTEXT("VCGather", "Gathered", "+{0} {1}"), Count, ItemName) : ItemName, 2.0f);
+}
+
+void AVCPlayerController::ToggleCraftingUI()
+{
+	if (bCampsiteOpen)
+	{
+		CloseCampsiteUI();
+		return;
+	}
+	bCraftingOpen = !bCraftingOpen;
+	if (bCraftingOpen)
+	{
+		if (!CraftingPanelWidget)
+		{
+			TSubclassOf<UUserWidget> ClassToUse = CraftingPanelWidgetClass ? CraftingPanelWidgetClass : TSubclassOf<UUserWidget>(UVCCraftingPanelWidget::StaticClass());
+			CraftingPanelWidget = CreateWidget<UUserWidget>(this, ClassToUse);
+		}
+		if (CraftingPanelWidget)
+		{
+			if (!CraftingPanelWidget->IsInViewport())
+			{
+				CraftingPanelWidget->AddToViewport(2);
+				CraftingPanelWidget->SetAnchorsInViewport(FAnchors(0.35f, 0.3f, 0.35f, 0.3f));
+				CraftingPanelWidget->SetAlignmentInViewport(FVector2D(0.5f, 0.f));
+			}
+			if (UVCCraftingPanelWidget* Panel = Cast<UVCCraftingPanelWidget>(CraftingPanelWidget))
+			{
+				Panel->InitPanel(Cast<AVCCharacterBase>(GetPawn()), nullptr);
+			}
+		}
+		SetUIInputMode(CraftingPanelWidget);
+	}
+	else
+	{
+		if (CraftingPanelWidget && CraftingPanelWidget->IsInViewport())
+		{
+			CraftingPanelWidget->RemoveFromParent();
+		}
+		if (!bInventoryOpen)
+		{
+			SetGameInputMode();
+		}
+	}
+}
+
+void AVCPlayerController::OpenCampsiteUI(AActor* RestPoint)
+{
+	if (!RestPoint)
+	{
+		return;
+	}
+	if (bCraftingOpen)
+	{
+		ToggleCraftingUI();
+	}
+	if (!CampsiteWidget)
+	{
+		TSubclassOf<UUserWidget> ClassToUse = CampsiteWidgetClass ? CampsiteWidgetClass : TSubclassOf<UUserWidget>(UVCCampsiteWidget::StaticClass());
+		CampsiteWidget = CreateWidget<UUserWidget>(this, ClassToUse);
+	}
+	if (!CampsiteWidget)
+	{
+		return;
+	}
+	if (!CampsiteWidget->IsInViewport())
+	{
+		CampsiteWidget->AddToViewport(2);
+		CampsiteWidget->SetAnchorsInViewport(FAnchors(0.35f, 0.25f, 0.35f, 0.25f));
+		CampsiteWidget->SetAlignmentInViewport(FVector2D(0.5f, 0.f));
+	}
+	if (UVCCampsiteWidget* Panel = Cast<UVCCampsiteWidget>(CampsiteWidget))
+	{
+		Panel->InitPanel(Cast<AVCCharacterBase>(GetPawn()), RestPoint);
+	}
+	bCampsiteOpen = true;
+	SetUIInputMode(CampsiteWidget);
+}
+
+void AVCPlayerController::CloseCampsiteUI()
+{
+	bCampsiteOpen = false;
+	if (CampsiteWidget && CampsiteWidget->IsInViewport())
+	{
+		CampsiteWidget->RemoveFromParent();
+	}
+	if (!bInventoryOpen && !bCraftingOpen)
+	{
+		SetGameInputMode();
+	}
+}
+
+void AVCPlayerController::Client_OpenCampsite_Implementation(AActor* RestPoint)
+{
+	OpenCampsiteUI(RestPoint);
 }
 
 void AVCPlayerController::Client_NotifyVoxelEditBlocked_Implementation(int32 RejectedVoxelCount)
