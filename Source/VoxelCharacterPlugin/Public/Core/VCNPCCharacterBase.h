@@ -76,6 +76,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0"))
 	float DestroyAfterDeathDelay = 10.f;
 
+	/** Let the possessing AVCNPCAIController think and move (feature 5). False = a training dummy. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI")
+	bool bAIEnabled = true;
+
+	/**
+	 * Death visual when there is no physics asset to ragdoll (static-mesh placeholders): the body
+	 * topples over ToppleSeconds and sinks a little. 0 disables.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0"))
+	float ToppleSeconds = 0.4f;
+
 	/** True after the death flow ran on this machine (authority or via replication). */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
 	bool IsDead() const;
@@ -83,6 +94,7 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void Tick(float DeltaSeconds) override;
 
 	/** Death visuals + cleanup; runs on every machine from the combat component's OnDied. */
 	UFUNCTION()
@@ -99,4 +111,10 @@ protected:
 	TObjectPtr<UVCCombatAttributeSet> CombatAttributes;
 
 	FTimerHandle DestroyTimerHandle;
+
+	// Topple animation state (every machine; starts in HandleDied when no physics asset exists).
+	bool bToppling = false;
+	float ToppleElapsed = 0.f;
+	FRotator ToppleStartRotation = FRotator::ZeroRotator;
+	FVector ToppleStartLocation = FVector::ZeroVector;
 };
