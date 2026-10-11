@@ -233,6 +233,52 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnVCCombatantRevived);
 /** Voxel edit mode (dig / place on the mouse actions) was turned on or off. Local, never replicated. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCEditModeChanged, bool, bEnabled);
 
+/**
+ * Everything a save system keeps per player (feature 9): the items the avatar carried (JSON per
+ * slot, as the death snapshot), progression, the rest point, where the avatar stood and its vitals.
+ * Produced / consumed by AVCPlayerState::ExportSaveState / ImportSaveState.
+ */
+USTRUCT(BlueprintType)
+struct VOXELCHARACTERPLUGIN_API FVCPlayerSaveState
+{
+	GENERATED_BODY()
+
+	/** AVCPlayerState::GetSaveKey (unique net id, or Local0). */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	FString PlayerKey;
+
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	TArray<FVCSnapshotInventoryEntry> Inventory;
+
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	TArray<FVCSnapshotEquipmentEntry> Equipment;
+
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	FVCProgressionStats Progression;
+
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	bool bHasRespawnPoint = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	FTransform RespawnPoint;
+
+	/** Where the avatar stood when saved (the next login spawns there). */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	bool bHasLastTransform = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	FTransform LastTransform;
+
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	bool bHasVitals = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	float Health = 0.f;
+
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	float Stamina = 0.f;
+};
+
 /** The carried light changed (feature 7): lit / dark, fuel seconds left and capacity (0 / 0 when it needs no fuel). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnVCCarriedLightChanged, bool, bLit, float, FuelSeconds, float, MaxFuel);
 

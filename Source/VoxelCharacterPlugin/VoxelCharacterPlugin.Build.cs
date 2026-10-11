@@ -33,8 +33,10 @@ public class VoxelCharacterPlugin : ModuleRules
 				"VoxelCore",
 				"VoxelStreaming",
 				"VoxelScatter",
+				"JsonUtilities",
 				"VoxelMap",
 				"Json",
+				"CoreOnline", // FUniqueNetIdWrapper::ToString (AVCPlayerState::GetSaveKey)
 			}
 		);
 

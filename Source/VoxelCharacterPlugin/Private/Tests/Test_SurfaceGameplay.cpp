@@ -6,6 +6,8 @@
 
 #include "Core/VCGameModeBase.h"
 #include "Gathering/VCGatherTable.h"
+#include "Core/VCTypes.h"
+#include "JsonObjectConverter.h"
 
 #define VC_SURFACE_FLAGS (EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
@@ -76,6 +78,48 @@ bool FVCSurface_RespawnAtLastRest::RunTest(const FString& Parameters)
 
 	AVCGameModeBase::ResolveRespawnTransform(EVCRespawnPolicy::AtPlayerStart, true, Rest, Death, bPlayerStart);
 	TestTrue(TEXT("Player start policy asks for one"), bPlayerStart);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Persistence (feature 9): the per-player save state survives a JSON round trip.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCSurface_PlayerSaveRoundTrip, "VoxelCharacter.Save.PlayerStateRoundTrip", VC_SURFACE_FLAGS)
+bool FVCSurface_PlayerSaveRoundTrip::RunTest(const FString& Parameters)
+{
+	FVCPlayerSaveState State;
+	State.PlayerKey = TEXT("Local0");
+	FVCSnapshotInventoryEntry Entry;
+	Entry.SlotIndex = 3;
+	Entry.ItemJson = TEXT("{\"def\":\"ID_Tool_Torch\",\"fuel\":512}");
+	State.Inventory.Add(Entry);
+	FVCSnapshotEquipmentEntry Equip;
+	Equip.SlotTag = FGameplayTag::RequestGameplayTag(TEXT("Equipment.Slot.MainHand"), false);
+	Equip.ItemJson = TEXT("{\"def\":\"ID_Weapon_IronSword\"}");
+	State.Equipment.Add(Equip);
+	State.Progression.DungeonsCleared = 2;
+	State.Progression.BossesKilled = 1;
+	State.bHasRespawnPoint = true;
+	State.RespawnPoint = FTransform(FRotator(0.f, 45.f, 0.f), FVector(100.f, 200.f, 300.f));
+	State.bHasLastTransform = true;
+	State.LastTransform = FTransform(FRotator(0.f, -90.f, 0.f), FVector(-5.f, 6.f, 7.f));
+	State.bHasVitals = true;
+	State.Health = 73.5f;
+	State.Stamina = 12.f;
+
+	FString Json;
+	TestTrue(TEXT("Serialize"), FJsonObjectConverter::UStructToJsonObjectString(State, Json));
+	FVCPlayerSaveState Back;
+	TestTrue(TEXT("Parse"), FJsonObjectConverter::JsonObjectStringToUStruct(Json, &Back));
+	TestEqual(TEXT("Key"), Back.PlayerKey, State.PlayerKey);
+	TestEqual(TEXT("Inventory entries"), Back.Inventory.Num(), 1);
+	TestEqual(TEXT("Inventory slot"), Back.Inventory[0].SlotIndex, 3);
+	TestEqual(TEXT("Inventory json"), Back.Inventory[0].ItemJson, Entry.ItemJson);
+	TestEqual(TEXT("Equipment slot tag"), Back.Equipment[0].SlotTag.ToString(), Equip.SlotTag.ToString());
+	TestEqual(TEXT("Cleared"), Back.Progression.DungeonsCleared, 2);
+	TestTrue(TEXT("Respawn point"), Back.bHasRespawnPoint && Back.RespawnPoint.GetLocation().Equals(State.RespawnPoint.GetLocation()));
+	TestTrue(TEXT("Last transform"), Back.bHasLastTransform && Back.LastTransform.GetLocation().Equals(State.LastTransform.GetLocation()));
+	TestEqual(TEXT("Health"), Back.Health, 73.5f, 0.001f);
 	return true;
 }
 

@@ -203,6 +203,8 @@ protected:
 	virtual void BeginPlay() override;
 	virtual void OnPossess(APawn* InPawn) override;
 	virtual void OnUnPossess() override;
+	/** Remote players: the engine destroys the pawn here before Logout; the player state keeps its items / transform / vitals first (feature 9). */
+	virtual void PawnLeavingGame() override;
 	virtual void InitPlayerState() override;
 	virtual void OnRep_PlayerState() override;
 

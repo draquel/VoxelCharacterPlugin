@@ -115,8 +115,36 @@ APawn* AVCGameModeBase::SpawnDefaultPawnAtTransform_Implementation(AController* 
 	return ResultPawn;
 }
 
+void AVCGameModeBase::PostLogin(APlayerController* NewPlayer)
+{
+	// The player state exists; the pawn does not yet: the save system restores here.
+	if (AVCPlayerState* PS = NewPlayer ? NewPlayer->GetPlayerState<AVCPlayerState>() : nullptr)
+	{
+		OnPlayerLoggingIn.Broadcast(PS);
+	}
+	Super::PostLogin(NewPlayer);
+}
+
+APawn* AVCGameModeBase::SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot)
+{
+	FTransform Saved;
+	if (AVCPlayerState* PS = NewPlayer ? NewPlayer->GetPlayerState<AVCPlayerState>() : nullptr)
+	{
+		if (PS->ConsumePendingSpawnTransform(Saved))
+		{
+			UE_LOG(LogVoxelCharacter, Log, TEXT("%s spawns at its saved transform %s"), *GetNameSafe(NewPlayer), *Saved.GetLocation().ToCompactString());
+			return SpawnDefaultPawnAtTransform(NewPlayer, Saved);
+		}
+	}
+	return Super::SpawnDefaultPawnFor_Implementation(NewPlayer, StartSpot);
+}
+
 void AVCGameModeBase::Logout(AController* Exiting)
 {
+	if (AVCPlayerState* PS = Exiting ? Exiting->GetPlayerState<AVCPlayerState>() : nullptr)
+	{
+		OnPlayerLoggingOut.Broadcast(PS);
+	}
 	if (Exiting)
 	{
 		if (FPendingRespawn* Pending = PendingRespawns.Find(Exiting))

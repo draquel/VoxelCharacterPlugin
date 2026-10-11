@@ -254,9 +254,21 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Items")
 	void CaptureItemSnapshotToPlayerState();
 
+	/** Build the inventory + equipment snapshot of this avatar without touching the player state (saves). */
+	void BuildItemSnapshot(FVCItemSnapshot& OutSnapshot) const;
+
 	/** Server: restore a pending snapshot from the player state into this avatar, then clear it. */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Items")
 	bool RestoreItemSnapshotFromPlayerState();
+
+	/**
+	 * Server: a save was imported onto the player state while this avatar is already up (the world
+	 * save loads after the first spawn; mid-session loads): drop the items it carries, restore the
+	 * pending snapshot, move to the pending spawn transform (waiting for terrain collision there like
+	 * a fresh spawn) and apply the pending vitals (feature 9).
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Items")
+	void ApplyPendingSaveState();
 
 	// =================================================================
 	// Voxel Interaction
@@ -301,6 +313,18 @@ public:
 	/** Whether the character is currently waiting for terrain. */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Spawn")
 	bool bIsWaitingForTerrain = false;
+
+	/**
+	 * Resume at the current location once collision is there instead of snapping to the terrain
+	 * surface from above (a saved position may be inside a dungeon, under the surface). Waits for a
+	 * floor within FloorProbeDistance below the feet (tile floors stream in with their POI) up to
+	 * TerrainWaitTimeout. Set by ApplyPendingSaveState.
+	 */
+	bool bResumeAtExactLocation = false;
+
+	/** How far below the feet the exact-location resume looks for a floor. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|Spawn", meta = (ClampMin = "0"))
+	float FloorProbeDistance = 400.f;
 
 	// =================================================================
 	// Debug

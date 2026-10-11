@@ -92,6 +92,43 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Rest")
 	bool GetRespawnPoint(FTransform& OutPoint) const;
 
+	// --- Save (feature 9) ---
+
+	/** Stable key a save file stores this player under: the unique net id, or Local0 without one. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Save")
+	FString GetSaveKey() const;
+
+	/** Authority: everything about this player worth saving, including the live avatar's items, position and vitals. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Save")
+	void ExportSaveState(FVCPlayerSaveState& OutState) const;
+
+	/**
+	 * Authority: apply a saved state. Progression and the rest point apply now. Items become the
+	 * pending snapshot, the last transform the pending spawn transform and the vitals pending: a
+	 * possessed avatar takes them immediately (AVCCharacterBase::ApplyPendingSaveState), otherwise
+	 * the next spawn / possess does.
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Save")
+	void ImportSaveState(const FVCPlayerSaveState& State);
+
+	/** Authority: where the next spawned pawn should stand (consumed by the game mode). */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Save")
+	void SetPendingSpawnTransform(const FTransform& Transform);
+
+	/** Authority: take the pending spawn transform. @return False when none is pending. */
+	bool ConsumePendingSpawnTransform(FTransform& OutTransform);
+
+	/** Authority: apply pending saved vitals to the ability system (the character calls this after restoring items). */
+	void ApplyPendingVitals();
+
+	/**
+	 * Authority: remember the live avatar's items, transform and vitals so ExportSaveState still has
+	 * them once the pawn is gone (the controller calls this from PawnLeavingGame: on PIE stop and on
+	 * disconnect the engine destroys the pawn before Logout).
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Save")
+	void CaptureAvatarState();
+
 	// --- Progression (feature 4: dungeon objectives) ---
 
 	/** @return The replicated progression counters. */
@@ -121,6 +158,22 @@ protected:
 	/** Last rest point (server only; survives the avatar like the item snapshot). */
 	FTransform RespawnPoint;
 	bool bHasRespawnPoint = false;
+
+	/** Loaded save: spawn here next (server only). */
+	FTransform PendingSpawnTransform;
+	bool bHasPendingSpawnTransform = false;
+
+	/** Loaded save: vitals to set once the next avatar is up (server only). */
+	float PendingHealth = 0.f;
+	float PendingStamina = 0.f;
+	bool bHasPendingVitals = false;
+
+	/** Last avatar's transform / vitals (CaptureAvatarState, ImportSaveState): what a save stores without a pawn. */
+	FTransform LastKnownTransform;
+	bool bHasLastKnownTransform = false;
+	float LastKnownHealth = 0.f;
+	float LastKnownStamina = 0.f;
+	bool bHasLastKnownVitals = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
 	TObjectPtr<UAbilitySystemComponent> AbilitySystemComponent;
