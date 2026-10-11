@@ -32,6 +32,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"UMG",
 				"VoxelCore",
 				"VoxelStreaming",
+				"VoxelNavigation", // UVCVoxelPathProvider (feature 10)
 				"VoxelScatter",
 				"JsonUtilities",
 				"VoxelMap",

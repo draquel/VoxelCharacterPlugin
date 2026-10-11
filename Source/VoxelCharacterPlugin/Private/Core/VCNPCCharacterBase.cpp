@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Core/VCNPCCharacterBase.h"
+#include "Movement/VCMovementComponent.h"
 #include "AI/VCNPCAIController.h"
 #include "Core/VCCharacterAttributeSet.h"
 #include "Combat/VCCombatAttributeSet.h"
@@ -16,7 +17,10 @@
 #include "TimerManager.h"
 
 AVCNPCCharacterBase::AVCNPCCharacterBase(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer)
+	// The voxel-aware movement component (same as the player): voxel collision is double-sided trimesh, which
+	// returns inverted and edge normals; the stock component then fails to land on walkable slopes, stays in
+	// Falling with no ground friction and slides downhill (feature 10 surface creatures skied into the sea).
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UVCMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
 	// Tick only while toppling after death (enabled in HandleDied).
 	PrimaryActorTick.bCanEverTick = true;
@@ -80,6 +84,10 @@ bool AVCNPCCharacterBase::IsDead() const
 
 void AVCNPCCharacterBase::BeginPlay()
 {
+	if (Faction.IsValid() && CombatComponent)
+	{
+		CombatComponent->FactionTag = Faction;
+	}
 	Super::BeginPlay();
 
 	if (AbilitySystemComponent)
