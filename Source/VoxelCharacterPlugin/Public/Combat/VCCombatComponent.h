@@ -138,6 +138,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Combat")
 	FOnVCCombatantStateChanged OnDied;
 
+	/** A damaging hit landed (server only): its context names the attacker. NPCs retaliate from it (QA R16). */
+	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Combat")
+	FOnVCCombatantStateChanged OnDamaged;
+
 	/** Knocked out (OutOfHealthPolicy::Downed). Same server/client context rule as OnDied. */
 	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Combat")
 	FOnVCCombatantStateChanged OnDowned;

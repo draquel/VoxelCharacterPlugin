@@ -25,8 +25,10 @@ enum class EVCNPCAIState : uint8
 	Return,
 	/** Roaming around home while nothing is going on (feature 10). */
 	Wander,
-	/** Prey: running from a threat (feature 10). */
+	/** Prey: running from a threat (feature 10). Also a light-fearing hostile backing out of a torch's light. */
 	Flee,
+	/** Keeping its distance from a target it fears (a lit torch): faces it at the light's edge, never attacks (QA R16). */
+	Hold,
 };
 
 /** Everything the state decision needs, gathered once per perception tick (pure input: testable). */
@@ -50,6 +52,12 @@ struct VOXELCHARACTERPLUGIN_API FVCNPCAIDecisionInput
 	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") bool bCanWander = false;
 	/** The threat is within FleeRadius (prey starts running; it keeps running while the threat is engaged). */
 	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") bool bThreatInFleeRange = false;
+	/** Hostile that fears light, and the target carries a lit one (QA R16). */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") bool bTargetFeared = false;
+	/** How close the feared light keeps it. */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") float FearRadius = 600.f;
+	/** Band beyond FearRadius it holds in; farther out it closes in again. */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") float FearHoldBand = 350.f;
 };
 
 /**
@@ -159,6 +167,32 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI|Surface", meta = (ClampMin = "0"))
 	float PackRadius = 0.f;
 
+	/** When one is hit, pack mates (same pack id, or same class without one) this close come to its aid / flee too. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI|Surface", meta = (ClampMin = "0"))
+	float RetaliationAlertRadius = 2500.f;
+
+	/** Light fear: hold this far beyond the light's radius before closing in again. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI|Surface", meta = (ClampMin = "0"))
+	float FearHoldBand = 350.f;
+
+	/**
+	 * Wary NPCs engage only hostiles within their wary radius (or attackers); aggressive ones engage what they see.
+	 * @param InTemperament New temperament
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AI")
+	void SetTemperament(EVCNPCTemperament InTemperament);
+
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|AI")
+	EVCNPCTemperament GetTemperament() const { return Temperament; }
+
+	/**
+	 * Whether this NPC keeps away from Other right now: it fears light and Other carries a lit one.
+	 * @param Other Candidate target
+	 * @return True while Other's light keeps this NPC off
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|AI")
+	bool IsTargetFeared(const AActor* Other) const;
+
 	/** Hostile hunts, Prey flees. Read from the possessed AVCNPCCharacterBase; settable for other pawns. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AI")
 	void SetBehavior(EVCNPCBehavior InBehavior);
@@ -170,7 +204,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|AI")
 	FVector GetHomeLocation() const { return LeashOrigin; }
 
-	/** A pack mate saw something: start chasing it (hostiles only; ignored while already engaged). */
+	/**
+	 * A pack mate saw or was hit by something: hostiles chase it, prey flee from it. Ignored while already engaged.
+	 * @param NewTarget The threat
+	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AI")
 	void AlertToTarget(AActor* NewTarget);
 
@@ -256,6 +293,16 @@ protected:
 	void AlertPack(AActor* NewTarget);
 	class UVCVoxelPathProvider* GetVoxelProvider() const;
 
+	/** The pawn took a hit: turn on the attacker (prey flee from it) and alert the pack (QA R16). */
+	UFUNCTION()
+	void HandlePawnDamaged(const FCGFDamageContext& Context);
+
+	/** Engage Attacker now (hostiles chase it, prey flee), replacing any current target. */
+	void Provoke(AActor* Attacker);
+
+	/** Pack mates within RetaliationAlertRadius (same PackId, or same class when unpacked) learn of Threat. */
+	void AlertPackmates(AActor* Threat);
+
 	UPROPERTY(VisibleAnywhere, Category = "VoxelCharacter|AI")
 	EVCNPCAIState State = EVCNPCAIState::Idle;
 
@@ -297,4 +344,14 @@ protected:
 	/** A voxel search just failed: don't run another before this (no straight-line fallback to walk meanwhile). */
 	double NextPathRetryTime = 0.0;
 	FVector LastThreatLocation = FVector::ZeroVector;
+
+	// QA R16, read from the possessed AVCNPCCharacterBase.
+	UPROPERTY(VisibleAnywhere, Category = "VoxelCharacter|AI")
+	EVCNPCTemperament Temperament = EVCNPCTemperament::Aggressive;
+	float WaryEngageRadius = 400.f;
+	bool bFearsLight = false;
+	float LightFearRadius = 600.f;
+	int32 PackId = 0;
+	/** The pawn's combat component whose OnDamaged we listen to. */
+	TWeakObjectPtr<class UVCCombatComponent> BoundCombat;
 };

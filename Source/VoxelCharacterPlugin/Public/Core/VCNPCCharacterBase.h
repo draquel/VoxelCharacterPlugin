@@ -102,6 +102,36 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
 	float SightRadius = 0.f;
 
+	/** How readily it engages (hostiles). The surface spawner pushes the entry's day / night value. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI")
+	EVCNPCTemperament Temperament = EVCNPCTemperament::Aggressive;
+
+	/** Wary temperament: a hostile this close is engaged anyway. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
+	float WaryEngageRadius = 400.f;
+
+	/**
+	 * Keeps away from a target carrying a lit light (a torch, ICGFLightBearerInterface): holds at the light's edge,
+	 * backs off inside it, never attacks it, and gets no sight bonus from it (QA R16).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI")
+	bool bFearsLight = false;
+
+	/** How close a carried light keeps it (bFearsLight). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
+	float LightFearRadius = 600.f;
+
+	/** Group id shared by NPCs spawned together (0 = none): a hit on one alerts the whole pack. Set by the spawner. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "VoxelCharacter|AI")
+	int32 PackId = 0;
+
+	/**
+	 * Change the temperament at runtime (forwarded to the AI controller).
+	 * @param InTemperament New temperament
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AI")
+	void SetTemperament(EVCNPCTemperament InTemperament);
+
 	/**
 	 * Death visual when there is no physics asset to ragdoll (static-mesh placeholders): the body
 	 * topples over ToppleSeconds and sinks a little. 0 disables.

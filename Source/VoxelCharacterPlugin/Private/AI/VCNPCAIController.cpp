@@ -4,6 +4,7 @@
 #include "AI/VCPathProvider.h"
 #include "AI/VCVoxelPathProvider.h"
 #include "Core/VCNPCCharacterBase.h"
+#include "Combat/VCCombatComponent.h"
 #include "Tags/CGFGameplayTags.h"
 #include "Interfaces/CGFLightBearerInterface.h"
 #include "Utilities/CGFCombatStatics.h"
@@ -73,16 +74,95 @@ void AVCNPCAIController::SetBehavior(EVCNPCBehavior InBehavior)
 void AVCNPCAIController::AlertToTarget(AActor* NewTarget)
 {
 	APawn* MyPawn = GetPawn();
-	UWorld* World = GetWorld();
-	if (!NewTarget || !MyPawn || !World || Behavior == EVCNPCBehavior::Prey || Target.IsValid() || !IsAIEnabled())
+	if (!NewTarget || !MyPawn || Target.IsValid() || !IsAIEnabled())
 	{
 		return;
 	}
-	Target = NewTarget;
-	LastSeenTime = World->GetTimeSeconds();
-	CurrentPath.Reset();
-	State = EVCNPCAIState::Chase;
+	Provoke(NewTarget);
 	UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s AI: alerted to %s by the pack."), *MyPawn->GetName(), *NewTarget->GetName());
+}
+
+void AVCNPCAIController::SetTemperament(EVCNPCTemperament InTemperament)
+{
+	Temperament = InTemperament;
+}
+
+bool AVCNPCAIController::IsTargetFeared(const AActor* Other) const
+{
+	return bFearsLight && Behavior == EVCNPCBehavior::Hostile && Other
+		&& Other->Implements<UCGFLightBearerInterface>()
+		&& ICGFLightBearerInterface::Execute_GetCarriedLightLevel(Other) > 0.f;
+}
+
+void AVCNPCAIController::Provoke(AActor* Attacker)
+{
+	APawn* MyPawn = GetPawn();
+	UWorld* World = GetWorld();
+	if (!Attacker || !MyPawn || !World || Attacker == MyPawn || UCGFCombatStatics::IsActorDead(Attacker))
+	{
+		return;
+	}
+	Target = Attacker;
+	LastSeenTime = World->GetTimeSeconds();
+	LastThreatLocation = Attacker->GetActorLocation();
+	CurrentPath.Reset();
+	// Prey runs from it; a hostile turns on it, whatever its temperament (a light it fears still keeps it off:
+	// the next Think holds or backs off).
+	State = Behavior == EVCNPCBehavior::Prey ? EVCNPCAIState::Flee : EVCNPCAIState::Chase;
+}
+
+void AVCNPCAIController::HandlePawnDamaged(const FCGFDamageContext& Context)
+{
+	APawn* MyPawn = GetPawn();
+	AActor* Attacker = Context.InstigatorActor.Get();
+	if (!MyPawn || !Attacker || Attacker == MyPawn || !IsAIEnabled())
+	{
+		return;
+	}
+	const AVCNPCCharacterBase* NPC = Cast<AVCNPCCharacterBase>(MyPawn);
+	if ((NPC && NPC->IsDead()) || UCGFCombatStatics::IsActorDead(Attacker))
+	{
+		return;
+	}
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s AI: hit by %s, %s."), *MyPawn->GetName(), *Attacker->GetName(),
+		Behavior == EVCNPCBehavior::Prey ? TEXT("fleeing") : TEXT("retaliating"));
+	Provoke(Attacker);
+	AlertPackmates(Attacker);
+}
+
+void AVCNPCAIController::AlertPackmates(AActor* Threat)
+{
+	APawn* MyPawn = GetPawn();
+	UWorld* World = GetWorld();
+	if (!MyPawn || !World || !Threat || RetaliationAlertRadius <= 0.f)
+	{
+		return;
+	}
+	TArray<FOverlapResult> Overlaps;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCNPCPackAlert), false, MyPawn);
+	World->OverlapMultiByObjectType(Overlaps, MyPawn->GetActorLocation(), FQuat::Identity,
+		FCollisionObjectQueryParams(ECC_Pawn), FCollisionShape::MakeSphere(RetaliationAlertRadius), Params);
+	int32 Alerted = 0;
+	for (const FOverlapResult& Overlap : Overlaps)
+	{
+		APawn* Other = Cast<APawn>(Overlap.GetActor());
+		if (!Other || Other == MyPawn)
+		{
+			continue;
+		}
+		const AVCNPCCharacterBase* OtherNPC = Cast<AVCNPCCharacterBase>(Other);
+		const bool bSamePack = PackId != 0 ? (OtherNPC && OtherNPC->PackId == PackId) : Other->GetClass() == MyPawn->GetClass();
+		AVCNPCAIController* Mate = bSamePack ? Cast<AVCNPCAIController>(Other->GetController()) : nullptr;
+		if (Mate && !Mate->GetTarget())
+		{
+			Mate->AlertToTarget(Threat);
+			++Alerted;
+		}
+	}
+	if (Alerted > 0)
+	{
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s AI: %d pack mate(s) alerted to %s."), *MyPawn->GetName(), Alerted, *Threat->GetName());
+	}
 }
 
 UVCVoxelPathProvider* AVCNPCAIController::GetVoxelProvider() const
@@ -131,6 +211,17 @@ EVCNPCAIState AVCNPCAIController::DecideState(const FVCNPCAIDecisionInput& In, E
 		{
 			return EVCNPCAIState::Return;
 		}
+		// A target carrying a light it fears: never attack it. Back out of the light, hold at its edge, close in
+		// only from farther out (QA R16). Fleeing keeps going until it is a little past the edge.
+		if (In.bTargetFeared)
+		{
+			const float BackOffTo = Current == EVCNPCAIState::Flee ? In.FearRadius + In.FearHoldBand * 0.5f : In.FearRadius;
+			if (In.DistanceToTarget < BackOffTo)
+			{
+				return EVCNPCAIState::Flee;
+			}
+			return In.DistanceToTarget <= In.FearRadius + In.FearHoldBand ? EVCNPCAIState::Hold : EVCNPCAIState::Chase;
+		}
 		return In.DistanceToTarget <= InMeleeRange ? EVCNPCAIState::Attack : EVCNPCAIState::Chase;
 	}
 
@@ -166,6 +257,17 @@ void AVCNPCAIController::OnPossess(APawn* InPawn)
 		{
 			SightRadius = NPC->SightRadius;
 		}
+		Temperament = NPC->Temperament;
+		WaryEngageRadius = NPC->WaryEngageRadius;
+		bFearsLight = NPC->bFearsLight;
+		LightFearRadius = NPC->LightFearRadius;
+		PackId = NPC->PackId;
+	}
+	// Retaliation: a hit turns the NPC (and its pack) on the attacker (server: AI controllers live there).
+	if (UVCCombatComponent* Combat = InPawn ? InPawn->FindComponentByClass<UVCCombatComponent>() : nullptr)
+	{
+		Combat->OnDamaged.AddUniqueDynamic(this, &AVCNPCAIController::HandlePawnDamaged);
+		BoundCombat = Combat;
 	}
 	// A creature that roams must be allowed to chase what it sees from the edge of its roaming area,
 	// otherwise it starts beyond the leash, turns back, re-enters range and flips Chase / Return forever.
@@ -194,6 +296,11 @@ void AVCNPCAIController::OnPossess(APawn* InPawn)
 
 void AVCNPCAIController::OnUnPossess()
 {
+	if (UVCCombatComponent* Combat = BoundCombat.Get())
+	{
+		Combat->OnDamaged.RemoveDynamic(this, &AVCNPCAIController::HandlePawnDamaged);
+	}
+	BoundCombat.Reset();
 	Target.Reset();
 	CurrentPath.Reset();
 	State = EVCNPCAIState::Idle;
@@ -253,6 +360,15 @@ void AVCNPCAIController::Tick(float DeltaSeconds)
 		break;
 	case EVCNPCAIState::Flee:
 		TickFlee(DeltaSeconds, Now);
+		break;
+	case EVCNPCAIState::Hold:
+		// At the edge of a light it fears: stand and watch the target.
+		if (const AActor* T = Target.Get())
+		{
+			const FRotator Face(0.f, (T->GetActorLocation() - MyPawn->GetActorLocation()).Rotation().Yaw, 0.f);
+			SetControlRotation(Face);
+			MyPawn->SetActorRotation(Face);
+		}
 		break;
 	case EVCNPCAIState::Return:
 		if (CurrentPath.Num() == 0)
@@ -326,6 +442,9 @@ void AVCNPCAIController::Think()
 	In.bPrey = Behavior == EVCNPCBehavior::Prey;
 	In.bCanWander = WanderRadius > 0.f;
 	In.bThreatInFleeRange = T != nullptr && In.DistanceToTarget <= FleeRadius;
+	In.bTargetFeared = T != nullptr && IsTargetFeared(T);
+	In.FearRadius = LightFearRadius;
+	In.FearHoldBand = FearHoldBand;
 
 	const EVCNPCAIState Next = DecideState(In, State, MeleeRange, LoseSightSeconds, LeashDistance);
 	if (Next != State)
@@ -348,7 +467,7 @@ void AVCNPCAIController::Think()
 		}
 		CurrentPath.Reset();
 		State = Next;
-		if (State == EVCNPCAIState::Idle || State == EVCNPCAIState::Attack)
+		if (State == EVCNPCAIState::Idle || State == EVCNPCAIState::Attack || State == EVCNPCAIState::Hold)
 		{
 			if (UCharacterMovementComponent* Move = MyPawn->FindComponentByClass<UCharacterMovementComponent>())
 			{
@@ -374,8 +493,12 @@ AActor* AVCNPCAIController::FindTarget() const
 	}
 	TArray<FOverlapResult> Overlaps;
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCNPCSight), false, MyPawn);
-	// Gather out to the lit-target reach; unlit candidates are filtered back to SightRadius below.
-	const float GatherRadius = SightRadius * FMath::Max(LitTargetSightMultiplier, 1.f);
+	// A wary NPC only engages what comes close (attackers reach it through HandlePawnDamaged instead), and a
+	// light-fearing one gets no sight bonus from a torch (a torch should repel it, not draw it in; QA R16).
+	const float Sight = Temperament == EVCNPCTemperament::Wary ? FMath::Min(SightRadius, WaryEngageRadius) : SightRadius;
+	const float LitMultiplier = bFearsLight ? 1.f : LitTargetSightMultiplier;
+	// Gather out to the lit-target reach; unlit candidates are filtered back to Sight below.
+	const float GatherRadius = Sight * FMath::Max(LitMultiplier, 1.f);
 	World->OverlapMultiByObjectType(Overlaps, MyPawn->GetActorLocation(), FQuat::Identity,
 		FCollisionObjectQueryParams(ECC_Pawn), FCollisionShape::MakeSphere(GatherRadius), Params);
 
@@ -395,7 +518,7 @@ AActor* AVCNPCAIController::FindTarget() const
 		const float Dist = FVector::Dist(Other->GetActorLocation(), MyPawn->GetActorLocation());
 		const bool bLit = Other->Implements<UCGFLightBearerInterface>()
 			&& ICGFLightBearerInterface::Execute_GetCarriedLightLevel(Other) > 0.f;
-		if (!IsWithinSight(Dist, SightRadius, bLit, LitTargetSightMultiplier))
+		if (!IsWithinSight(Dist, Sight, bLit, LitMultiplier))
 		{
 			continue;
 		}

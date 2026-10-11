@@ -171,6 +171,39 @@ bool FVCNPCAI_LitTargetSight::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// Light fear (QA R16): a hostile that fears light never attacks a torch bearer. It backs out of the light,
+// holds at the edge, closes in only from farther out, and attacks again once the light goes out.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCNPCAI_LightFear, "VoxelCharacter.AI.LightFear", VC_NPCAI_FLAGS)
+bool FVCNPCAI_LightFear::RunTest(const FString& Parameters)
+{
+	using namespace VCNPCAITestHelpers;
+
+	FVCNPCAIDecisionInput In;
+	In.bHasTarget = true;
+	In.bTargetVisible = true;
+	In.bTargetFeared = true;
+	In.FearRadius = 600.f;
+	In.FearHoldBand = 350.f;
+
+	In.DistanceToTarget = 150.f; // inside melee range
+	TestEqual(TEXT("Feared target in melee range -> backs off, never attacks"), Decide(In, EVCNPCAIState::Chase), EVCNPCAIState::Flee);
+	In.DistanceToTarget = 700.f;
+	TestEqual(TEXT("Just past the light -> Hold"), Decide(In, EVCNPCAIState::Chase), EVCNPCAIState::Hold);
+	In.DistanceToTarget = 1200.f;
+	TestEqual(TEXT("Beyond the hold band -> closes in"), Decide(In, EVCNPCAIState::Hold), EVCNPCAIState::Chase);
+	In.DistanceToTarget = 700.f;
+	TestEqual(TEXT("Fleeing keeps going until past the band's middle"), Decide(In, EVCNPCAIState::Flee), EVCNPCAIState::Flee);
+	In.DistanceToTarget = 800.f;
+	TestEqual(TEXT("...then holds"), Decide(In, EVCNPCAIState::Flee), EVCNPCAIState::Hold);
+
+	In.bTargetFeared = false;
+	In.DistanceToTarget = 150.f;
+	TestEqual(TEXT("Light out -> attacks"), Decide(In, EVCNPCAIState::Hold), EVCNPCAIState::Attack);
+	return true;
+}
+
 #undef VC_NPCAI_FLAGS
 
 #endif // WITH_AUTOMATION_TESTS
