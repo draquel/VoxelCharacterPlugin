@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "AIController.h"
+#include "Core/VCTypes.h"
 #include "VCNPCAIController.generated.h"
 
 class IVCPathProvider;
@@ -22,6 +23,10 @@ enum class EVCNPCAIState : uint8
 	Attack,
 	/** Lost the target or leashed: walking back to the route. */
 	Return,
+	/** Roaming around home while nothing is going on (feature 10). */
+	Wander,
+	/** Prey: running from a threat (feature 10). */
+	Flee,
 };
 
 /** Everything the state decision needs, gathered once per perception tick (pure input: testable). */
@@ -39,6 +44,12 @@ struct VOXELCHARACTERPLUGIN_API FVCNPCAIDecisionInput
 	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") float SecondsSinceSeen = 0.f;
 	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") float DistanceFromRoute = 0.f;
 	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") bool bAtRoute = true;
+	/** Prey behaviour: the target is a threat to run from, never something to attack (feature 10). */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") bool bPrey = false;
+	/** A wander radius is set, so idling turns into roaming. */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") bool bCanWander = false;
+	/** The threat is within FleeRadius (prey starts running; it keeps running while the threat is engaged). */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") bool bThreatInFleeRange = false;
 };
 
 /**
@@ -107,6 +118,50 @@ public:
 	/** Seconds without progress toward the current waypoint before it is skipped (blocked by a prop / corner). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0.5"))
 	float StuckSeconds = 2.0f;
+
+	// --- Surface behaviours (feature 10) ---
+
+	/** Roam this far around home when idle (0 = never wander). Set from AVCNPCCharacterBase::WanderRadius on possess. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI|Surface", meta = (ClampMin = "0"))
+	float WanderRadius = 0.f;
+
+	/** Pause between wander legs (seconds, random in range). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI|Surface", meta = (ClampMin = "0"))
+	float WanderWaitMin = 2.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI|Surface", meta = (ClampMin = "0"))
+	float WanderWaitMax = 6.f;
+
+	/** Prey starts fleeing when a threat it can see is this close. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI|Surface", meta = (ClampMin = "0"))
+	float FleeRadius = 900.f;
+
+	/** Length of each flee leg away from the threat. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI|Surface", meta = (ClampMin = "100"))
+	float FleeDistance = 2000.f;
+
+	/** Create a UVCVoxelPathProvider on possess when no provider was set and the world has surface navigation. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI|Surface")
+	bool bUseVoxelNavigation = true;
+
+	/** Hostiles: when this one starts chasing, idle NPCs of the same class within this radius join (0 = none). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI|Surface", meta = (ClampMin = "0"))
+	float PackRadius = 0.f;
+
+	/** Hostile hunts, Prey flees. Read from the possessed AVCNPCCharacterBase; settable for other pawns. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AI")
+	void SetBehavior(EVCNPCBehavior InBehavior);
+
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|AI")
+	EVCNPCBehavior GetBehavior() const { return Behavior; }
+
+	/** Home = where wandering is centred and the leash is measured from (the spawn point by default). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|AI")
+	FVector GetHomeLocation() const { return LeashOrigin; }
+
+	/** A pack mate saw something: start chasing it (hostiles only; ignored while already engaged). */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AI")
+	void AlertToTarget(AActor* NewTarget);
 
 	// --- Setup ---
 
@@ -182,6 +237,14 @@ protected:
 
 	float DistanceFromRoute() const;
 
+	// Feature 10
+	void TickWander(float DeltaSeconds, double Now);
+	void TickFlee(float DeltaSeconds, double Now);
+	bool PickWanderGoal(FVector& OutGoal) const;
+	bool PickFleeGoal(const FVector& ThreatLocation, FVector& OutGoal) const;
+	void AlertPack(AActor* NewTarget);
+	class UVCVoxelPathProvider* GetVoxelProvider() const;
+
 	UPROPERTY(VisibleAnywhere, Category = "VoxelCharacter|AI")
 	EVCNPCAIState State = EVCNPCAIState::Idle;
 
@@ -205,4 +268,12 @@ protected:
 	// Stuck detection: the best distance to the current waypoint and when it last improved.
 	float BestWaypointDistance = TNumericLimits<float>::Max();
 	double LastProgressTime = -1.0;
+
+	UPROPERTY(VisibleAnywhere, Category = "VoxelCharacter|AI")
+	EVCNPCBehavior Behavior = EVCNPCBehavior::Hostile;
+	double WanderWaitUntil = 0.0;
+	double LastFleePathTime = -1.0;
+	/** A voxel search just failed: don't run another before this (no straight-line fallback to walk meanwhile). */
+	double NextPathRetryTime = 0.0;
+	FVector LastThreatLocation = FVector::ZeroVector;
 };

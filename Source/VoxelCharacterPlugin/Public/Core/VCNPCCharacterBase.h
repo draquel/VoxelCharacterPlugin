@@ -80,6 +80,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI")
 	bool bAIEnabled = true;
 
+	/** Faction applied to the combat component at BeginPlay when set (Faction.Animal for wildlife); unset = the component's default (Monster). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (Categories = "Faction"))
+	FGameplayTag Faction;
+
+	/** Hostile hunts, Prey flees (feature 10). The AI controller reads it on possess. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI")
+	EVCNPCBehavior Behavior = EVCNPCBehavior::Hostile;
+
+	/** Roam this far around the spawn point when there is nothing to do (0 = stand still; dungeon enemies patrol instead). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
+	float WanderRadius = 0.f;
+
+	/** Hostiles: idle NPCs of this class within the radius join a chase this one starts (0 = lone hunter). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
+	float PackRadius = 0.f;
+
+	/** Perception radius for this creature (0 = the controller's default, 1200). Wolves hunt from further out. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
+	float SightRadius = 0.f;
+
 	/**
 	 * Death visual when there is no physics asset to ragdoll (static-mesh placeholders): the body
 	 * topples over ToppleSeconds and sinks a little. 0 disables.

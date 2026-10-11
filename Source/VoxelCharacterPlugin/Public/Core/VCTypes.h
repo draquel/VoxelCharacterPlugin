@@ -79,6 +79,16 @@ enum class EVCOutOfHealthPolicy : uint8
 	Downed,
 };
 
+/** How an NPC behaves on its own (feature 10): hunts what it sees, or runs from it. */
+UENUM(BlueprintType)
+enum class EVCNPCBehavior : uint8
+{
+	/** Chase and attack hostiles (dungeon enemies, wolves). */
+	Hostile,
+	/** Never attacks; flees from any hostile that comes close (deer). */
+	Prey,
+};
+
 /** Where AVCGameModeBase puts a player back after death. */
 UENUM(BlueprintType)
 enum class EVCRespawnPolicy : uint8
