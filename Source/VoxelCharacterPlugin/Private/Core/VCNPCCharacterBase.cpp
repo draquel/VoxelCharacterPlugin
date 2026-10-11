@@ -17,9 +17,10 @@
 #include "TimerManager.h"
 
 AVCNPCCharacterBase::AVCNPCCharacterBase(const FObjectInitializer& ObjectInitializer)
-	// The voxel-aware movement component (same as the player): voxel collision is double-sided trimesh, which
-	// returns inverted and edge normals; the stock component then fails to land on walkable slopes, stays in
-	// Falling with no ground friction and slides downhill (feature 10 surface creatures skied into the sea).
+	// The voxel-aware movement component (same as the player): capsule sweeps against the voxel trimesh can return
+	// edge normals that the stock component rejects as unwalkable, so it fails to land on walkable slopes, stays in
+	// Falling with no ground friction and slides downhill (feature 10 surface creatures skied into the sea). The
+	// inverted face normals that once made this worse are fixed at the source (VoxelCollisionManager winding).
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UVCMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
 	// Tick only while toppling after death (enabled in HandleDied).

@@ -157,9 +157,12 @@ attacker builds FCGFDamageContext
   instead of skipping the waypoint. Wander / flee goals are projected onto the surface and checked with `IsWalkable`.
   Roaming NPCs stretch `LeashDistance` to at least `WanderRadius + SightRadius` on possess (else Chase / Return flip-flop
   at the edge of the roaming area), and a failed voxel search is retried after 0.75 s rather than every frame.
-- `AVCNPCCharacterBase` uses `UVCMovementComponent` (like the player) since feature 10: voxel collision is double-sided
-  trimesh with inverted / edge normals, and the stock component's `FindFloor` / `IsValidLandingSpot` reject walkable
-  voxel slopes — an NPC then stays in Falling (no ground friction) and slides downhill for kilometres.
+- `AVCNPCCharacterBase` uses `UVCMovementComponent` (like the player) since feature 10: capsule sweeps against the voxel
+  trimesh can return edge normals, and the stock component's `FindFloor` / `IsValidLandingSpot` reject walkable voxel
+  slopes — an NPC then stays in Falling (no ground friction) and slides downhill for kilometres. `UVCMovementComponent`
+  re-checks such floors with a line trace. It no longer flips downward normals: the collision trimesh used to be wound
+  backwards (top faces pointing down) and is now wound the way Chaos expects (QA refinement R1), so a downward normal
+  under the feet is a real underside.
 - Light (feature 7): a hostile implementing `ICGFLightBearerInterface` with a lit light is gathered out to `SightRadius * LitTargetSightMultiplier` (1.5); unlit candidates keep the base radius (`IsWithinSight`, pure, tested). No darkness malus yet.
 
 ### Carried light (feature 7)
