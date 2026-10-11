@@ -14,6 +14,8 @@ class UVCCharacterAttributeSet;
 class UVCCombatAttributeSet;
 class UVCCombatComponent;
 class UGameplayAbility;
+class UWidgetComponent;
+class UVCNPCHealthBarWidget;
 
 /**
  * Base pawn for anything that fights but is not a player: dungeon enemies,
@@ -111,6 +113,26 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
 	bool IsDead() const;
 
+	/**
+	 * Show a floating health bar over this NPC on screens that render it (not on dedicated servers): hidden until its
+	 * health first changes, then shown for HealthBarVisibleSeconds after each change, removed on death. Off by default
+	 * (a per-NPC choice, maybe a skill later); the training dummy turns it on. vc.UI.NPCHealthBars: 0 = never,
+	 * 1 = this flag (default), 2 = every NPC.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|UI")
+	bool bShowHealthBar = false;
+
+	/** Seconds the bar stays up after the last health change. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|UI", meta = (ClampMin = "0.5"))
+	float HealthBarVisibleSeconds = 5.f;
+
+	/**
+	 * Turn the floating health bar on or off at runtime (creates it when needed).
+	 * @param bShow True to show the bar on health changes
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void SetShowHealthBar(bool bShow);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -131,6 +153,23 @@ protected:
 	TObjectPtr<UVCCombatAttributeSet> CombatAttributes;
 
 	FTimerHandle DestroyTimerHandle;
+
+	/** Screen-space host of the floating health bar (created at runtime while a bar is wanted). */
+	UPROPERTY(Transient)
+	TObjectPtr<UWidgetComponent> HealthBarComponent;
+
+	/** Hides the bar HealthBarVisibleSeconds after the last change. */
+	FTimerHandle HealthBarHideTimer;
+
+	/** Create / remove the bar to match bShowHealthBar and vc.UI.NPCHealthBars. */
+	void UpdateHealthBar();
+
+	/** Health changed: update the bar, show it and restart the hide timer. */
+	UFUNCTION()
+	void HandleHealthBarHealthChanged(float NewHealth, float OldHealth, float MaxHealth);
+
+	/** Hide the bar (timer). */
+	void HideHealthBar();
 
 	// Topple animation state (every machine; starts in HandleDied when no physics asset exists).
 	bool bToppling = false;

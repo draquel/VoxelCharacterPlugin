@@ -54,9 +54,12 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel", meta = (ClampMin = "0.0"))
 	float SwimmingEntryDepth = 40.f;
 
-	/** Water depth below which the character exits swimming and returns to walking. */
+	/**
+	 * Water depth below which the character exits swimming onto a walkable floor. Kept under SwimmingEntryDepth so the
+	 * two do not flicker; 30 lets a swimmer stand up on a shelving beach instead of crawling until nearly dry (QA R11).
+	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel", meta = (ClampMin = "0.0"))
-	float SwimmingExitDepth = 10.f;
+	float SwimmingExitDepth = 30.f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
 	float VoxelSurfaceGripMultiplier = 1.0f;
@@ -90,6 +93,13 @@ public:
 	/** Passive upward force when idle/no vertical input, pushing character toward surface. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0"))
 	float SurfaceBuoyancyStrength = 150.f;
+
+	/**
+	 * Swimming into a bank near the surface climbs onto it when a walkable ledge sits within the capsule half height
+	 * plus this much above the feet (QA R11: swimmers slid along the shore instead of getting out).
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0"))
+	float ShoreClimbHeight = 50.f;
 
 	/** Dampens upward velocity near water surface to prevent breaching. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0", ClampMax = "1.0"))
@@ -127,6 +137,82 @@ public:
 	/** Max voxels scanned upward for headroom when lifting an embedded pawn. */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Movement|Voxel", meta = (ClampMin = "1"))
 	int32 EmbedResolveMaxScanVoxels = 64;
+
+	// --- Sprint (QA R10) ---
+
+	/** Walking speed multiplier while sprinting. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Sprint", meta = (ClampMin = "1.0"))
+	float SprintSpeedMultiplier = 1.6f;
+
+	/** Stamina spent per second of sprinting (server). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Sprint", meta = (ClampMin = "0.0"))
+	float SprintStaminaPerSecond = 15.f;
+
+	/** Stamina regained per second once not sprinting for StaminaRegenDelay (server). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Sprint", meta = (ClampMin = "0.0"))
+	float StaminaRegenPerSecond = 12.f;
+
+	/** Seconds after sprinting before stamina starts to come back. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Sprint", meta = (ClampMin = "0.0"))
+	float StaminaRegenDelay = 1.f;
+
+	/** After running out, sprinting stays off until stamina refills to this much (no stutter at zero). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Sprint", meta = (ClampMin = "0.0"))
+	float SprintResumeStamina = 15.f;
+
+	/**
+	 * Ask to sprint (the held sprint key). Travels with the saved move, so clients predict it.
+	 * @param bWantsSprint True while the key is held
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Movement|Sprint")
+	void SetSprinting(bool bWantsSprint);
+
+	/**
+	 * Sprinting right now: wanted, walking on the ground, trying to move, not crouched and not out of stamina.
+	 * @return True while the sprint speed applies
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Sprint")
+	bool IsSprinting() const;
+
+	/** Sprint input state (saved-move flag FLAG_Custom_0). */
+	bool bWantsToSprint = false;
+
+	/**
+	 * Hold the swim-rise key (the jump key while swimming). ACharacter drops bPressedJump after one frame, so a held
+	 * key needs its own state. Travels with the saved move.
+	 * @param bWantsAscend True while the key is held
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Movement|Swimming")
+	void SetWantsToAscend(bool bWantsAscend);
+
+	/** Swim-rise input state (saved-move flag FLAG_Custom_1). */
+	bool bWantsToAscend = false;
+
+	// --- Breath (QA R11) ---
+
+	/** Breath lost per second while the head is underwater (Breath is in seconds of air). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Breath", meta = (ClampMin = "0.0"))
+	float BreathLossPerSecond = 1.f;
+
+	/** Breath regained per second with the head above water. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Breath", meta = (ClampMin = "0.0"))
+	float BreathRegenPerSecond = 10.f;
+
+	/** Pure damage per second once out of breath underwater. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Breath", meta = (ClampMin = "0.0"))
+	float DrowningDamagePerSecond = 10.f;
+
+	/** Head height above the capsule centre, as a fraction of the half height, used for the underwater check. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Breath", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float HeadHeightFraction = 0.8f;
+
+	/** True while the head is underwater (refreshed ten times a second on the authority). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Breath")
+	bool IsHeadUnderwater() const { return bHeadUnderwater; }
+
+	virtual float GetMaxSpeed() const override;
+	virtual void UpdateFromCompressedFlags(uint8 Flags) override;
+	virtual FNetworkPredictionData_Client* GetPredictionData_Client() const override;
 
 protected:
 	/** Cached terrain data, refreshed every TerrainCacheDuration seconds. */
@@ -193,4 +279,34 @@ protected:
 
 	/** Seconds until the next attempt to bind OnCollisionReady. */
 	float CollisionBindRetryTimer = 0.f;
+
+	/** Ran out of stamina: sprint stays off until stamina refills to SprintResumeStamina (every machine). */
+	bool bSprintExhausted = false;
+
+	/** Seconds since the last sprinting tick (regeneration delay; authority). */
+	float TimeSinceSprint = 0.f;
+
+	/** Stamina change accumulated between attribute writes (written ~10 times a second; authority). */
+	float PendingStaminaDelta = 0.f;
+	float StaminaWriteTimer = 0.f;
+
+	/** Spend stamina while sprinting, regenerate after a delay (authority). */
+	void TickStamina(float DeltaTime);
+
+	/**
+	 * Swimming into a bank (Hit): if the swimmer is near the surface and a walkable ledge is within reach ahead, move onto
+	 * it and switch to walking.
+	 * @return True if the swimmer climbed out
+	 */
+	bool TryClimbOutOfWater(const FHitResult& Hit);
+
+	/** Drain breath with the head underwater, refill above, drown at zero (authority, player pawns). */
+	void TickBreath(float DeltaTime);
+
+	bool bHeadUnderwater = false;
+	float BreathTimer = 0.f;
+	float DrowningTimer = 0.f;
+
+	/** Owner's current stamina, or a negative value when it has no stamina attribute. */
+	float GetOwnerStamina() const;
 };

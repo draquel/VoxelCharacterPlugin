@@ -12,6 +12,8 @@ UVCCharacterAttributeSet::UVCCharacterAttributeSet()
 	InitMaxHealth(100.f);
 	InitStamina(100.f);
 	InitMaxStamina(100.f);
+	InitBreath(20.f);
+	InitMaxBreath(20.f);
 	InitMoveSpeedMultiplier(1.f);
 	InitMiningSpeed(1.f);
 	InitInteractionRange(300.f);
@@ -30,6 +32,8 @@ void UVCCharacterAttributeSet::GetLifetimeReplicatedProps(TArray<FLifetimeProper
 	DOREPLIFETIME_CONDITION_NOTIFY(UVCCharacterAttributeSet, MaxHealth, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UVCCharacterAttributeSet, Stamina, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UVCCharacterAttributeSet, MaxStamina, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UVCCharacterAttributeSet, Breath, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UVCCharacterAttributeSet, MaxBreath, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UVCCharacterAttributeSet, MoveSpeedMultiplier, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UVCCharacterAttributeSet, MiningSpeed, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UVCCharacterAttributeSet, InteractionRange, COND_None, REPNOTIFY_Always);
@@ -50,6 +54,10 @@ void UVCCharacterAttributeSet::PreAttributeChange(const FGameplayAttribute& Attr
 	else if (Attribute == GetStaminaAttribute())
 	{
 		NewValue = FMath::Clamp(NewValue, 0.f, GetMaxStamina());
+	}
+	else if (Attribute == GetBreathAttribute())
+	{
+		NewValue = FMath::Clamp(NewValue, 0.f, GetMaxBreath());
 	}
 	else if (Attribute == GetMoveSpeedMultiplierAttribute())
 	{
@@ -75,6 +83,10 @@ void UVCCharacterAttributeSet::PostAttributeChange(const FGameplayAttribute& Att
 	else if (Attribute == GetMaxStaminaAttribute() && GetStamina() > NewValue)
 	{
 		ASC->ApplyModToAttribute(GetStaminaAttribute(), EGameplayModOp::Override, NewValue);
+	}
+	else if (Attribute == GetMaxBreathAttribute() && GetBreath() > NewValue)
+	{
+		ASC->ApplyModToAttribute(GetBreathAttribute(), EGameplayModOp::Override, NewValue);
 	}
 }
 
@@ -119,6 +131,16 @@ void UVCCharacterAttributeSet::OnRep_MaxHealth(const FGameplayAttributeData& Old
 void UVCCharacterAttributeSet::OnRep_Stamina(const FGameplayAttributeData& OldValue)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UVCCharacterAttributeSet, Stamina, OldValue);
+}
+
+void UVCCharacterAttributeSet::OnRep_Breath(const FGameplayAttributeData& OldValue)
+{
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UVCCharacterAttributeSet, Breath, OldValue);
+}
+
+void UVCCharacterAttributeSet::OnRep_MaxBreath(const FGameplayAttributeData& OldValue)
+{
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UVCCharacterAttributeSet, MaxBreath, OldValue);
 }
 
 void UVCCharacterAttributeSet::OnRep_MaxStamina(const FGameplayAttributeData& OldValue)

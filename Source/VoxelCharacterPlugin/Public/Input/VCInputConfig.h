@@ -83,6 +83,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_Craft;
 
+	/** Hold to sprint (spends stamina). LeftShift in IMC_Gameplay. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_Sprint;
+
+	/** Hold to crouch (slow walk); dives while swimming. LeftCtrl in IMC_Gameplay. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_Crouch;
+
 	// ==================== Mapping Contexts ====================
 
 	/** Base gameplay context — always active at priority 0. */

@@ -119,6 +119,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0.5"))
 	float StuckSeconds = 2.0f;
 
+	/**
+	 * A walker stalled this long against a low obstacle on its path jumps it (QA R13: a one-voxel edit used to stop
+	 * deer and wolves until the stuck handler routed around). 0 disables auto-jumping.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
+	float AutoJumpAfterSeconds = 0.4f;
+
+	/** Tallest obstacle (above the feet) an auto-jump tries; taller ones are left to the stuck handler. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
+	float MaxAutoJumpHeight = 110.f;
+
 	// --- Surface behaviours (feature 10) ---
 
 	/** Roam this far around home when idle (0 = never wander). Set from AVCNPCCharacterBase::WanderRadius on possess. */
@@ -268,6 +279,16 @@ protected:
 	// Stuck detection: the best distance to the current waypoint and when it last improved.
 	float BestWaypointDistance = TNumericLimits<float>::Max();
 	double LastProgressTime = -1.0;
+	// Auto-jump: when the last hop started, and hops since the last progress (capped so a wall falls to the stuck handler).
+	double LastAutoJumpTime = -1.0;
+	int32 AutoJumpsSinceProgress = 0;
+
+	/**
+	 * Hop a low obstacle between the pawn and Waypoint: something blocks at knee height just ahead and its top is above
+	 * a step but within MaxAutoJumpHeight.
+	 * @return True if the pawn jumped
+	 */
+	bool TryAutoJump(APawn* MyPawn, const FVector& Waypoint);
 
 	UPROPERTY(VisibleAnywhere, Category = "VoxelCharacter|AI")
 	EVCNPCBehavior Behavior = EVCNPCBehavior::Hostile;

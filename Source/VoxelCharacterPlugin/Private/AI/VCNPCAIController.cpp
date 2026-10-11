@@ -496,10 +496,28 @@ bool AVCNPCAIController::FollowPath(float DeltaSeconds)
 	}
 	// Stuck on a prop or a corner: give up on this waypoint rather than pushing forever.
 	const float Distance = FVector::Dist2D(MyPawn->GetActorLocation(), CurrentPath[PathIndex]);
+	// Release the jump key shortly after a hop (an AI holding it would bounce again on landing).
+	if (LastAutoJumpTime >= 0.0 && Now - LastAutoJumpTime > 0.15)
+	{
+		if (ACharacter* NPC = Cast<ACharacter>(MyPawn))
+		{
+			NPC->StopJumping();
+		}
+	}
 	if (Distance < BestWaypointDistance - 5.f)
 	{
 		BestWaypointDistance = Distance;
 		LastProgressTime = Now;
+		AutoJumpsSinceProgress = 0;
+	}
+	else if (AutoJumpAfterSeconds > 0.f && AutoJumpsSinceProgress < 2 && LastProgressTime >= 0.0
+		&& Now - LastProgressTime > AutoJumpAfterSeconds && (LastAutoJumpTime < 0.0 || Now - LastAutoJumpTime > 1.0)
+		&& TryAutoJump(MyPawn, CurrentPath[PathIndex]))
+	{
+		// Low obstacle across the path (a one-voxel edit): hop it, and give the hop its own time before re-routing.
+		LastAutoJumpTime = Now;
+		LastProgressTime = Now;
+		++AutoJumpsSinceProgress;
 	}
 	else if (LastProgressTime >= 0.0 && Now - LastProgressTime > StuckSeconds)
 	{
@@ -533,6 +551,51 @@ bool AVCNPCAIController::FollowPath(float DeltaSeconds)
 	{
 		MyPawn->AddMovementInput(Dir, 1.f);
 	}
+	return true;
+}
+
+bool AVCNPCAIController::TryAutoJump(APawn* MyPawn, const FVector& Waypoint)
+{
+	ACharacter* NPC = Cast<ACharacter>(MyPawn);
+	const UCharacterMovementComponent* Movement = NPC ? NPC->GetCharacterMovement() : nullptr;
+	UWorld* World = GetWorld();
+	if (!NPC || !Movement || !World || !Movement->IsMovingOnGround())
+	{
+		return false;
+	}
+	const FVector Location = NPC->GetActorLocation();
+	const FVector Dir = (Waypoint - Location).GetSafeNormal2D();
+	if (Dir.IsNearlyZero())
+	{
+		return false;
+	}
+	const float HalfHeight = NPC->GetSimpleCollisionHalfHeight();
+	const float Radius = NPC->GetSimpleCollisionRadius();
+	const float FeetZ = Location.Z - HalfHeight;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(NPCAutoJump), false, NPC);
+
+	// Something blocks at knee height just ahead...
+	FHitResult Wall;
+	const FVector KneeStart(Location.X, Location.Y, FeetZ + 30.f);
+	if (!World->LineTraceSingleByChannel(Wall, KneeStart, KneeStart + Dir * (Radius + 60.f), ECC_WorldStatic, Params))
+	{
+		return false;
+	}
+	// ...and its top is reachable: above a step, within a jump (no top in reach = a wall, left to the stuck handler).
+	FHitResult Top;
+	const FVector TopStart = FVector(Wall.ImpactPoint.X, Wall.ImpactPoint.Y, FeetZ + MaxAutoJumpHeight + 10.f) + Dir * 15.f;
+	if (!World->LineTraceSingleByChannel(Top, TopStart, TopStart - FVector(0.f, 0.f, MaxAutoJumpHeight + 40.f), ECC_WorldStatic, Params)
+		|| Top.bStartPenetrating)
+	{
+		return false;
+	}
+	const float Rise = Top.ImpactPoint.Z - FeetZ;
+	if (Rise <= Movement->MaxStepHeight * 0.8f || Rise > MaxAutoJumpHeight)
+	{
+		return false;
+	}
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s AI: jumping a %.0f uu obstacle."), *MyPawn->GetName(), Rise);
+	NPC->Jump();
 	return true;
 }
 
