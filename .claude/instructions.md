@@ -152,6 +152,19 @@ attacker builds FCGFDamageContext
 - `AVCCharacterBase` implements `ICGFLightBearerInterface` (CommonGameFramework) on top of the equipment manager's carried-light API: `GetCarriedLightLevel` (every machine), `ConsumeCarriedLightFuel` (authority), plus `GetCarriedLightFuel(Fuel, Max)` and the `OnCarriedLightChanged(bLit, Fuel, Max)` delegate (forwarded from `UEquipmentManagerComponent::OnCarriedLightChanged`, reporting the strongest light). The off-hand slot accepts `Item.Category.Light`.
 - `UVCVitalsWidget` shows "Torch M:SS" (amber, red under a minute) under the EDIT cue while a light burns (`FormatCarriedLight`, pure). A burnt-out light item (`OnItemBroken` on the authority) reaches the owning client through `Client_LightBurntOut` → toast "Your torch burnt out".
 
+### Persistence hooks (feature 9)
+- `AVCPlayerState::GetSaveKey()` strips the Null online subsystem's per-session GUID (`<Computer>-<32 hex>` ->
+  `<Computer>`), so a standalone / PIE player keeps one key across sessions; real online ids are used verbatim.
+- The engine drops the pawn BEFORE `Logout`: a local controller unpossesses (`APlayerController::Destroyed` ->
+  `UnPossess`, PIE stop / quit) and a remote one gets `PawnLeavingGame` (disconnect). `AVCPlayerController` calls
+  `AVCPlayerState::CaptureAvatarState()` from both (items -> pending snapshot, last transform, vitals unless dead),
+  and `AVCGameModeBase::Logout` broadcasts `OnPlayerLoggingOut` while the state is valid. `ExportSaveState` without
+  a pawn returns those captured values.
+
+- `AVCGameModeBase::OnPlayerLoggingIn(PlayerState)` fires in `PostLogin` before the first pawn spawns; `SpawnDefaultPawnFor` honours `AVCPlayerState::PendingSpawnTransform` (a loaded save puts the player back where they stood; the terrain-ready spawn settles the height).
+- `AVCPlayerState::ExportSaveState / ImportSaveState(FVCPlayerSaveState)`: items (the live avatar's `BuildItemSnapshot`, or the pending snapshot between avatars), progression, rest point, last transform, vitals. Import fills the pending snapshot (restored on the next possess), broadcasts progression, sets the rest point, the pending spawn transform and pending vitals (`ApplyPendingVitals` after the items). `GetSaveKey()` = unique net id or `Local0`.
+- `TryPlaceItem` tags spawned actors `Placed` so the save system can list them.
+
 ### Surface gameplay (feature 8)
 
 - **Gathering:** `UVCGatherTable` (Gathering/, data asset on `AVCPlayerController::GatherTable`): voxel material id → item id, base / tool yield; `ToolMiningSpeedThreshold` (1.5) decides when a dig counts as tool-assisted. `Server_RequestVoxelModification(Destroy)` reads the voxel's material before the brush, and when voxels were removed `GatherFromVoxel` creates the item, adds it (or drops it at the feet when full) and sends `Client_NotifyGathered` → toast "+N Wood". Pure `YieldFor` is tested.

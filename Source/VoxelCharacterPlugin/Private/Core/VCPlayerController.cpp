@@ -95,8 +95,30 @@ void AVCPlayerController::OnPossess(APawn* InPawn)
 #endif
 }
 
+void AVCPlayerController::PawnLeavingGame()
+{
+	if (HasAuthority())
+	{
+		if (AVCPlayerState* PS = GetPlayerState<AVCPlayerState>())
+		{
+			PS->CaptureAvatarState();
+		}
+	}
+	Super::PawnLeavingGame();
+}
+
 void AVCPlayerController::OnUnPossess()
 {
+	// A LOCAL player's controller unpossesses (never PawnLeavingGame) when the world ends: keep the
+	// avatar's items / transform / vitals on the player state for the save (feature 9).
+	if (HasAuthority())
+	{
+		if (AVCPlayerState* PS = GetPlayerState<AVCPlayerState>())
+		{
+			PS->CaptureAvatarState();
+		}
+	}
+
 	// Remove mapping contexts when we lose our pawn
 	if (InputConfig && InputConfig->IMC_Gameplay)
 	{

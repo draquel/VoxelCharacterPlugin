@@ -7,6 +7,12 @@
 #include "Core/VCTypes.h"
 #include "VCGameModeBase.generated.h"
 
+class AVCPlayerState;
+
+/** A player is logging in and their player state exists, before their first pawn spawns (save systems fill it here). */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCPlayerLoggingIn, AVCPlayerState*, PlayerState);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCPlayerLoggingOut, AVCPlayerState*, PlayerState);
+
 /**
  * Game mode base that owns player respawn for the voxel character.
  *
@@ -32,6 +38,20 @@ public:
 	/** Where the player comes back. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Respawn")
 	EVCRespawnPolicy RespawnPolicy = EVCRespawnPolicy::AtDeathLocation;
+
+	/**
+	 * Fires in PostLogin before the first pawn spawns: the player state is ready, so a save system can
+	 * restore items (PendingItemSnapshot), progression, the rest point and a spawn transform (feature 9).
+	 */
+	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Save")
+	FOnVCPlayerLoggingIn OnPlayerLoggingIn;
+
+	/**
+	 * Fires in Logout while the player state is still valid (the pawn is already gone, but the state
+	 * captured it in PawnLeavingGame): a save system records the departing player here (feature 9).
+	 */
+	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Save")
+	FOnVCPlayerLoggingOut OnPlayerLoggingOut;
 
 	/**
 	 * Called by the dying pawn on authority. Schedules the respawn.
@@ -67,7 +87,11 @@ public:
 		const FTransform& DeathTransform, bool& bOutUsePlayerStart);
 
 protected:
+	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual void Logout(AController* Exiting) override;
+
+	/** A player state carrying a pending spawn transform (a loaded save) spawns there instead of a player start. */
+	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
 
 	/** Respawns adjust out of small overlaps (a bench, a slope) instead of failing to spawn. */
 	virtual APawn* SpawnDefaultPawnAtTransform_Implementation(AController* NewPlayer, const FTransform& SpawnTransform) override;

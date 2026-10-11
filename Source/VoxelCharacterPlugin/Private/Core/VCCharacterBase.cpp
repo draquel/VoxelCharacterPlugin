@@ -333,6 +333,14 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 			}
 		}
 
+		// Exact-location resume: the floor probe decides, not the chunk grid (chunks around a dungeon
+		// spot can be solid and never get a collision body; the tile floor streams in with its POI).
+		if (bResumeAtExactLocation && FMath::Fmod(TerrainWaitElapsed, 1.0f) < DeltaSeconds)
+		{
+			PlaceOnTerrainAndResume();
+			return;
+		}
+
 		if (TerrainWaitElapsed >= TerrainWaitTimeout)
 		{
 			UE_LOG(LogVoxelCharacter, Warning,
@@ -417,6 +425,11 @@ void AVCCharacterBase::PossessedBy(AController* NewController)
 			// Items the previous avatar carried (captured in HandleDied). Before the vitals reset so
 			// equipment that raises MaxHealth is in place when health is set to the maximum.
 			RestoreItemSnapshotFromPlayerState();
+			// A loaded save also carries the vitals the avatar had (after the items, so equipment stats are in).
+			if (AVCPlayerState* VCPS = GetPlayerState<AVCPlayerState>())
+			{
+				VCPS->ApplyPendingVitals();
+			}
 
 			if (bRespawning)
 			{
@@ -741,8 +754,9 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 	// Place at terrain surface height so chunk Z calculation is correct.
 	// Movement/collision are disabled during wait, so the character won't fall.
 	// PlaceOnTerrainAndResume() raycast (±50000u) handles precise final placement.
+	// (Not for an exact-location resume: a saved spot inside a dungeon must stay under the surface.)
 	FVector ValidSpawn;
-	if (FVCVoxelNavigationHelper::FindSpawnablePosition(GetWorld(), GetActorLocation(), ValidSpawn))
+	if (!bResumeAtExactLocation && FVCVoxelNavigationHelper::FindSpawnablePosition(GetWorld(), GetActorLocation(), ValidSpawn))
 	{
 		SetActorLocation(ValidSpawn);
 	}
@@ -826,8 +840,55 @@ void AVCCharacterBase::OnChunkCollisionReady(const FIntVector& ChunkCoord)
 	}
 }
 
+/** Seconds an exact-location resume waits for a floor close under the feet before taking a deeper one. */
+static constexpr float ExactFloorGraceSeconds = 15.f;
+
 void AVCCharacterBase::PlaceOnTerrainAndResume()
 {
+	if (bResumeAtExactLocation)
+	{
+		// Look for a floor just below the feet; a surface trace from above would put a player saved
+		// inside a dungeon on the terrain over it.
+		const float CapsuleHalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+		const FVector Feet = GetActorLocation() - FVector(0.f, 0.f, CapsuleHalfHeight);
+		FCollisionQueryParams Params;
+		Params.AddIgnoredActor(this);
+		FHitResult Hit;
+		const bool bFloor = GetWorld()->SweepSingleByChannel(Hit, Feet + FVector(0.f, 0.f, 20.f), Feet - FVector(0.f, 0.f, FloorProbeDistance),
+			FQuat::Identity, ECC_WorldStatic, FCollisionShape::MakeSphere(20.f), Params);
+		// The saved spot stood ON a floor, so the real one is within a few units of the feet. A hit far
+		// below is the voxel void under a dungeon whose tile floor has not streamed in yet: give the
+		// tiles a grace period before accepting it.
+		const float Drop = bFloor ? (Feet.Z - Hit.ImpactPoint.Z) : 0.f;
+		const bool bFloorIsClose = bFloor && Drop <= 50.f;
+		if (!bFloorIsClose && TerrainWaitElapsed < (bFloor ? ExactFloorGraceSeconds : TerrainWaitTimeout))
+		{
+			// Keep waiting (frozen, no collision); the tick polls again every second.
+			bIsWaitingForTerrain = true;
+			return;
+		}
+		bResumeAtExactLocation = false;
+		PendingTerrainChunks.Empty();
+		SetActorEnableCollision(true);
+		if (UCapsuleComponent* Capsule = GetCapsuleComponent())
+		{
+			Capsule->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		}
+		if (bFloor)
+		{
+			SetActorLocation(Hit.ImpactPoint + FVector(0.f, 0.f, CapsuleHalfHeight + 2.f));
+			UE_LOG(LogVoxelCharacter, Log, TEXT("PlaceOnTerrainAndResume: resumed at the saved spot, floor %.0f below (%s)."),
+				Feet.Z - Hit.ImpactPoint.Z, Hit.GetComponent() ? *Hit.GetComponent()->GetName() : TEXT("null"));
+		}
+		else
+		{
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("PlaceOnTerrainAndResume: no floor under the saved spot after %.1fs — resuming anyway."), TerrainWaitElapsed);
+		}
+		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+		bIsWaitingForTerrain = false;
+		return;
+	}
+
 	// Re-enable collision on the actor and explicitly on the capsule
 	SetActorEnableCollision(true);
 	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
@@ -1917,6 +1978,8 @@ bool AVCCharacterBase::TryPlaceItem(int32 SlotIndex, const FItemInstance& Item, 
 	{
 		return false;
 	}
+	// Marks it for the save system: player-placed actors are saved by class + transform (feature 9).
+	Placed->Tags.AddUnique(TEXT("Placed"));
 	if (Placeable.bConsumeOnPlace)
 	{
 		InventoryComponent->TryRemoveItem(Item.InstanceId, 1);
@@ -2174,8 +2237,16 @@ void AVCCharacterBase::CaptureItemSnapshotToPlayerState()
 	}
 
 	FVCItemSnapshot& Snapshot = PS->PendingItemSnapshot;
-	Snapshot.Reset();
+	BuildItemSnapshot(Snapshot);
+	PS->bHasPendingItemSnapshot = !Snapshot.IsEmpty();
+	UE_LOG(LogVoxelCharacter, Log, TEXT("CaptureItemSnapshot: %d inventory slots, %d equipped items."), Snapshot.Inventory.Num(), Snapshot.Equipment.Num());
+#endif
+}
 
+void AVCCharacterBase::BuildItemSnapshot(FVCItemSnapshot& Snapshot) const
+{
+	Snapshot.Reset();
+#if WITH_INVENTORY_PLUGIN
 	if (InventoryComponent)
 	{
 		for (int32 SlotIndex = 0; SlotIndex < InventoryComponent->MaxSlots; ++SlotIndex)
@@ -2206,9 +2277,70 @@ void AVCCharacterBase::CaptureItemSnapshotToPlayerState()
 	}
 #endif
 
-	PS->bHasPendingItemSnapshot = !Snapshot.IsEmpty();
-	UE_LOG(LogVoxelCharacter, Log, TEXT("CaptureItemSnapshot: %d inventory slots, %d equipped items."), Snapshot.Inventory.Num(), Snapshot.Equipment.Num());
 #endif
+}
+
+void AVCCharacterBase::ApplyPendingSaveState()
+{
+	AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
+	if (!HasAuthority() || !PS)
+	{
+		return;
+	}
+
+#if WITH_INVENTORY_PLUGIN
+	if (PS->bHasPendingItemSnapshot)
+	{
+		// Replace, never merge: the save is the truth for what this player carries.
+		int32 Dropped = 0;
+#if WITH_EQUIPMENT_PLUGIN
+		if (EquipmentManager && InventoryComponent)
+		{
+			for (const FGameplayTag& SlotTag : EquipmentManager->GetOccupiedSlotTags())
+			{
+				FItemInstance Unequipped;
+				if (EquipmentManager->TryUnequip(SlotTag, Unequipped) == EEquipmentResult::Success)
+				{
+					++Dropped;
+				}
+			}
+		}
+#endif
+		if (InventoryComponent)
+		{
+			for (int32 SlotIndex = 0; SlotIndex < InventoryComponent->MaxSlots; ++SlotIndex)
+			{
+				const FItemInstance Item = InventoryComponent->GetItemInSlot(SlotIndex);
+				if (Item.IsValid() && InventoryComponent->TryRemoveItem(Item.InstanceId) == EInventoryOperationResult::Success)
+				{
+					++Dropped;
+				}
+			}
+		}
+		UE_LOG(LogVoxelCharacter, Log, TEXT("ApplyPendingSaveState: dropped %d carried item(s) before restoring the save."), Dropped);
+		RestoreItemSnapshotFromPlayerState();
+	}
+#endif
+
+	FTransform Saved;
+	if (PS->ConsumePendingSpawnTransform(Saved))
+	{
+		SetActorLocationAndRotation(Saved.GetLocation(), Saved.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics);
+		if (UCharacterMovementComponent* Move = GetCharacterMovement())
+		{
+			Move->StopMovementImmediately();
+		}
+		UE_LOG(LogVoxelCharacter, Log, TEXT("ApplyPendingSaveState: moved to the saved transform %s."), *Saved.GetLocation().ToCompactString());
+		if (bWaitForTerrain)
+		{
+			// The saved spot was a valid standing position (possibly inside a dungeon): resume there.
+			bResumeAtExactLocation = true;
+			FreezeForTerrainWait();
+			InitiateChunkBasedWait();
+		}
+	}
+
+	PS->ApplyPendingVitals();
 }
 
 bool AVCCharacterBase::RestoreItemSnapshotFromPlayerState()
