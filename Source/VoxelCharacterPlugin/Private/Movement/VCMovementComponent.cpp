@@ -9,6 +9,89 @@
 #include "VoxelEditManager.h"
 #include "Components/CapsuleComponent.h"
 #include "Engine/World.h"
+#include "Core/VCCharacterAttributeSet.h"
+#include "AbilitySystemComponent.h"
+#include "AbilitySystemInterface.h"
+#include "Combat/VCCombatStatics.h"
+#include "Tags/CGFGameplayTags.h"
+
+namespace
+{
+	/** Saved move carrying the sprint and swim-rise keys, so a client's predicted moves replay the same way. */
+	class FSavedMove_VC : public FSavedMove_Character
+	{
+	public:
+		typedef FSavedMove_Character Super;
+
+		uint8 bSavedWantsToSprint : 1;
+		uint8 bSavedWantsToAscend : 1;
+
+		virtual void Clear() override
+		{
+			Super::Clear();
+			bSavedWantsToSprint = 0;
+			bSavedWantsToAscend = 0;
+		}
+
+		virtual uint8 GetCompressedFlags() const override
+		{
+			uint8 Flags = Super::GetCompressedFlags();
+			if (bSavedWantsToSprint)
+			{
+				Flags |= FLAG_Custom_0;
+			}
+			if (bSavedWantsToAscend)
+			{
+				Flags |= FLAG_Custom_1;
+			}
+			return Flags;
+		}
+
+		virtual bool CanCombineWith(const FSavedMovePtr& NewMove, ACharacter* InCharacter, float MaxDelta) const override
+		{
+			const FSavedMove_VC* Other = static_cast<const FSavedMove_VC*>(NewMove.Get());
+			if (bSavedWantsToSprint != Other->bSavedWantsToSprint || bSavedWantsToAscend != Other->bSavedWantsToAscend)
+			{
+				return false;
+			}
+			return Super::CanCombineWith(NewMove, InCharacter, MaxDelta);
+		}
+
+		virtual void SetMoveFor(ACharacter* InCharacter, float InDeltaTime, FVector const& NewAccel, FNetworkPredictionData_Client_Character& ClientData) override
+		{
+			Super::SetMoveFor(InCharacter, InDeltaTime, NewAccel, ClientData);
+			if (const UVCMovementComponent* Movement = Cast<UVCMovementComponent>(InCharacter->GetCharacterMovement()))
+			{
+				bSavedWantsToSprint = Movement->bWantsToSprint;
+				bSavedWantsToAscend = Movement->bWantsToAscend;
+			}
+		}
+
+		virtual void PrepMoveFor(ACharacter* InCharacter) override
+		{
+			Super::PrepMoveFor(InCharacter);
+			if (UVCMovementComponent* Movement = Cast<UVCMovementComponent>(InCharacter->GetCharacterMovement()))
+			{
+				Movement->bWantsToSprint = bSavedWantsToSprint;
+				Movement->bWantsToAscend = bSavedWantsToAscend;
+			}
+		}
+	};
+
+	class FNetworkPredictionData_Client_VC : public FNetworkPredictionData_Client_Character
+	{
+	public:
+		explicit FNetworkPredictionData_Client_VC(const UCharacterMovementComponent& ClientMovement)
+			: FNetworkPredictionData_Client_Character(ClientMovement)
+		{
+		}
+
+		virtual FSavedMovePtr AllocateNewMove() override
+		{
+			return FSavedMovePtr(new FSavedMove_VC());
+		}
+	};
+}
 #include "VoxelEditTypes.h"
 #include "VoxelCharacterPlugin.h"
 #include "GameplayEffectTypes.h"
@@ -42,6 +125,11 @@ UVCMovementComponent::UVCMovementComponent()
 	BrakingFrictionFactor = 3.f;
 	bUseSeparateBrakingFriction = true;
 	BrakingFriction = 1.f;
+
+	// --- Crouch (QA R10): a slow, low walk; later the hook for being harder to spot ---
+	NavAgentProps.bCanCrouch = true;
+	MaxWalkSpeedCrouched = 150.f;
+	bCanWalkOffLedgesWhenCrouching = true;
 
 	// --- Swimming defaults ---
 	BrakingDecelerationSwimming = 600.f;
@@ -86,6 +174,25 @@ void UVCMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 		}
 	}
 
+	// Sprint gate (every machine, from the replicated stamina): out of breath at zero until it refills a little.
+	const float Stamina = GetOwnerStamina();
+	if (Stamina >= 0.f)
+	{
+		if (Stamina <= 0.5f)
+		{
+			bSprintExhausted = true;
+		}
+		else if (Stamina >= SprintResumeStamina)
+		{
+			bSprintExhausted = false;
+		}
+	}
+	if (CharacterOwner && CharacterOwner->HasAuthority())
+	{
+		TickStamina(DeltaTime);
+		TickBreath(DeltaTime);
+	}
+
 	// Decay floor grace timer
 	if (FloorGraceTimer > 0.f)
 	{
@@ -121,6 +228,38 @@ void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
 	// --- Restore pre-additive root motion velocity ---
 	RestorePreAdditiveRootMotionVelocity();
 
+	// --- Dive controls: Jump = ascend, Crouch = descend ---
+	// Fed in as acceleration before CalcVelocity: with no movement input CalcVelocity brakes the swimmer to a stop
+	// every frame, which ate a per-frame velocity nudge (QA R10: holding LeftCtrl sank about 5 uu/s). As acceleration
+	// the fluid drag sets the dive speed instead (about DiveDescendAcceleration / SwimmingDragCoefficient). The dive
+	// key counts as full input: CalcVelocity caps speed by the analog input scale, which is 0 with no movement keys.
+	const bool bWantsAscend = CharacterOwner && (CharacterOwner->bPressedJump || bWantsToAscend);
+	// A swimmer cannot crouch (CanCrouchInCurrentState is ground / air only), so the held key arrives as
+	// bWantsToCrouch alone.
+	const bool bWantsDescent = CharacterOwner && !bWantsAscend && (CharacterOwner->bIsCrouched || IsCrouching() || bWantsToCrouch);
+	if (bWantsAscend)
+	{
+		Acceleration.Z += DiveAscendAcceleration;
+		AnalogInputModifier = 1.f;
+	}
+	else if (bWantsDescent)
+	{
+		// Check if the ocean floor is directly below — don't descend into it
+		const float HalfHeight = CharacterOwner->GetSimpleCollisionHalfHeight();
+		const FVector FeetPos = CharacterOwner->GetActorLocation() - FVector(0.f, 0.f, HalfHeight);
+		FHitResult GroundHit;
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(DiveFloorCheck), false, CharacterOwner);
+		const bool bHitFloor = GetWorld()->LineTraceSingleByChannel(
+			GroundHit, FeetPos, FeetPos - FVector(0.f, 0.f, 50.f),
+			ECC_WorldStatic, Params);
+
+		if (!bHitFloor)
+		{
+			Acceleration.Z -= DiveDescendAcceleration;
+			AnalogInputModifier = 1.f;
+		}
+	}
+
 	// --- Calculate velocity with fluid drag ---
 	// bFluid=true enables UE's fluid friction model (drag proportional to speed)
 	CalcVelocity(DeltaTime, SwimmingDragCoefficient, true, BrakingDecelerationSwimming);
@@ -128,32 +267,8 @@ void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
 	// --- Apply root motion ---
 	ApplyRootMotionToVelocity(DeltaTime);
 
-	// --- Dive controls: Jump = ascend, Crouch = descend ---
 	if (CharacterOwner)
 	{
-		const bool bWantsAscend = CharacterOwner->bPressedJump;
-		const bool bWantsDescent = CharacterOwner->bIsCrouched || IsCrouching();
-
-		if (bWantsAscend)
-		{
-			Velocity.Z += DiveAscendAcceleration * DeltaTime;
-		}
-		else if (bWantsDescent)
-		{
-			// Check if the ocean floor is directly below — don't descend into it
-			const float HalfHeight = CharacterOwner->GetSimpleCollisionHalfHeight();
-			const FVector FeetPos = CharacterOwner->GetActorLocation() - FVector(0.f, 0.f, HalfHeight);
-			FHitResult GroundHit;
-			FCollisionQueryParams Params(SCENE_QUERY_STAT(DiveFloorCheck), false, CharacterOwner);
-			const bool bHitFloor = GetWorld()->LineTraceSingleByChannel(
-				GroundHit, FeetPos, FeetPos - FVector(0.f, 0.f, 50.f),
-				ECC_WorldStatic, Params);
-
-			if (!bHitFloor)
-			{
-				Velocity.Z -= DiveDescendAcceleration * DeltaTime;
-			}
-		}
 
 		// --- Passive buoyancy: gently push toward surface when idle ---
 		// Only applies when no significant vertical input from pitch-based movement or dive keys.
@@ -199,6 +314,12 @@ void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
 
 	if (Hit.bBlockingHit && UpdatedComponent)
 	{
+		// A bank at the surface: climb out instead of sliding along it (the stock step-up on wall hits is gone in
+		// this custom swim mode).
+		if (TryClimbOutOfWater(Hit))
+		{
+			return;
+		}
 		// Slide along collision surfaces (seabed, cave walls)
 		SlideAlongSurface(Adjusted, (1.f - Hit.Time), Hit.Normal, Hit, true);
 	}
@@ -539,6 +660,199 @@ void UVCMovementComponent::OnVoxelChunkModified(const FIntVector& ChunkCoord, EE
 		{
 			EmbedCheckArmedUntil = World->GetTimeSeconds() + 10.0;
 		}
+	}
+}
+
+void UVCMovementComponent::SetSprinting(bool bWantsSprint)
+{
+	bWantsToSprint = bWantsSprint;
+}
+
+void UVCMovementComponent::SetWantsToAscend(bool bWantsAscend)
+{
+	bWantsToAscend = bWantsAscend;
+}
+
+bool UVCMovementComponent::IsSprinting() const
+{
+	// Intent, not speed: acceleration is the input direction, so a sprint starts with the first step.
+	return bWantsToSprint && !bSprintExhausted && IsMovingOnGround() && !IsCrouching()
+		&& GetCurrentAcceleration().SizeSquared() > 1.f;
+}
+
+float UVCMovementComponent::GetMaxSpeed() const
+{
+	const float Speed = Super::GetMaxSpeed();
+	return (MovementMode == MOVE_Walking && IsSprinting()) ? Speed * SprintSpeedMultiplier : Speed;
+}
+
+void UVCMovementComponent::UpdateFromCompressedFlags(uint8 Flags)
+{
+	Super::UpdateFromCompressedFlags(Flags);
+	bWantsToSprint = (Flags & FSavedMove_Character::FLAG_Custom_0) != 0;
+	bWantsToAscend = (Flags & FSavedMove_Character::FLAG_Custom_1) != 0;
+}
+
+FNetworkPredictionData_Client* UVCMovementComponent::GetPredictionData_Client() const
+{
+	if (!ClientPredictionData)
+	{
+		UVCMovementComponent* MutableThis = const_cast<UVCMovementComponent*>(this);
+		MutableThis->ClientPredictionData = new FNetworkPredictionData_Client_VC(*this);
+	}
+	return ClientPredictionData;
+}
+
+float UVCMovementComponent::GetOwnerStamina() const
+{
+	const IAbilitySystemInterface* WithASC = Cast<IAbilitySystemInterface>(GetOwner());
+	const UAbilitySystemComponent* ASC = WithASC ? WithASC->GetAbilitySystemComponent() : nullptr;
+	const FGameplayAttribute StaminaAttribute = UVCCharacterAttributeSet::GetStaminaAttribute();
+	return (ASC && ASC->HasAttributeSetForAttribute(StaminaAttribute)) ? ASC->GetNumericAttribute(StaminaAttribute) : -1.f;
+}
+
+void UVCMovementComponent::TickStamina(float DeltaTime)
+{
+	const IAbilitySystemInterface* WithASC = Cast<IAbilitySystemInterface>(GetOwner());
+	UAbilitySystemComponent* ASC = WithASC ? WithASC->GetAbilitySystemComponent() : nullptr;
+	const FGameplayAttribute StaminaAttribute = UVCCharacterAttributeSet::GetStaminaAttribute();
+	if (!ASC || !ASC->HasAttributeSetForAttribute(StaminaAttribute))
+	{
+		return;
+	}
+
+	// Spend only while the sprint actually carries the pawn: holding it against a wall or a ledge costs nothing.
+	if (IsSprinting() && Velocity.SizeSquared2D() > FMath::Square(100.f))
+	{
+		TimeSinceSprint = 0.f;
+		PendingStaminaDelta -= SprintStaminaPerSecond * DeltaTime;
+	}
+	else
+	{
+		TimeSinceSprint += DeltaTime;
+		if (TimeSinceSprint >= StaminaRegenDelay)
+		{
+			PendingStaminaDelta += StaminaRegenPerSecond * DeltaTime;
+		}
+	}
+
+	// Write the attribute ~10 times a second rather than every frame (it replicates on change).
+	StaminaWriteTimer += DeltaTime;
+	if (StaminaWriteTimer < 0.1f || FMath::IsNearlyZero(PendingStaminaDelta))
+	{
+		return;
+	}
+	StaminaWriteTimer = 0.f;
+	const float Current = ASC->GetNumericAttribute(StaminaAttribute);
+	const float Max = ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxStaminaAttribute());
+	const float Target = FMath::Clamp(Current + PendingStaminaDelta, 0.f, Max);
+	PendingStaminaDelta = 0.f;
+	if (!FMath::IsNearlyEqual(Target, Current))
+	{
+		ASC->ApplyModToAttribute(StaminaAttribute, EGameplayModOp::Override, Target);
+	}
+}
+
+bool UVCMovementComponent::TryClimbOutOfWater(const FHitResult& Hit)
+{
+	ACharacter* Character = GetCharacterOwner();
+	UWorld* World = GetWorld();
+	if (!Character || !World || !UpdatedComponent)
+	{
+		return false;
+	}
+	const float HalfHeight = Character->GetSimpleCollisionHalfHeight();
+	const float Radius = Character->GetSimpleCollisionRadius();
+
+	// Only at the surface (head out or nearly), only into something steep, and only when trying to go that way.
+	const FVector Push = Acceleration.GetSafeNormal2D();
+	if (CachedTerrainContext.WaterDepth > HalfHeight * 1.5f || Hit.ImpactNormal.Z > 0.7f || Push.IsNearlyZero()
+		|| FVector::DotProduct(Push, -Hit.ImpactNormal.GetSafeNormal2D()) < 0.3f)
+	{
+		return false;
+	}
+
+	// Look for a floor just past the bank edge, no higher than the reach.
+	const FVector Location = UpdatedComponent->GetComponentLocation();
+	const float FeetZ = Location.Z - HalfHeight;
+	const float Reach = HalfHeight + ShoreClimbHeight;
+	const FVector ProbeTop = Location + Push * (Radius + 25.f) + FVector(0.f, 0.f, Reach);
+	const FVector ProbeBottom = ProbeTop - FVector(0.f, 0.f, Reach + HalfHeight);
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(ShoreClimb), false, Character);
+	FHitResult Floor;
+	const FCollisionShape Capsule = FCollisionShape::MakeCapsule(Radius, HalfHeight);
+	if (!World->SweepSingleByChannel(Floor, ProbeTop, ProbeBottom, FQuat::Identity, UpdatedComponent->GetCollisionObjectType(),
+		Capsule, Params) || Floor.bStartPenetrating || !IsWalkable(Floor))
+	{
+		return false;
+	}
+
+	// The ledge must lift the feet out of swimming depth (the water line is FeetZ + WaterDepth).
+	const float LedgeFeetZ = Floor.Location.Z - HalfHeight;
+	const float WaterLineZ = FeetZ + CachedTerrainContext.WaterDepth;
+	if (LedgeFeetZ < WaterLineZ - SwimmingEntryDepth * 0.5f || LedgeFeetZ > FeetZ + Reach)
+	{
+		return false;
+	}
+
+	Character->SetActorLocation(Floor.Location + FVector(0.f, 0.f, 2.f), false, nullptr, ETeleportType::None);
+	SetMovementMode(MOVE_Walking);
+	MaxAcceleration = BaseMaxAcceleration;
+	Velocity = Push * FMath::Min(Velocity.Size2D(), MaxWalkSpeed);
+	return true;
+}
+
+void UVCMovementComponent::TickBreath(float DeltaTime)
+{
+	ACharacter* Character = GetCharacterOwner();
+	const IAbilitySystemInterface* WithASC = Cast<IAbilitySystemInterface>(Character);
+	UAbilitySystemComponent* ASC = WithASC ? WithASC->GetAbilitySystemComponent() : nullptr;
+	const FGameplayAttribute BreathAttribute = UVCCharacterAttributeSet::GetBreathAttribute();
+	// Players only for now: wildlife avoids water and has no way to come up for air.
+	if (!Character || !Character->IsPlayerControlled() || !ASC || !ASC->HasAttributeSetForAttribute(BreathAttribute))
+	{
+		return;
+	}
+
+	// Sample ten times a second, like the terrain context (a voxel water query each frame is wasted work).
+	BreathTimer += DeltaTime;
+	if (BreathTimer < 0.1f)
+	{
+		return;
+	}
+	const float Elapsed = BreathTimer;
+	BreathTimer = 0.f;
+
+	const FVector Head = Character->GetActorLocation()
+		+ FVector(0.f, 0.f, Character->GetSimpleCollisionHalfHeight() * HeadHeightFraction);
+	float HeadDepth = 0.f;
+	// The voxel holding the water line is flagged water top to bottom, so a head floating just above the line still
+	// lands in a water voxel: it is under only when it is also below the water level.
+	bHeadUnderwater = FVCVoxelNavigationHelper::IsPositionUnderwater(GetWorld(), Head, HeadDepth) && HeadDepth > 0.f;
+
+	const float Current = ASC->GetNumericAttribute(BreathAttribute);
+	const float Max = ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxBreathAttribute());
+	const float Target = FMath::Clamp(Current + (bHeadUnderwater ? -BreathLossPerSecond : BreathRegenPerSecond) * Elapsed, 0.f, Max);
+	if (!FMath::IsNearlyEqual(Target, Current))
+	{
+		ASC->ApplyModToAttribute(BreathAttribute, EGameplayModOp::Override, Target);
+	}
+
+	// Out of air underwater: a Pure hit every second through the combat pipeline (respawn on death as usual).
+	if (bHeadUnderwater && Target <= 0.f && DrowningDamagePerSecond > 0.f)
+	{
+		DrowningTimer += Elapsed;
+		if (DrowningTimer >= 1.f)
+		{
+			DrowningTimer -= 1.f;
+			const FCGFDamageContext Drowning = UVCCombatStatics::MakeDamageContext(nullptr, nullptr, DrowningDamagePerSecond,
+				CGFGameplayTags::Damage_Type_Pure, /*bIgnoreFaction=*/true);
+			UVCCombatStatics::ApplyDamageToActor(Character, Drowning);
+		}
+	}
+	else
+	{
+		DrowningTimer = 0.f;
 	}
 }
 

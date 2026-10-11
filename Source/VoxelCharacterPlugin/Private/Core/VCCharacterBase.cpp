@@ -138,6 +138,9 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 		Head.SlotTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.Head"));
 		Head.SlotDisplayName = NSLOCTEXT("VoxelCharacter", "Head", "Head");
 		Head.AttachSocket = FName("head");
+		// Mannequin head / spine bones point X up the chain with Y forward; turn Z-up, X-forward item meshes upright
+		// and lift the helmet rim (its pivot) to the brow. Tuned live in PIE on the idle pose (QA R9).
+		Head.AttachOffset = FTransform(FRotator(-7.f, 79.f, -90.f), FVector(4.f, 1.f, 0.f));
 		Head.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Armor")));
 		EquipmentManager->AvailableSlots.Add(Head);
 
@@ -145,6 +148,7 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 		Chest.SlotTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.Chest"));
 		Chest.SlotDisplayName = NSLOCTEXT("VoxelCharacter", "Chest", "Chest");
 		Chest.AttachSocket = FName("spine_03");
+		Chest.AttachOffset = FTransform(FRotator(-23.f, 83.f, -90.f), FVector(16.f, -3.f, 0.f)); // up onto the chest
 		Chest.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Armor")));
 		EquipmentManager->AvailableSlots.Add(Chest);
 	}
@@ -1140,6 +1144,8 @@ void AVCCharacterBase::UpdateEquipmentAttachments()
 			FAttachmentTransformRules::SnapToTargetNotIncludingScale,
 			SocketName
 		);
+		// The snap wipes the visual's offset: re-apply the slot / item fit.
+		Slot.AttachedVisualComponent->SetRelativeTransform(EquipmentManager->GetVisualAttachOffset(Slot.SlotTag));
 	}
 #endif
 }
@@ -1440,6 +1446,17 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	}
 
 	// Actions
+	if (Config->IA_Sprint)
+	{
+		EIC->BindAction(Config->IA_Sprint, ETriggerEvent::Started, this, &AVCCharacterBase::Input_StartSprint);
+		EIC->BindAction(Config->IA_Sprint, ETriggerEvent::Completed, this, &AVCCharacterBase::Input_StopSprint);
+	}
+	if (Config->IA_Crouch)
+	{
+		EIC->BindAction(Config->IA_Crouch, ETriggerEvent::Started, this, &AVCCharacterBase::Input_StartCrouch);
+		EIC->BindAction(Config->IA_Crouch, ETriggerEvent::Completed, this, &AVCCharacterBase::Input_StopCrouch);
+	}
+
 	if (Config->IA_Interact)
 	{
 		EIC->BindAction(Config->IA_Interact, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Interact);
@@ -1536,11 +1553,49 @@ void AVCCharacterBase::Input_Look(const FInputActionValue& Value)
 void AVCCharacterBase::Input_Jump(const FInputActionValue& Value)
 {
 	Jump();
+	// Held, the jump key also rises while swimming (Jump's own flag lasts one frame).
+	if (UVCMovementComponent* Movement = Cast<UVCMovementComponent>(GetCharacterMovement()))
+	{
+		Movement->SetWantsToAscend(true);
+	}
 }
 
 void AVCCharacterBase::Input_StopJump(const FInputActionValue& Value)
 {
 	StopJumping();
+	if (UVCMovementComponent* Movement = Cast<UVCMovementComponent>(GetCharacterMovement()))
+	{
+		Movement->SetWantsToAscend(false);
+	}
+}
+
+void AVCCharacterBase::Input_StartSprint(const FInputActionValue& Value)
+{
+	if (UVCMovementComponent* Movement = Cast<UVCMovementComponent>(GetCharacterMovement()))
+	{
+		Movement->SetSprinting(!IsIncapacitated());
+	}
+}
+
+void AVCCharacterBase::Input_StopSprint(const FInputActionValue& Value)
+{
+	if (UVCMovementComponent* Movement = Cast<UVCMovementComponent>(GetCharacterMovement()))
+	{
+		Movement->SetSprinting(false);
+	}
+}
+
+void AVCCharacterBase::Input_StartCrouch(const FInputActionValue& Value)
+{
+	if (!IsIncapacitated())
+	{
+		Crouch();
+	}
+}
+
+void AVCCharacterBase::Input_StopCrouch(const FInputActionValue& Value)
+{
+	UnCrouch();
 }
 
 void AVCCharacterBase::Input_Interact(const FInputActionValue& Value)

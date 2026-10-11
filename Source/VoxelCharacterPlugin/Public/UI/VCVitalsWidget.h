@@ -94,6 +94,10 @@ protected:
 
 	void HandleStaminaChanged(const FOnAttributeChangeData& Data);
 	void HandleMaxStaminaChanged(const FOnAttributeChangeData& Data);
+	void HandleBreathChanged(const FOnAttributeChangeData& Data);
+
+	/** Breath bar: shown only while not full (QA R11). */
+	void SetBreath(float Current, float Max);
 
 	void SetHealth(float Current, float Max);
 	void SetStamina(float Current, float Max);
@@ -133,4 +137,11 @@ protected:
 	TWeakObjectPtr<UAbilitySystemComponent> BoundASC;
 	FDelegateHandle StaminaHandle;
 	FDelegateHandle MaxStaminaHandle;
+	FDelegateHandle BreathHandle;
+
+	UPROPERTY()
+	TObjectPtr<UProgressBar> BreathBar;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> BreathText;
 };

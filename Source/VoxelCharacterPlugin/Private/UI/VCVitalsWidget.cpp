@@ -102,6 +102,8 @@ void UVCVitalsWidget::BuildWidgetTree()
 
 	HealthBar = MakeBar(WidgetTree, Root, HealthText, FLinearColor(0.75f, 0.12f, 0.12f), TEXT("Health"));
 	StaminaBar = MakeBar(WidgetTree, Root, StaminaText, FLinearColor(0.15f, 0.6f, 0.2f), TEXT("Stamina"));
+	BreathBar = MakeBar(WidgetTree, Root, BreathText, FLinearColor(0.2f, 0.55f, 0.95f), TEXT("Breath"));
+	SetBreath(1.f, 1.f); // hidden until the head goes under
 
 	EditModeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("EditModeText"));
 	FSlateFontInfo EditFont = EditModeText->GetFont();
@@ -157,6 +159,8 @@ void UVCVitalsWidget::InitWithCharacter(AVCCharacterBase* Character)
 			.AddUObject(this, &UVCVitalsWidget::HandleStaminaChanged);
 		MaxStaminaHandle = ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetMaxStaminaAttribute())
 			.AddUObject(this, &UVCVitalsWidget::HandleMaxStaminaChanged);
+		BreathHandle = ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetBreathAttribute())
+			.AddUObject(this, &UVCVitalsWidget::HandleBreathChanged);
 	}
 
 	RefreshFromCharacter();
@@ -179,9 +183,11 @@ void UVCVitalsWidget::Unbind()
 	{
 		ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetStaminaAttribute()).Remove(StaminaHandle);
 		ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetMaxStaminaAttribute()).Remove(MaxStaminaHandle);
+		ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetBreathAttribute()).Remove(BreathHandle);
 	}
 	StaminaHandle.Reset();
 	MaxStaminaHandle.Reset();
+	BreathHandle.Reset();
 	BoundCharacter.Reset();
 	BoundASC.Reset();
 }
@@ -205,6 +211,8 @@ void UVCVitalsWidget::RefreshFromCharacter()
 		ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxHealthAttribute()));
 	SetStamina(ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetStaminaAttribute()),
 		ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxStaminaAttribute()));
+	SetBreath(ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetBreathAttribute()),
+		ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxBreathAttribute()));
 }
 
 void UVCVitalsWidget::HandleHealthChanged(float NewHealth, float OldHealth, float MaxHealth)
@@ -352,6 +360,30 @@ void UVCVitalsWidget::SetHealth(float Current, float Max)
 	if (HealthText)
 	{
 		HealthText->SetText(FText::FromString(FString::Printf(TEXT("%.0f / %.0f"), Current, Max)));
+	}
+}
+
+void UVCVitalsWidget::HandleBreathChanged(const FOnAttributeChangeData& Data)
+{
+	const UAbilitySystemComponent* ASC = BoundASC.Get();
+	SetBreath(Data.NewValue, ASC ? ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxBreathAttribute()) : 0.f);
+}
+
+void UVCVitalsWidget::SetBreath(float Current, float Max)
+{
+	if (!BreathBar)
+	{
+		return;
+	}
+	BreathBar->SetPercent(Max > 0.f ? FMath::Clamp(Current / Max, 0.f, 1.f) : 0.f);
+	if (BreathText)
+	{
+		BreathText->SetText(FText::FromString(FString::Printf(TEXT("Air %.0f s"), Current)));
+	}
+	// Bar -> overlay -> size box: hide the whole row while the lungs are full.
+	if (UWidget* Row = BreathBar->GetParent() ? BreathBar->GetParent()->GetParent() : nullptr)
+	{
+		Row->SetVisibility(Current < Max - 0.05f ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 }
 

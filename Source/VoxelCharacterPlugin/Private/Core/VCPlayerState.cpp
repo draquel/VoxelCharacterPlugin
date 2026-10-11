@@ -281,5 +281,9 @@ void AVCPlayerState::HandleRespawnAttributeReset()
 		AbilitySystemComponent->SetNumericAttributeBase(UVCCharacterAttributeSet::GetStaminaAttribute(), MaxStamina);
 	}
 
+	// Breath is not part of the respawn effect asset: refill it here either way (a drowned player respawns breathing).
+	AbilitySystemComponent->SetNumericAttributeBase(UVCCharacterAttributeSet::GetBreathAttribute(),
+		AbilitySystemComponent->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxBreathAttribute()));
+
 	UE_LOG(LogVoxelCharacter, Log, TEXT("Respawn attribute reset applied for %s"), *GetPlayerName());
 }

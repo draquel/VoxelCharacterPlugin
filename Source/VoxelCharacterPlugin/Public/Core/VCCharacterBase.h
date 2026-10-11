@@ -482,6 +482,10 @@ protected:
 	void Input_Look(const FInputActionValue& Value);
 	void Input_Jump(const FInputActionValue& Value);
 	void Input_StopJump(const FInputActionValue& Value);
+	void Input_StartSprint(const FInputActionValue& Value);
+	void Input_StopSprint(const FInputActionValue& Value);
+	void Input_StartCrouch(const FInputActionValue& Value);
+	void Input_StopCrouch(const FInputActionValue& Value);
 	void Input_Interact(const FInputActionValue& Value);
 	void Input_ToggleView(const FInputActionValue& Value);
 	void Input_PrimaryAction(const FInputActionValue& Value);

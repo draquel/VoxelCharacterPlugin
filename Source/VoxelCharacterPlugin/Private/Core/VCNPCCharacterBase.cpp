@@ -15,6 +15,15 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
+#include "Components/WidgetComponent.h"
+#include "UI/VCNPCHealthBarWidget.h"
+#include "HAL/IConsoleManager.h"
+
+static TAutoConsoleVariable<int32> CVarNPCHealthBars(
+	TEXT("vc.UI.NPCHealthBars"),
+	1,
+	TEXT("Floating NPC health bars: 0 = never, 1 = NPCs with bShowHealthBar (default), 2 = every NPC."),
+	ECVF_Default);
 
 AVCNPCCharacterBase::AVCNPCCharacterBase(const FObjectInitializer& ObjectInitializer)
 	// The voxel-aware movement component (same as the player): capsule sweeps against the voxel trimesh can return
@@ -23,6 +32,12 @@ AVCNPCCharacterBase::AVCNPCCharacterBase(const FObjectInitializer& ObjectInitial
 	// inverted face normals that once made this worse are fixed at the source (VoxelCollisionManager winding).
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UVCMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
+	// Enough jump to clear a one-voxel step when the AI hops an obstacle (the default 420 tops out around 90 uu).
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		Movement->JumpZVelocity = FMath::Max(Movement->JumpZVelocity, 520.f);
+	}
+
 	// Tick only while toppling after death (enabled in HandleDied).
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
@@ -124,6 +139,73 @@ void AVCNPCCharacterBase::BeginPlay()
 		CombatComponent->OnDied.AddDynamic(this, &AVCNPCCharacterBase::HandleDied);
 		CombatComponent->InitializeWithAbilitySystem(AbilitySystemComponent);
 	}
+	UpdateHealthBar();
+}
+
+void AVCNPCCharacterBase::SetShowHealthBar(bool bShow)
+{
+	bShowHealthBar = bShow;
+	UpdateHealthBar();
+}
+
+void AVCNPCCharacterBase::UpdateHealthBar()
+{
+	const int32 Mode = CVarNPCHealthBars.GetValueOnGameThread();
+	const bool bWanted = !IsRunningDedicatedServer() && !IsDead() && CombatComponent
+		&& (Mode == 2 || (Mode == 1 && bShowHealthBar));
+
+	if (bWanted && !HealthBarComponent)
+	{
+		HealthBarComponent = NewObject<UWidgetComponent>(this, TEXT("HealthBar"));
+		HealthBarComponent->SetupAttachment(GetRootComponent());
+		HealthBarComponent->SetWidgetSpace(EWidgetSpace::Screen);
+		HealthBarComponent->SetWidgetClass(UVCNPCHealthBarWidget::StaticClass());
+		HealthBarComponent->SetDrawSize(FVector2D(80.f, 8.f));
+		const float HalfHeight = GetCapsuleComponent() ? GetCapsuleComponent()->GetScaledCapsuleHalfHeight() : 90.f;
+		HealthBarComponent->SetRelativeLocation(FVector(0.f, 0.f, HalfHeight + 35.f));
+		HealthBarComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		HealthBarComponent->SetVisibility(false); // until the first health change
+		HealthBarComponent->RegisterComponent();
+		CombatComponent->OnHealthChanged.AddUniqueDynamic(this, &AVCNPCCharacterBase::HandleHealthBarHealthChanged);
+	}
+	else if (!bWanted && HealthBarComponent)
+	{
+		if (CombatComponent)
+		{
+			CombatComponent->OnHealthChanged.RemoveDynamic(this, &AVCNPCCharacterBase::HandleHealthBarHealthChanged);
+		}
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(HealthBarHideTimer);
+		}
+		HealthBarComponent->DestroyComponent();
+		HealthBarComponent = nullptr;
+	}
+}
+
+void AVCNPCCharacterBase::HandleHealthBarHealthChanged(float NewHealth, float /*OldHealth*/, float MaxHealth)
+{
+	if (!HealthBarComponent)
+	{
+		return;
+	}
+	if (UVCNPCHealthBarWidget* Bar = Cast<UVCNPCHealthBarWidget>(HealthBarComponent->GetUserWidgetObject()))
+	{
+		Bar->SetHealth(NewHealth, MaxHealth);
+	}
+	HealthBarComponent->SetVisibility(true);
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimer(HealthBarHideTimer, this, &AVCNPCCharacterBase::HideHealthBar, HealthBarVisibleSeconds, false);
+	}
+}
+
+void AVCNPCCharacterBase::HideHealthBar()
+{
+	if (HealthBarComponent)
+	{
+		HealthBarComponent->SetVisibility(false);
+	}
 }
 
 void AVCNPCCharacterBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -131,6 +213,7 @@ void AVCNPCCharacterBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	if (UWorld* World = GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(DestroyTimerHandle);
+		World->GetTimerManager().ClearTimer(HealthBarHideTimer);
 	}
 	Super::EndPlay(EndPlayReason);
 }
@@ -172,6 +255,8 @@ void AVCNPCCharacterBase::HandleDied(const FCGFDamageContext& Context)
 	{
 		AI->SetAIEnabled(false);
 	}
+	// A dead NPC has no health to show.
+	UpdateHealthBar();
 
 	BP_OnDied(Context);
 

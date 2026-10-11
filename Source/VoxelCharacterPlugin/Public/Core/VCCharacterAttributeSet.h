@@ -53,6 +53,15 @@ public:
 	FGameplayAttributeData MaxStamina;
 	ATTRIBUTE_ACCESSORS(UVCCharacterAttributeSet, MaxStamina)
 
+	/** Seconds of air left while the head is underwater (QA R11); drowning damage at zero. */
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Breath, Category = "VoxelCharacter|Attributes")
+	FGameplayAttributeData Breath;
+	ATTRIBUTE_ACCESSORS(UVCCharacterAttributeSet, Breath)
+
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_MaxBreath, Category = "VoxelCharacter|Attributes")
+	FGameplayAttributeData MaxBreath;
+	ATTRIBUTE_ACCESSORS(UVCCharacterAttributeSet, MaxBreath)
+
 	// ==================== Movement ====================
 
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_MoveSpeedMultiplier, Category = "VoxelCharacter|Attributes")
@@ -84,6 +93,10 @@ protected:
 	void OnRep_Stamina(const FGameplayAttributeData& OldValue);
 	UFUNCTION()
 	void OnRep_MaxStamina(const FGameplayAttributeData& OldValue);
+	UFUNCTION()
+	void OnRep_Breath(const FGameplayAttributeData& OldValue);
+	UFUNCTION()
+	void OnRep_MaxBreath(const FGameplayAttributeData& OldValue);
 	UFUNCTION()
 	void OnRep_MoveSpeedMultiplier(const FGameplayAttributeData& OldValue);
 	UFUNCTION()
