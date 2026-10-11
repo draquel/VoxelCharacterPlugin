@@ -4,7 +4,11 @@
 #include "Movement/VCVoxelNavigationHelper.h"
 #include "GameFramework/Character.h"
 #include "VoxelChunkManager.h"
+#include "VoxelCollisionManager.h"
+#include "VoxelWorldConfiguration.h"
 #include "VoxelEditManager.h"
+#include "Components/CapsuleComponent.h"
+#include "Engine/World.h"
 #include "VoxelEditTypes.h"
 #include "VoxelCharacterPlugin.h"
 #include "GameplayEffectTypes.h"
@@ -59,6 +63,7 @@ void UVCMovementComponent::BeginPlay()
 			EditMgr->OnChunkEdited.AddUObject(this, &UVCMovementComponent::OnVoxelChunkModified);
 		}
 	}
+	TryBindCollisionReady();
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +74,17 @@ void UVCMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 {
 	// Track grounded state before movement update (for floor grace logic)
 	bWasGroundedLastFrame = IsMovingOnGround();
+
+	// The voxel world can finish initialising after this pawn's BeginPlay: keep trying to bind, once a second.
+	if (!bBoundCollisionReady)
+	{
+		CollisionBindRetryTimer -= DeltaTime;
+		if (CollisionBindRetryTimer <= 0.f)
+		{
+			CollisionBindRetryTimer = 1.f;
+			TryBindCollisionReady();
+		}
+	}
 
 	// Decay floor grace timer
 	if (FloorGraceTimer > 0.f)
@@ -503,11 +519,149 @@ float UVCMovementComponent::GetSurfaceFriction(EVoxelSurfaceType Surface)
 // Chunk Modification Handler
 // ---------------------------------------------------------------------------
 
-void UVCMovementComponent::OnVoxelChunkModified(const FIntVector& ChunkCoord, EEditSource /*Source*/, const FVector& /*EditCenter*/, float /*EditRadius*/)
+void UVCMovementComponent::OnVoxelChunkModified(const FIntVector& ChunkCoord, EEditSource /*Source*/, const FVector& EditCenter, float EditRadius)
 {
 	// If the modified chunk is the one we're standing on, invalidate cache immediately
 	if (ChunkCoord == CachedTerrainContext.CurrentChunkCoord)
 	{
 		TerrainContextCacheTimer = TerrainCacheDuration; // Force refresh next tick
 	}
+
+	// An edit that reaches the pawn may have closed terrain around it. The pawn still stands on the OLD
+	// collision until the chunk re-cooks, so arm a check that runs when the new collision lands.
+	const ACharacter* Character = GetCharacterOwner();
+	const UWorld* World = GetWorld();
+	if (Character && World && Character->HasAuthority())
+	{
+		const UCapsuleComponent* Capsule = Character->GetCapsuleComponent();
+		const float Reach = EditRadius + (Capsule ? Capsule->GetScaledCapsuleHalfHeight() : 100.f) + 200.f;
+		if (FVector::DistSquared(EditCenter, Character->GetActorLocation()) <= FMath::Square(Reach))
+		{
+			EmbedCheckArmedUntil = World->GetTimeSeconds() + 10.0;
+		}
+	}
+}
+
+void UVCMovementComponent::TryBindCollisionReady()
+{
+	if (bBoundCollisionReady)
+	{
+		return;
+	}
+	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelCollisionManager* ColMgr = ChunkMgr ? ChunkMgr->GetCollisionManager() : nullptr;
+	if (ColMgr)
+	{
+		ColMgr->OnCollisionReady.AddUObject(this, &UVCMovementComponent::OnVoxelCollisionReady);
+		bBoundCollisionReady = true;
+	}
+}
+
+void UVCMovementComponent::OnVoxelCollisionReady(const FIntVector& ChunkCoord)
+{
+	const UWorld* World = GetWorld();
+	const ACharacter* Character = GetCharacterOwner();
+	if (!World || !Character || !Character->HasAuthority() || EmbedCheckArmedUntil < 0.0)
+	{
+		return;
+	}
+	if (World->GetTimeSeconds() > EmbedCheckArmedUntil)
+	{
+		EmbedCheckArmedUntil = -1.0;
+		return;
+	}
+
+	// Only the chunks the capsule can touch matter.
+	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(World);
+	if (!ChunkMgr)
+	{
+		return;
+	}
+	const FIntVector PawnChunk = ChunkMgr->WorldToChunkCoord(Character->GetActorLocation());
+	const FIntVector Delta = ChunkCoord - PawnChunk;
+	if (FMath::Abs(Delta.X) > 1 || FMath::Abs(Delta.Y) > 1 || FMath::Abs(Delta.Z) > 1)
+	{
+		return;
+	}
+
+	if (ResolveTerrainEmbedding())
+	{
+		EmbedCheckArmedUntil = -1.0;
+	}
+}
+
+bool UVCMovementComponent::ResolveTerrainEmbedding()
+{
+	ACharacter* Character = GetCharacterOwner();
+	UWorld* World = GetWorld();
+	UVoxelChunkManager* ChunkMgr = World ? FVCVoxelNavigationHelper::FindChunkManager(World) : nullptr;
+	const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
+	const UCapsuleComponent* Capsule = Character ? Character->GetCapsuleComponent() : nullptr;
+	if (!Character || !Character->HasAuthority() || !Config || !Capsule)
+	{
+		return false;
+	}
+
+	const float VoxelSize = Config->VoxelSize;
+	const float HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
+	const FVector Center = Character->GetActorLocation();
+
+	// Nearest voxel sample (the lookup floors, so offset by half a voxel). Embedded means the capsule centre AND
+	// its upper body sit in solid voxels: a pawn standing on a steep slope can have one sample in the slope
+	// beside it, but never both.
+	auto IsSolidAt = [ChunkMgr, VoxelSize](const FVector& P)
+	{
+		return ChunkMgr->GetEditMergedVoxelAtWorldPosition(P + FVector(VoxelSize * 0.5f)).IsSolid();
+	};
+	if (!IsSolidAt(Center) || !IsSolidAt(Center + FVector(0.f, 0.f, HalfHeight * 0.5f)))
+	{
+		return false;
+	}
+
+	// Scan up for the first run of air tall enough for the capsule.
+	const int32 HeadroomSamples = FMath::CeilToInt((2.f * HalfHeight) / VoxelSize) + 1;
+	int32 AirRun = 0;
+	int32 FirstAirStep = INDEX_NONE;
+	for (int32 Step = 1; Step <= EmbedResolveMaxScanVoxels; ++Step)
+	{
+		if (IsSolidAt(Center + FVector(0.f, 0.f, Step * VoxelSize)))
+		{
+			AirRun = 0;
+			FirstAirStep = INDEX_NONE;
+			continue;
+		}
+		if (AirRun++ == 0)
+		{
+			FirstAirStep = Step;
+		}
+		if (AirRun >= HeadroomSamples)
+		{
+			break;
+		}
+	}
+	if (FirstAirStep == INDEX_NONE || AirRun < HeadroomSamples)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("%s is embedded in terrain at %s but no headroom was found within %d voxels."),
+			*Character->GetName(), *Center.ToCompactString(), EmbedResolveMaxScanVoxels);
+		return false;
+	}
+
+	// The surface sits between the last solid sample and the first air one; snap onto the collision there.
+	const float SurfaceGuessZ = Center.Z + (FirstAirStep - 0.5f) * VoxelSize;
+	FVector Target(Center.X, Center.Y, SurfaceGuessZ + HalfHeight + 5.f);
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(VoxelEmbedResolve), false, Character);
+	FHitResult Hit;
+	if (World->LineTraceSingleByChannel(Hit, FVector(Center.X, Center.Y, SurfaceGuessZ + 2.f * HalfHeight),
+		FVector(Center.X, Center.Y, SurfaceGuessZ - 2.f * VoxelSize), Capsule->GetCollisionObjectType(), Params))
+	{
+		Target.Z = Hit.ImpactPoint.Z + HalfHeight + 5.f;
+	}
+
+	Character->SetActorLocation(Target, false, nullptr, ETeleportType::TeleportPhysics);
+	Velocity = FVector::ZeroVector;
+	SetMovementMode(MOVE_Falling);
+
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s was embedded in terrain; lifted %.0f uu onto the new surface."),
+		*Character->GetName(), Target.Z - Center.Z);
+	return true;
 }

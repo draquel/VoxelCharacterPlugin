@@ -94,13 +94,44 @@ void UVCCampsiteWidget::BuildWidgetTree()
 void UVCCampsiteWidget::InitPanel(AVCCharacterBase* Character, AActor* InRestPoint)
 {
 	BuildWidgetTree();
+	UnbindRestPoint();
 	BoundCharacter = Character;
 	RestPoint = InRestPoint;
 	if (CraftingPanel)
 	{
 		CraftingPanel->InitPanel(Character, InRestPoint);
 	}
+	// Sleep is allowed only at dusk / night: follow the rest point's report so an open panel enables the button when
+	// night falls (it used to update only on open and after a click).
+	if (ICGFRestPointInterface* Rest = Cast<ICGFRestPointInterface>(InRestPoint))
+	{
+		if (FSimpleMulticastDelegate* Event = Rest->GetSleepAvailabilityChangedEvent())
+		{
+			SleepAvailabilityHandle = Event->AddUObject(this, &UVCCampsiteWidget::RefreshButtons);
+		}
+	}
 	RefreshButtons();
+}
+
+void UVCCampsiteWidget::NativeDestruct()
+{
+	UnbindRestPoint();
+	Super::NativeDestruct();
+}
+
+void UVCCampsiteWidget::UnbindRestPoint()
+{
+	if (SleepAvailabilityHandle.IsValid())
+	{
+		if (ICGFRestPointInterface* Rest = Cast<ICGFRestPointInterface>(RestPoint.Get()))
+		{
+			if (FSimpleMulticastDelegate* Event = Rest->GetSleepAvailabilityChangedEvent())
+			{
+				Event->Remove(SleepAvailabilityHandle);
+			}
+		}
+		SleepAvailabilityHandle.Reset();
+	}
 }
 
 void UVCCampsiteWidget::RefreshButtons()

@@ -76,6 +76,15 @@ public:
 	UFUNCTION(Client, Reliable)
 	void Client_NotifyGathered(const FText& ItemName, int32 Count);
 
+	/**
+	 * Server -> owning client: flash a HUD toast. For server-side outcomes the player should see (a refused
+	 * block placement, a failed interaction, a save).
+	 * @param Text     Message to show
+	 * @param Duration Seconds on screen
+	 */
+	UFUNCTION(Client, Reliable)
+	void Client_ShowToast(const FText& Text, float Duration = 3.0f);
+
 	/** @return True while the campsite panel is open. */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
 	bool IsCampsiteUIOpen() const { return bCampsiteOpen; }

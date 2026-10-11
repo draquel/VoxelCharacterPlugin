@@ -114,6 +114,20 @@ public:
 	/** Override to use voxel water depth instead of physics water volumes. */
 	virtual float ImmersionDepth() const override;
 
+	/**
+	 * Lift the pawn out of terrain that closed around it -- a build brush or stamp filled the space it stands in,
+	 * so its capsule is inside solid voxels and would drop through the inside of the new geometry. Scans the
+	 * edit-merged voxels upward for headroom and snaps onto the new surface. Runs on the authority only.
+	 * Called automatically when new collision lands near the pawn shortly after an edit near it.
+	 * @return True if the pawn was embedded and has been moved
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Movement|Voxel")
+	bool ResolveTerrainEmbedding();
+
+	/** Max voxels scanned upward for headroom when lifting an embedded pawn. */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Movement|Voxel", meta = (ClampMin = "1"))
+	int32 EmbedResolveMaxScanVoxels = 64;
+
 protected:
 	/** Cached terrain data, refreshed every TerrainCacheDuration seconds. */
 	FVoxelTerrainContext CachedTerrainContext;
@@ -162,6 +176,21 @@ protected:
 
 	virtual void BeginPlay() override;
 
-	/** Delegate handler for chunk modification (invalidates terrain cache). */
+	/** Delegate handler for chunk modification (invalidates terrain cache, arms the embed check). */
 	void OnVoxelChunkModified(const FIntVector& ChunkCoord, EEditSource Source, const FVector& EditCenter, float EditRadius);
+
+	/** Bind OnCollisionReady once the collision manager exists (it can be created after this component). */
+	void TryBindCollisionReady();
+
+	/** New collision landed for a chunk: if an edit near the pawn armed the check, lift it out if embedded. */
+	void OnVoxelCollisionReady(const FIntVector& ChunkCoord);
+
+	/** World time until which an edit near the pawn keeps the embed check armed (negative = disarmed). */
+	double EmbedCheckArmedUntil = -1.0;
+
+	/** OnCollisionReady is bound. */
+	bool bBoundCollisionReady = false;
+
+	/** Seconds until the next attempt to bind OnCollisionReady. */
+	float CollisionBindRetryTimer = 0.f;
 };

@@ -3,6 +3,7 @@
 #include "Core/VCCharacterAttributeSet.h"
 #include "Net/UnrealNetwork.h"
 #include "GameplayEffectExtension.h"
+#include "AbilitySystemComponent.h"
 #include "VoxelCharacterPlugin.h"
 
 UVCCharacterAttributeSet::UVCCharacterAttributeSet()
@@ -53,6 +54,27 @@ void UVCCharacterAttributeSet::PreAttributeChange(const FGameplayAttribute& Attr
 	else if (Attribute == GetMoveSpeedMultiplierAttribute())
 	{
 		NewValue = FMath::Max(0.f, NewValue);
+	}
+}
+
+void UVCCharacterAttributeSet::PostAttributeChange(const FGameplayAttribute& Attribute, float OldValue, float NewValue)
+{
+	Super::PostAttributeChange(Attribute, OldValue, NewValue);
+
+	// PreAttributeChange clamps Health / Stamina only when THEY change. Unequipping armour lowers MaxHealth without
+	// touching Health, which left e.g. 130 / 100; clamp the current value whenever its maximum shrinks below it.
+	UAbilitySystemComponent* ASC = GetOwningAbilitySystemComponent();
+	if (!ASC || !ASC->IsOwnerActorAuthoritative())
+	{
+		return;
+	}
+	if (Attribute == GetMaxHealthAttribute() && GetHealth() > NewValue)
+	{
+		ASC->ApplyModToAttribute(GetHealthAttribute(), EGameplayModOp::Override, NewValue);
+	}
+	else if (Attribute == GetMaxStaminaAttribute() && GetStamina() > NewValue)
+	{
+		ASC->ApplyModToAttribute(GetStaminaAttribute(), EGameplayModOp::Override, NewValue);
 	}
 }
 

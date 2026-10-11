@@ -72,6 +72,9 @@ void UVCCombatComponent::InitializeWithAbilitySystem(UAbilitySystemComponent* AS
 	BoundASC = ASC;
 	HealthChangedHandle = ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetHealthAttribute())
 		.AddUObject(this, &UVCCombatComponent::HandleHealthChanged);
+	// Equipping armour changes only MaxHealth: without this the HUD kept the old maximum until the next hit or heal.
+	MaxHealthChangedHandle = ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetMaxHealthAttribute())
+		.AddUObject(this, &UVCCombatComponent::HandleMaxHealthChanged);
 }
 
 void UVCCombatComponent::UninitializeFromAbilitySystem()
@@ -82,8 +85,13 @@ void UVCCombatComponent::UninitializeFromAbilitySystem()
 		{
 			ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetHealthAttribute()).Remove(HealthChangedHandle);
 		}
+		if (MaxHealthChangedHandle.IsValid())
+		{
+			ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetMaxHealthAttribute()).Remove(MaxHealthChangedHandle);
+		}
 	}
 	HealthChangedHandle.Reset();
+	MaxHealthChangedHandle.Reset();
 	BoundASC.Reset();
 }
 
@@ -284,6 +292,12 @@ void UVCCombatComponent::HandleHealthChanged(const FOnAttributeChangeData& Data)
 	{
 		HandleOutOfHealth();
 	}
+}
+
+void UVCCombatComponent::HandleMaxHealthChanged(const FOnAttributeChangeData& Data)
+{
+	const float Health = GetHealth();
+	OnHealthChanged.Broadcast(Health, Health, Data.NewValue);
 }
 
 void UVCCombatComponent::HandleOutOfHealth()
