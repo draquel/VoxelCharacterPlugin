@@ -281,22 +281,9 @@ void UVCMovementComponent::FindFloor(const FVector& CapsuleLocation, FFindFloorR
 {
 	Super::FindFloor(CapsuleLocation, OutFloorResult, bCanUseCachedLocation, DownwardSweepResult);
 
-	// --- Handle inverted normals from double-sided voxel trimesh collision ---
-	// With bDoubleSidedGeometry = true, the Chaos trimesh returns the raw face
-	// normal from triangle winding. If the mesher's winding convention differs
-	// from Chaos's expectation, top-surface normals point downward (ImpactNormal.Z < 0).
-	// The floor IS blocking but Super::FindFloor marks it unwalkable. Fix by
-	// flipping the normal and re-evaluating walkability.
-	if (!OutFloorResult.bWalkableFloor && OutFloorResult.bBlockingHit)
-	{
-		FHitResult& Hit = OutFloorResult.HitResult;
-		if (Hit.ImpactNormal.Z < -UE_KINDA_SMALL_NUMBER)
-		{
-			Hit.ImpactNormal = -Hit.ImpactNormal;
-			Hit.Normal = -Hit.Normal;
-			OutFloorResult.bWalkableFloor = IsWalkable(Hit);
-		}
-	}
+	// The voxel collision trimesh used to be wound backwards, so top surfaces reported downward normals
+	// and this override flipped them back. The collision manager now winds triangles the way Chaos
+	// expects (VoxelCollisionManager.cpp), so a downward normal under the feet is a real underside.
 
 	// --- Line trace fallback for trimesh edge normal artifacts ---
 	// Capsule sweeps against trimesh collision can return normals perpendicular to
@@ -320,13 +307,6 @@ void UVCMovementComponent::FindFloor(const FVector& CapsuleLocation, FFindFloorR
 
 			if (GetWorld()->LineTraceSingleByChannel(LineHit, TraceStart, TraceEnd, CapsulePrimitive->GetCollisionObjectType(), QueryParams))
 			{
-				// Fix inverted normals on the line trace result too
-				if (LineHit.ImpactNormal.Z < -UE_KINDA_SMALL_NUMBER)
-				{
-					LineHit.ImpactNormal = -LineHit.ImpactNormal;
-					LineHit.Normal = -LineHit.Normal;
-				}
-
 				if (IsWalkable(LineHit))
 				{
 					UE_LOG(LogVoxelCharacter, Verbose, TEXT("VoxelFloorLineTrace: Edge normal corrected. Sweep=(%.2f, %.2f, %.2f) LineTrace=(%.2f, %.2f, %.2f)"),
@@ -392,7 +372,7 @@ void UVCMovementComponent::FindFloor(const FVector& CapsuleLocation, FFindFloorR
 }
 
 // ---------------------------------------------------------------------------
-// Landing Spot Validation (inverted normal fix for voxel trimesh)
+// Landing Spot Validation (edge normal fix for voxel trimesh)
 // ---------------------------------------------------------------------------
 
 bool UVCMovementComponent::IsValidLandingSpot(const FVector& CapsuleLocation, const FHitResult& Hit) const
@@ -400,17 +380,6 @@ bool UVCMovementComponent::IsValidLandingSpot(const FVector& CapsuleLocation, co
 	if (!Hit.bBlockingHit)
 	{
 		return Super::IsValidLandingSpot(CapsuleLocation, Hit);
-	}
-
-	// Fix inverted normals from double-sided voxel trimesh.
-	// The base class rejects hits with ImpactNormal.Z < 0 before FindFloor
-	// gets a chance to correct them, causing the character to slide after jumps.
-	if (!Hit.bStartPenetrating && Hit.ImpactNormal.Z < -UE_KINDA_SMALL_NUMBER)
-	{
-		FHitResult FixedHit = Hit;
-		FixedHit.ImpactNormal = -FixedHit.ImpactNormal;
-		FixedHit.Normal = -FixedHit.Normal;
-		return Super::IsValidLandingSpot(CapsuleLocation, FixedHit);
 	}
 
 	// Fix edge normals: capsule sweep may return a nearly-horizontal edge normal
@@ -427,13 +396,6 @@ bool UVCMovementComponent::IsValidLandingSpot(const FVector& CapsuleLocation, co
 		if (GetWorld()->LineTraceSingleByChannel(LineHit, TraceStart, TraceEnd,
 			UpdatedComponent->GetCollisionObjectType(), Params))
 		{
-			// Fix inverted normals on line trace too
-			if (LineHit.ImpactNormal.Z < -UE_KINDA_SMALL_NUMBER)
-			{
-				LineHit.ImpactNormal = -LineHit.ImpactNormal;
-				LineHit.Normal = -LineHit.Normal;
-			}
-
 			if (IsWalkable(LineHit))
 			{
 				FHitResult FixedHit = Hit;
