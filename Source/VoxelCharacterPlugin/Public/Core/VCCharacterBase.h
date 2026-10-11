@@ -463,6 +463,9 @@ protected:
 	UFUNCTION()
 	void HandleCarriedLightChanged(FGameplayTag SlotTag, bool bLit, float FuelSeconds, float MaxFuel);
 
+	/** Last reported carried-light lit state (prompt text depends on it; fuel ticks alone do not refresh). */
+	bool bLastCarriedLightLit = false;
+
 	/** Equipment manager removed a worn-out item (authority): a burnt-out torch tells the owner. */
 	UFUNCTION()
 	void HandleItemBroken(FGameplayTag SlotTag, const FItemInstance& Item);

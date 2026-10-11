@@ -40,6 +40,10 @@ public:
 
 protected:
 	virtual void NativeOnInitialized() override;
+	virtual void NativeDestruct() override;
+
+	/** Stop listening to the bound rest point's sleep-availability event. */
+	void UnbindRestPoint();
 
 	void BuildWidgetTree();
 
@@ -72,4 +76,7 @@ protected:
 
 	TWeakObjectPtr<AVCCharacterBase> BoundCharacter;
 	TWeakObjectPtr<AActor> RestPoint;
+
+	/** Subscription to the rest point's sleep-availability event (refreshes Sleep when night falls). */
+	FDelegateHandle SleepAvailabilityHandle;
 };

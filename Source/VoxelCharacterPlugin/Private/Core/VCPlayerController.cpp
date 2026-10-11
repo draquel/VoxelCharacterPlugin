@@ -1235,29 +1235,21 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 
 	case EVoxelModificationType::Place:
 	{
-		// Reject placement if the voxel overlaps the character's capsule
-		if (const ACharacter* PawnCharacter = Cast<ACharacter>(ControlledPawn))
+		// Reject a placement that would close terrain around any pawn (this player, other players, NPCs).
+		// The brush below fills the single voxel SAMPLE at VoxelWorldPos, and the smooth mesher puts the new
+		// surface about half a voxel around that sample -- so the solid cube is centred on the sample, not
+		// spanning [sample, sample + VoxelSize] (the old test was shifted half a voxel and ignored NPCs).
 		{
-			if (const UCapsuleComponent* Capsule = PawnCharacter->GetCapsuleComponent())
+			const float HalfExtent = Config->VoxelSize * 0.5f + 10.f;
+			const FCollisionObjectQueryParams PawnObjects(ECC_Pawn);
+			if (GetWorld() && GetWorld()->OverlapAnyTestByObjectType(VoxelWorldPos, FQuat::Identity, PawnObjects,
+				FCollisionShape::MakeBox(FVector(HalfExtent))))
 			{
-				const float VoxelSize = Config->VoxelSize;
-				const FVector PawnPos = PawnCharacter->GetActorLocation();
-				const float R = Capsule->GetScaledCapsuleRadius();
-				const float HH = Capsule->GetScaledCapsuleHalfHeight();
-
-				const FVector VoxelMax = VoxelWorldPos + FVector(VoxelSize);
-				const bool bOverlaps =
-					VoxelWorldPos.X < PawnPos.X + R && VoxelMax.X > PawnPos.X - R &&
-					VoxelWorldPos.Y < PawnPos.Y + R && VoxelMax.Y > PawnPos.Y - R &&
-					VoxelWorldPos.Z < PawnPos.Z + HH && VoxelMax.Z > PawnPos.Z - HH;
-
-				if (bOverlaps)
-				{
-					UE_LOG(LogVoxelCharacter, Verbose,
-						TEXT("Server_RequestVoxelModification: Rejected place at [%d,%d,%d] — overlaps pawn capsule"),
-						VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z);
-					return;
-				}
+				UE_LOG(LogVoxelCharacter, Verbose,
+					TEXT("Server_RequestVoxelModification: Rejected place at [%d,%d,%d] — overlaps a pawn"),
+					VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z);
+				Client_ShowToast(NSLOCTEXT("VoxelCharacter", "PlaceTooClose", "Too close to place a block"), 1.5f);
+				return;
 			}
 		}
 
@@ -1491,6 +1483,11 @@ void AVCPlayerController::CloseCampsiteUI()
 void AVCPlayerController::Client_OpenCampsite_Implementation(AActor* RestPoint)
 {
 	OpenCampsiteUI(RestPoint);
+}
+
+void AVCPlayerController::Client_ShowToast_Implementation(const FText& Text, float Duration)
+{
+	ShowToast(Text, Duration);
 }
 
 void AVCPlayerController::Client_NotifyVoxelEditBlocked_Implementation(int32 RejectedVoxelCount)

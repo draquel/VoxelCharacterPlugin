@@ -1271,6 +1271,19 @@ void AVCCharacterBase::HandleCarriedLightChanged(FGameplayTag SlotTag, bool bLit
 	float Fuel = FuelSeconds, Max = MaxFuel;
 	const bool bAnyLit = GetCarriedLightFuel(Fuel, Max);
 	OnCarriedLightChanged.Broadcast(bAnyLit, bAnyLit ? Fuel : 0.f, bAnyLit ? Max : 0.f);
+
+	// What a target offers can depend on our flame (a dark wall torch reads "Light torch" only with one): when the
+	// flame comes or goes, rebuild the prompt for whatever we are looking at.
+	if (bAnyLit != bLastCarriedLightLit)
+	{
+		bLastCarriedLightLit = bAnyLit;
+#if WITH_INTERACTION_PLUGIN
+		if (InteractionComponent && IsLocallyControlled())
+		{
+			InteractionComponent->RefreshCurrentTarget();
+		}
+#endif
+	}
 }
 
 void AVCCharacterBase::HandleItemBroken(FGameplayTag SlotTag, const FItemInstance& Item)

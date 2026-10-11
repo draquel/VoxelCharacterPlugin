@@ -252,6 +252,15 @@ Third-person camera must trace against voxel geometry to prevent clipping into t
 - Invalidate immediately when `OnVoxelChunkModified` fires for the character's current chunk
 - `EVoxelSurfaceType` drives friction multiplier, footstep sounds, and movement speed modifiers
 
+### Terrain closing around a pawn
+
+Edits must never trap a pawn. `Server_RequestVoxelModification` refuses a placement whose voxel cube (centred on the
+sample, half a voxel plus a margin) overlaps ANY pawn and tells the player through `Client_ShowToast` ("Too close to
+place a block"); the demo `AVoxelWorldTestActor` build / place inputs refuse brushes that overlap a pawn. As a safety
+net for everything else (stamps, scripts), an edit near a pawn arms `UVCMovementComponent`, and when the new
+collision lands nearby `ResolveTerrainEmbedding()` lifts the pawn onto the new surface if its centre and upper body are
+inside solid voxels (players and NPCs both use this component).
+
 ### Custom Floor Finding
 
 If VoxelWorlds uses async mesh generation (marching cubes), the standard `FindFloor` may fail during mesh rebuilds. The override must handle transitional states gracefully — if no valid floor is found and the character was grounded last frame, maintain grounded state briefly to avoid jitter.

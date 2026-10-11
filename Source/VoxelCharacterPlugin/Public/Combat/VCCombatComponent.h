@@ -178,6 +178,9 @@ protected:
 	/** Health attribute delegate target. */
 	void HandleHealthChanged(const FOnAttributeChangeData& Data);
 
+	/** MaxHealth attribute delegate target: re-broadcast OnHealthChanged so health readouts follow armour changes. */
+	void HandleMaxHealthChanged(const FOnAttributeChangeData& Data);
+
 	/** Authority: Health hit zero while alive. Routes to EnterDowned / EnterDead per policy. */
 	void HandleOutOfHealth();
 
@@ -190,6 +193,7 @@ protected:
 	/** ASC the Health delegate is bound on. */
 	TWeakObjectPtr<UAbilitySystemComponent> BoundASC;
 	FDelegateHandle HealthChangedHandle;
+	FDelegateHandle MaxHealthChangedHandle;
 	FTimerHandle DownedTimerHandle;
 
 	/** The hit that most recently got through ApplyDamage; reported as the killing/downing hit. */
