@@ -12,6 +12,8 @@ class AVCPlayerState;
 /** A player is logging in and their player state exists, before their first pawn spawns (save systems fill it here). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCPlayerLoggingIn, AVCPlayerState*, PlayerState);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCPlayerLoggingOut, AVCPlayerState*, PlayerState);
+/** A player asked to save the world (the pause menu's Save; QA R20). */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCSaveRequested, AController*, RequestedBy);
 
 /**
  * Game mode base that owns player respawn for the voxel character.
@@ -52,6 +54,25 @@ public:
 	 */
 	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Save")
 	FOnVCPlayerLoggingOut OnPlayerLoggingOut;
+
+	/** A player asked to save (pause menu). The save system binds it; nothing bound = saving unavailable. */
+	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Save")
+	FOnVCSaveRequested OnSaveRequested;
+
+	/**
+	 * Server: a player asked to save the world. Broadcasts OnSaveRequested; tells the player when nothing can save.
+	 * @param RequestedBy The asking player's controller
+	 * @return True if a save system received the request
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Save")
+	bool RequestSave(AController* RequestedBy);
+
+	/**
+	 * Keep the dead player's body as a corpse at respawn instead of destroying it (QA R19): one per player, the
+	 * previous one goes when the next is kept.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Respawn")
+	bool bKeepCorpse = true;
 
 	/**
 	 * Called by the dying pawn on authority. Schedules the respawn.
@@ -103,4 +124,7 @@ protected:
 	};
 
 	TMap<TWeakObjectPtr<AController>, FPendingRespawn> PendingRespawns;
+
+	/** Each player's kept corpse (bKeepCorpse). */
+	TMap<TWeakObjectPtr<AController>, TWeakObjectPtr<APawn>> PlayerCorpses;
 };

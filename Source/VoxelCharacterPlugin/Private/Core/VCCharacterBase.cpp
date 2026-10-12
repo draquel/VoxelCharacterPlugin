@@ -20,6 +20,7 @@
 #include "Input/VCInputConfig.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "TimerManager.h"
 #include "AbilitySystemComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -236,6 +237,7 @@ void AVCCharacterBase::BeginPlay()
 		EquipmentManager->OnItemUnequipped.AddDynamic(this, &AVCCharacterBase::HandleItemUnequipped);
 		EquipmentManager->OnCarriedLightChanged.AddDynamic(this, &AVCCharacterBase::HandleCarriedLightChanged);
 		EquipmentManager->OnItemBroken.AddDynamic(this, &AVCCharacterBase::HandleItemBroken);
+		EquipmentManager->OnVisualAttached.AddDynamic(this, &AVCCharacterBase::HandleEquipmentVisualAttached);
 	}
 #endif
 
@@ -386,6 +388,7 @@ void AVCCharacterBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(AVCCharacterBase, CurrentViewMode);
+	DOREPLIFETIME(AVCCharacterBase, bIsCorpse);
 }
 
 // ---------------------------------------------------------------------------
@@ -575,6 +578,78 @@ void AVCCharacterBase::HandleDowned(const FCGFDamageContext& Context)
 {
 	Incapacitate();
 	BP_OnDowned(Context);
+}
+
+void AVCCharacterBase::BecomeCorpse()
+{
+	if (!HasAuthority() || bIsCorpse)
+	{
+		return;
+	}
+	bIsCorpse = true;
+	ApplyCorpseState();
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: kept as the player's corpse at %s."), *GetName(), *GetActorLocation().ToCompactString());
+}
+
+void AVCCharacterBase::OnRep_IsCorpse()
+{
+	if (bIsCorpse)
+	{
+		ApplyCorpseState();
+	}
+}
+
+void AVCCharacterBase::ApplyCorpseState()
+{
+	Tags.AddUnique(TEXT("Corpse"));
+	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
+	{
+		Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		Movement->DisableMovement();
+		Movement->SetComponentTickEnabled(false);
+	}
+	// A client that only now learns of the body (joined late) starts the ragdoll here.
+	USkeletalMeshComponent* Body = GetMesh();
+	if (Body && Body->GetPhysicsAsset() && !Body->IsSimulatingPhysics())
+	{
+		Body->SetCollisionProfileName(TEXT("Ragdoll"));
+		Body->SetSimulatePhysics(true);
+	}
+	if (UWorld* World = GetWorld())
+	{
+		CorpseStartTime = World->GetTimeSeconds();
+		CorpseCalmChecks = 0;
+		World->GetTimerManager().SetTimer(CorpseSettleTimer, this, &AVCCharacterBase::CheckCorpseSettled, 0.25f, true);
+	}
+}
+
+void AVCCharacterBase::CheckCorpseSettled()
+{
+	USkeletalMeshComponent* Body = GetMesh();
+	UWorld* World = GetWorld();
+	if (!Body || !World)
+	{
+		return;
+	}
+	if (Body->IsSimulatingPhysics())
+	{
+		const bool bCalm = Body->GetPhysicsLinearVelocity().Size() < 10.f;
+		CorpseCalmChecks = bCalm ? CorpseCalmChecks + 1 : 0;
+		if (CorpseCalmChecks < 4 && World->GetTimeSeconds() - CorpseStartTime < CorpseFreezeAfterSeconds)
+		{
+			return;
+		}
+	}
+	// Freeze: stop updating the skeleton first so the bones keep the ragdoll pose, then stop simulating. The body
+	// then stays put even if the terrain under it unloads; it keeps query collision for later item recovery.
+	World->GetTimerManager().ClearTimer(CorpseSettleTimer);
+	Body->bNoSkeletonUpdate = true;
+	Body->SetSimulatePhysics(false);
+	Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: corpse settled and frozen."), *GetName());
 }
 
 void AVCCharacterBase::HandleDied(const FCGFDamageContext& Context)
@@ -1016,13 +1091,29 @@ bool AVCCharacterBase::RequestPickupItem(AActor* WorldItem)
 
 bool AVCCharacterBase::RequestDropActiveItem(int32 Count)
 {
+	// The server spawns the pickup and removes the stack (a client-side spawn was local only; QA R18).
+	if (!HasAuthority())
+	{
+		Server_DropItemInSlot(ActiveHotbarSlot, Count);
+		return true;
+	}
+	return DropItemInSlot(ActiveHotbarSlot, Count);
+}
+
+void AVCCharacterBase::Server_DropItemInSlot_Implementation(int32 SlotIndex, int32 Count)
+{
+	DropItemInSlot(SlotIndex, Count);
+}
+
+bool AVCCharacterBase::DropItemInSlot(int32 SlotIndex, int32 Count)
+{
 #if WITH_INVENTORY_PLUGIN && WITH_INTERACTION_PLUGIN
-	if (!InventoryComponent)
+	if (!HasAuthority() || !InventoryComponent || Count <= 0)
 	{
 		return false;
 	}
 
-	FItemInstance Item = InventoryComponent->GetItemInSlot(ActiveHotbarSlot);
+	FItemInstance Item = InventoryComponent->GetItemInSlot(SlotIndex);
 	if (!Item.IsValid())
 	{
 		return false;
@@ -1479,6 +1570,10 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	{
 		EIC->BindAction(Config->IA_OpenInventory, ETriggerEvent::Started, this, &AVCCharacterBase::Input_OpenInventory);
 	}
+	if (Config->IA_Pause)
+	{
+		EIC->BindAction(Config->IA_Pause, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Pause);
+	}
 	if (Config->IA_OpenMap)
 	{
 		EIC->BindAction(Config->IA_OpenMap, ETriggerEvent::Started, this, &AVCCharacterBase::Input_OpenMap);
@@ -1762,6 +1857,14 @@ void AVCCharacterBase::Input_OpenInventory(const FInputActionValue& Value)
 	}
 }
 
+void AVCCharacterBase::Input_Pause(const FInputActionValue& Value)
+{
+	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	{
+		PC->TogglePauseMenu();
+	}
+}
+
 void AVCCharacterBase::Input_OpenMap(const FInputActionValue& Value)
 {
 	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
@@ -1893,18 +1996,29 @@ bool AVCCharacterBase::UnequipSlotToInventory(FGameplayTag SlotTag)
 
 void AVCCharacterBase::RequestUseActiveItem()
 {
+	RequestUseItemInSlot(ActiveHotbarSlot);
+}
+
+void AVCCharacterBase::RequestUseItemInSlot(int32 SlotIndex)
+{
 	if (IsIncapacitated())
 	{
 		return;
 	}
 	if (HasAuthority())
 	{
-		UseItemInSlot(ActiveHotbarSlot);
+		UseItemInSlot(SlotIndex);
 	}
 	else
 	{
-		Server_UseItemInSlot(ActiveHotbarSlot);
+		Server_UseItemInSlot(SlotIndex);
 	}
+}
+
+void AVCCharacterBase::HandleEquipmentVisualAttached(FGameplayTag SlotTag)
+{
+	// The manager attaches to the body; first-person arms take their slots once the mesh exists.
+	UpdateEquipmentAttachments();
 }
 
 void AVCCharacterBase::Server_UseItemInSlot_Implementation(int32 SlotIndex)
@@ -1936,6 +2050,17 @@ bool AVCCharacterBase::UseItemInSlot(int32 SlotIndex)
 	const UItemFragment_Consumable* Consumable = Def ? Def->FindFragment<UItemFragment_Consumable>() : nullptr;
 	if (!Consumable)
 	{
+#if WITH_EQUIPMENT_PLUGIN
+		// Hotbar option C (QA R18): using gear equips it, swapping out whatever held that slot.
+		const UItemFragment_Equipment* EquipFrag = Def ? Def->FindFragment<UItemFragment_Equipment>() : nullptr;
+		if (EquipFrag && EquipFrag->EquipmentSlotTag.IsValid() && EquipmentManager)
+		{
+			const EEquipmentResult Result = EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, EquipFrag->EquipmentSlotTag);
+			UE_LOG(LogVoxelCharacter, Log, TEXT("UseItemInSlot: equip %s -> %s: %s"), *Item.ItemDefinitionId.PrimaryAssetName.ToString(),
+				*EquipFrag->EquipmentSlotTag.ToString(), *UEnum::GetValueAsString(Result));
+			return Result == EEquipmentResult::Success;
+		}
+#endif
 		UE_LOG(LogVoxelCharacter, Verbose, TEXT("UseItemInSlot: %s is not consumable."), *Item.ItemDefinitionId.PrimaryAssetName.ToString());
 		return false;
 	}

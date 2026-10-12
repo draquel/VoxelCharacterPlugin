@@ -56,6 +56,33 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
 	void ToggleInventoryUI();
 
+	/**
+	 * Open or close the pause menu (Resume, Save, Quit; QA R20). Pauses the game only when nobody else is playing:
+	 * standalone, or a listen server with one player. A client in a multiplayer game gets the menu, unpaused.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void TogglePauseMenu();
+
+	/** Close the pause menu and unpause if it paused. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void ResumeFromPauseMenu();
+
+	/** Ask the server to save the world now (the pause menu's Save); the save system toasts "Game saved". */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void RequestSaveGame();
+
+	/** Leave the game (ends PIE in the editor); the world saves itself on the way out. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
+	void QuitFromPauseMenu();
+
+	/** The pause menu is on screen. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
+	bool IsPauseMenuOpen() const;
+
+	/** Override class for the pause menu (None = UVCPauseMenuWidget). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> PauseMenuWidgetClass;
+
 	/** Open / close the hand-crafting panel (C key; feature 8). */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
 	void ToggleCraftingUI();
@@ -287,6 +314,15 @@ private:
 	UPROPERTY()
 	TObjectPtr<UUserWidget> CampsiteWidget;
 
+	UPROPERTY()
+	TObjectPtr<UUserWidget> PauseMenuWidget;
+
+	/** The pause menu paused the game (and must unpause it). */
+	bool bPausedByMenu = false;
+
+	UFUNCTION(Server, Reliable)
+	void Server_RequestSaveGame();
+
 	/** Authority: turn a dug voxel material into items for the pawn (feature 8). */
 	void GatherFromVoxel(uint8 MaterialId);
 
@@ -356,6 +392,14 @@ private:
 	/** Handle an equipment slot right-click (cancel). */
 	UFUNCTION()
 	void OnEquipmentSlotRightClickedFromUI(FGameplayTag SlotTag, UEquipmentManagerComponent* EquipmentManager);
+
+	/** Inventory / hotbar slot double-click: equip gear, use consumables (QA R18). */
+	UFUNCTION()
+	void OnSlotDoubleClickedFromUI(int32 ClickedSlotIndex, UInventoryComponent* Inventory);
+
+	/** Equipment slot double-click: unequip back into the inventory (QA R18). */
+	UFUNCTION()
+	void OnEquipmentSlotDoubleClickedFromUI(FGameplayTag SlotTag, UEquipmentManagerComponent* EquipmentManager);
 
 	/** Enter the held state from an inventory slot. */
 	void EnterHeldState(int32 InSlotIndex, UInventoryComponent* Inventory);
