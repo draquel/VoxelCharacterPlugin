@@ -8,6 +8,9 @@
 #include "VoxelScatterManager.h"
 #include "UI/VCCampsiteWidget.h"
 #include "UI/VCCraftingPanelWidget.h"
+#include "UI/VCPauseMenuWidget.h"
+#include "Core/VCGameModeBase.h"
+#include "Kismet/KismetSystemLibrary.h"
 #include "AbilitySystemComponent.h"
 #include "Core/VCCharacterAttributeSet.h"
 #include "Input/VCInputConfig.h"
@@ -193,6 +196,93 @@ void AVCPlayerController::ToggleInventoryUI()
 	}
 
 	UE_LOG(LogVoxelCharacter, Verbose, TEXT("ToggleInventoryUI: %s"), bInventoryOpen ? TEXT("Open") : TEXT("Closed"));
+}
+
+void AVCPlayerController::TogglePauseMenu()
+{
+	if (IsPauseMenuOpen())
+	{
+		ResumeFromPauseMenu();
+		return;
+	}
+	if (!PauseMenuWidget)
+	{
+		TSubclassOf<UUserWidget> ClassToUse = PauseMenuWidgetClass ? PauseMenuWidgetClass : TSubclassOf<UUserWidget>(UVCPauseMenuWidget::StaticClass());
+		PauseMenuWidget = CreateWidget<UUserWidget>(this, ClassToUse);
+	}
+	if (!PauseMenuWidget)
+	{
+		return;
+	}
+	PauseMenuWidget->AddToViewport(50);
+	PauseMenuWidget->SetAnchorsInViewport(FAnchors(0.5f, 0.4f, 0.5f, 0.4f));
+	PauseMenuWidget->SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
+
+	// Pause only where nobody else is playing (Esc stops PIE in the editor, so the key is P).
+	const ENetMode Mode = GetNetMode();
+	const UWorld* World = GetWorld();
+	const bool bAlone = Mode == NM_Standalone || (Mode == NM_ListenServer && World && World->GetNumPlayerControllers() == 1);
+	bPausedByMenu = bAlone && SetPause(true);
+	if (UVCPauseMenuWidget* Menu = Cast<UVCPauseMenuWidget>(PauseMenuWidget))
+	{
+		Menu->SetPausedState(bPausedByMenu);
+	}
+	SetUIInputMode(PauseMenuWidget);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("Pause menu opened (%s)."), bPausedByMenu ? TEXT("game paused") : TEXT("game keeps running"));
+}
+
+void AVCPlayerController::ResumeFromPauseMenu()
+{
+	if (PauseMenuWidget && PauseMenuWidget->IsInViewport())
+	{
+		PauseMenuWidget->RemoveFromParent();
+	}
+	if (bPausedByMenu)
+	{
+		SetPause(false);
+		bPausedByMenu = false;
+	}
+	if (bInventoryOpen || bWorldMapOpen || bCraftingOpen || bCampsiteOpen)
+	{
+		SetUIInputMode();
+	}
+	else
+	{
+		SetGameInputMode();
+	}
+}
+
+bool AVCPlayerController::IsPauseMenuOpen() const
+{
+	return PauseMenuWidget && PauseMenuWidget->IsInViewport();
+}
+
+void AVCPlayerController::RequestSaveGame()
+{
+	if (HasAuthority())
+	{
+		if (AVCGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AVCGameModeBase>() : nullptr)
+		{
+			GameMode->RequestSave(this);
+		}
+		return;
+	}
+	Server_RequestSaveGame();
+}
+
+void AVCPlayerController::Server_RequestSaveGame_Implementation()
+{
+	RequestSaveGame();
+}
+
+void AVCPlayerController::QuitFromPauseMenu()
+{
+	if (bPausedByMenu)
+	{
+		SetPause(false);
+		bPausedByMenu = false;
+	}
+	UKismetSystemLibrary::QuitGame(this, this, EQuitPreference::Quit, false);
 }
 
 void AVCPlayerController::ToggleWorldMapUI()
@@ -619,12 +709,14 @@ void AVCPlayerController::BindSlotClickDelegates()
 	{
 		Hotbar->OnSlotClicked.AddDynamic(this, &AVCPlayerController::OnSlotClickedFromUI);
 		Hotbar->OnSlotRightClicked.AddDynamic(this, &AVCPlayerController::OnSlotRightClickedFromUI);
+		Hotbar->OnSlotDoubleClicked.AddDynamic(this, &AVCPlayerController::OnSlotDoubleClickedFromUI);
 	}
 
 	if (UInventoryPanelWidget* Panel = Cast<UInventoryPanelWidget>(InventoryPanelWidget))
 	{
 		Panel->OnSlotClicked.AddDynamic(this, &AVCPlayerController::OnSlotClickedFromUI);
 		Panel->OnSlotRightClicked.AddDynamic(this, &AVCPlayerController::OnSlotRightClickedFromUI);
+		Panel->OnSlotDoubleClicked.AddDynamic(this, &AVCPlayerController::OnSlotDoubleClickedFromUI);
 	}
 
 #if WITH_EQUIPMENT_PLUGIN
@@ -632,6 +724,7 @@ void AVCPlayerController::BindSlotClickDelegates()
 	{
 		EqPanel->OnSlotClicked.AddDynamic(this, &AVCPlayerController::OnEquipmentSlotClickedFromUI);
 		EqPanel->OnSlotRightClicked.AddDynamic(this, &AVCPlayerController::OnEquipmentSlotRightClickedFromUI);
+		EqPanel->OnSlotDoubleClicked.AddDynamic(this, &AVCPlayerController::OnEquipmentSlotDoubleClickedFromUI);
 	}
 #endif
 
@@ -699,6 +792,36 @@ void AVCPlayerController::OnSlotClickedFromUI(int32 ClickedSlotIndex, UInventory
 		}
 #endif
 		CancelHeldState();
+	}
+#endif
+}
+
+void AVCPlayerController::OnSlotDoubleClickedFromUI(int32 ClickedSlotIndex, UInventoryComponent* Inventory)
+{
+#if WITH_INVENTORY_PLUGIN
+	// The first press of the double-click picked the item up; drop that and act on the slot instead.
+	if (HeldSourceType != EVCHeldSource::None)
+	{
+		CancelHeldState();
+	}
+	AVCCharacterBase* VCChar = Cast<AVCCharacterBase>(GetPawn());
+	if (VCChar && Inventory && Inventory == VCChar->FindComponentByClass<UInventoryComponent>())
+	{
+		VCChar->RequestUseItemInSlot(ClickedSlotIndex);
+	}
+#endif
+}
+
+void AVCPlayerController::OnEquipmentSlotDoubleClickedFromUI(FGameplayTag SlotTag, UEquipmentManagerComponent* EquipmentManager)
+{
+#if WITH_EQUIPMENT_PLUGIN
+	if (HeldSourceType != EVCHeldSource::None)
+	{
+		CancelHeldState();
+	}
+	if (AVCCharacterBase* VCChar = Cast<AVCCharacterBase>(GetPawn()))
+	{
+		VCChar->UnequipSlotToInventory(SlotTag);
 	}
 #endif
 }

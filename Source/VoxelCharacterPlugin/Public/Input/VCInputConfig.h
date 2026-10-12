@@ -91,6 +91,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_Crouch;
 
+	/** Open / close the pause menu (QA R20). P in IMC_Gameplay; the action triggers while paused. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_Pause;
+
 	// ==================== Mapping Contexts ====================
 
 	/** Base gameplay context — always active at priority 0. */

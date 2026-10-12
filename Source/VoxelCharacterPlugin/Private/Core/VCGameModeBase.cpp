@@ -2,6 +2,8 @@
 
 #include "Core/VCGameModeBase.h"
 #include "Core/VCPlayerState.h"
+#include "Core/VCCharacterBase.h"
+#include "Core/VCPlayerController.h"
 #include "VoxelCharacterPlugin.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
@@ -38,6 +40,25 @@ void AVCGameModeBase::HandlePlayerDied(AController* Controller, const FTransform
 	UE_LOG(LogVoxelCharacter, Log, TEXT("%s died; respawn in %.1fs."), *GetNameSafe(Controller), RespawnDelay);
 }
 
+bool AVCGameModeBase::RequestSave(AController* RequestedBy)
+{
+	if (!HasAuthority())
+	{
+		return false;
+	}
+	if (!OnSaveRequested.IsBound())
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("%s asked to save, but no save system is listening."), *GetNameSafe(RequestedBy));
+		if (AVCPlayerController* PC = Cast<AVCPlayerController>(RequestedBy))
+		{
+			PC->Client_ShowToast(NSLOCTEXT("VCGameMode", "NoSave", "Saving is not available here"));
+		}
+		return false;
+	}
+	OnSaveRequested.Broadcast(RequestedBy);
+	return true;
+}
+
 void AVCGameModeBase::RespawnPlayer(AController* Controller)
 {
 	if (!Controller || !HasAuthority())
@@ -56,7 +77,21 @@ void AVCGameModeBase::RespawnPlayer(AController* Controller)
 	if (APawn* OldPawn = Controller->GetPawn())
 	{
 		Controller->UnPossess();
-		OldPawn->Destroy();
+		AVCCharacterBase* Body = Cast<AVCCharacterBase>(OldPawn);
+		if (bKeepCorpse && Body)
+		{
+			// One corpse per player: the previous one goes as this one stays (QA R19).
+			if (APawn* Previous = PlayerCorpses.FindRef(Controller).Get())
+			{
+				Previous->Destroy();
+			}
+			Body->BecomeCorpse();
+			PlayerCorpses.Add(Controller, Body);
+		}
+		else
+		{
+			OldPawn->Destroy();
+		}
 	}
 
 	bool bUsePlayerStart = false;

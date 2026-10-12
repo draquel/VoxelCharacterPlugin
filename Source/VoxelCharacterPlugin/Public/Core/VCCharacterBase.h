@@ -161,6 +161,22 @@ public:
 	bool IsIncapacitated() const;
 
 	/**
+	 * Server: turn this dead, unpossessed body into the player's corpse (QA R19). The ragdoll stays where it fell;
+	 * capsule collision and movement go; once it settles its pose freezes, so it does not drop when its chunk unloads.
+	 * The game mode keeps one corpse per player.
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Combat")
+	void BecomeCorpse();
+
+	/** This body is a kept corpse (no longer anyone's pawn). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
+	bool IsCorpse() const { return bIsCorpse; }
+
+	/** A corpse whose ragdoll never settles freezes after this long. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "1"))
+	float CorpseFreezeAfterSeconds = 10.f;
+
+	/**
 	 * Start the melee ability if a hostile damageable is within AttackTargetRange under the crosshair.
 	 * Step 1 of the primary-action chain; also callable from Blueprint / debug commands.
 	 * @return True if the ability activation was requested.
@@ -237,14 +253,30 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
 	bool UnequipSlotToInventory(FGameplayTag SlotTag);
 
-	/** Use (consume) the active hotbar item. Client: sends the server request. */
+	/** Use the active hotbar item (F): consume it, place it, or equip it. Client: sends the server request. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Inventory")
 	void RequestUseActiveItem();
 
 	/**
-	 * Server: use the item in an inventory slot. Requires a Consumable fragment; honours its
-	 * cooldown; applies AttributeChanges, ConsumeEffect and ConsumeAbility; removes one from the
-	 * stack when bConsumeOnUse.
+	 * Use the item in any inventory slot (an inventory double-click): consume, place or equip it. Client: sends the
+	 * server request.
+	 * @param SlotIndex Inventory slot
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Inventory")
+	void RequestUseItemInSlot(int32 SlotIndex);
+
+	/**
+	 * Server: drop Count of the item in an inventory slot as a world pickup in front of the character.
+	 * @return True if something was dropped.
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Inventory")
+	bool DropItemInSlot(int32 SlotIndex, int32 Count = 1);
+
+	/**
+	 * Server: use the item in an inventory slot. Placeable items are placed. Consumables honour their cooldown,
+	 * apply AttributeChanges, ConsumeEffect and ConsumeAbility, and remove one from the stack when bConsumeOnUse.
+	 * Equippable items go into the slot their Equipment fragment names, swapping out what was there (QA R18,
+	 * hotbar option C: F on a weapon equips it).
 	 * @return True if the item was used.
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Inventory")
@@ -368,6 +400,23 @@ protected:
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void PossessedBy(AController* NewController) override;
+
+	/** Replicated corpse flag: clients apply the corpse state when it arrives. */
+	UPROPERTY(ReplicatedUsing = OnRep_IsCorpse)
+	bool bIsCorpse = false;
+
+	UFUNCTION()
+	void OnRep_IsCorpse();
+
+	/** Corpse state on this machine: no capsule or movement, keep the ragdoll, watch for it to settle. */
+	void ApplyCorpseState();
+
+	/** Freeze the ragdoll once it has settled (or after CorpseFreezeAfterSeconds). */
+	void CheckCorpseSettled();
+
+	FTimerHandle CorpseSettleTimer;
+	int32 CorpseCalmChecks = 0;
+	double CorpseStartTime = 0.0;
 	virtual void OnRep_PlayerState() override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
@@ -492,6 +541,7 @@ protected:
 	void Input_SecondaryAction(const FInputActionValue& Value);
 	void Input_OpenInventory(const FInputActionValue& Value);
 	void Input_OpenMap(const FInputActionValue& Value);
+	void Input_Pause(const FInputActionValue& Value);
 	void Input_HotbarSlot(const FInputActionValue& Value);
 	void Input_ScrollHotbar(const FInputActionValue& Value);
 	void Input_Drop(const FInputActionValue& Value);
@@ -500,6 +550,13 @@ protected:
 
 	UFUNCTION(Server, Reliable)
 	void Server_UseItemInSlot(int32 SlotIndex);
+
+	UFUNCTION(Server, Reliable)
+	void Server_DropItemInSlot(int32 SlotIndex, int32 Count);
+
+	/** An equipment visual finished loading: re-apply the view-mode socket choice (first-person arms vs body). */
+	UFUNCTION()
+	void HandleEquipmentVisualAttached(FGameplayTag SlotTag);
 
 	UFUNCTION(Server, Reliable)
 	void Server_RestAt(AActor* RestPoint);
