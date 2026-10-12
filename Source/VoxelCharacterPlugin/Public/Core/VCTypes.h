@@ -89,6 +89,16 @@ enum class EVCNPCBehavior : uint8
 	Prey,
 };
 
+/** How readily a hostile NPC engages (QA R16): wolves are wary by day and aggressive at night. */
+UENUM(BlueprintType)
+enum class EVCNPCTemperament : uint8
+{
+	/** Engages any hostile it can see within its sight radius. */
+	Aggressive,
+	/** Engages only a hostile that comes within its wary radius, or one that attacks it or its pack. */
+	Wary,
+};
+
 /** Where AVCGameModeBase puts a player back after death. */
 UENUM(BlueprintType)
 enum class EVCRespawnPolicy : uint8

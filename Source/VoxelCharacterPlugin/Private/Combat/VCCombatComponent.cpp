@@ -219,6 +219,8 @@ ECGFDamageResult UVCCombatComponent::ApplyDamage(const FCGFDamageContext& Contex
 	EventData.ContextHandle = EffectContext;
 	TargetASC->HandleGameplayEvent(EventData.EventTag, &EventData);
 
+	OnDamaged.Broadcast(Context);
+
 	return ECGFDamageResult::Applied;
 }
 

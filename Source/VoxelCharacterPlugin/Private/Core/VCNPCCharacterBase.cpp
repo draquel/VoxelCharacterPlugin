@@ -142,6 +142,15 @@ void AVCNPCCharacterBase::BeginPlay()
 	UpdateHealthBar();
 }
 
+void AVCNPCCharacterBase::SetTemperament(EVCNPCTemperament InTemperament)
+{
+	Temperament = InTemperament;
+	if (AVCNPCAIController* AI = Cast<AVCNPCAIController>(GetController()))
+	{
+		AI->SetTemperament(InTemperament);
+	}
+}
+
 void AVCNPCCharacterBase::SetShowHealthBar(bool bShow)
 {
 	bShowHealthBar = bShow;
