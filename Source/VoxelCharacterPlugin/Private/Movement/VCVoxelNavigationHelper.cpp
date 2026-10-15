@@ -189,8 +189,23 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 	}
 
 	const float ChunkWorldSize = Config->ChunkSize * Config->VoxelSize;
-	const float WaterLevel = Config->WaterLevel;
+	// Terrain heights are world Z, so the water surface is too (the nav, swim and NPC code use the same sum).
+	const float WaterLevel = Config->WaterLevel + Config->WorldOrigin.Z;
 	const bool bHasWater = Config->bEnableWaterLevel;
+
+	// Only points inside the world can host a spawn (world modes review WM-I3, KI8): past an island's R + falloff
+	// generation writes a flat floor (dry with water off) and then nothing, so a pawn placed there waits for terrain that
+	// never comes. A start outside searches from the nearest point a chunk inside the edge instead.
+	const FVoxelWorldBounds Bounds = ChunkMgr->GetWorldBounds();
+	FVector Start = NearPosition;
+	if (!Bounds.ContainsXY(Start.X, Start.Y))
+	{
+		const FVector2D Inside = Bounds.ClampXY(Start.X, Start.Y, ChunkWorldSize);
+		Start = FVector(Inside.X, Inside.Y, NearPosition.Z);
+		UE_LOG(LogVoxelCharacter, Log,
+			TEXT("FindSpawnablePosition: (%.0f, %.0f) is outside the world; searching from (%.0f, %.0f), inside its edge."),
+			NearPosition.X, NearPosition.Y, Start.X, Start.Y);
+	}
 
 	// Helper: query terrain height and check if above water. GetGeneratedSurfaceHeight is the
 	// canonical analytic surface (continentalness AND terrain-conditioning zones): the raw
@@ -199,24 +214,29 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 	// into whatever lay beneath.
 	auto IsAboveWater = [&](float X, float Y, float& OutTerrainHeight) -> bool
 	{
+		if (!Bounds.ContainsXY(X, Y))
+		{
+			OutTerrainHeight = 0.f;
+			return false;
+		}
 		OutTerrainHeight = ChunkMgr->GetGeneratedSurfaceHeight(X, Y);
 		return !bHasWater || OutTerrainHeight > WaterLevel;
 	};
 
 	// Try the requested position first
 	float TerrainHeight = 0.f;
-	if (IsAboveWater(NearPosition.X, NearPosition.Y, TerrainHeight))
+	if (IsAboveWater(Start.X, Start.Y, TerrainHeight))
 	{
-		OutPosition = FVector(NearPosition.X, NearPosition.Y, TerrainHeight);
+		OutPosition = FVector(Start.X, Start.Y, TerrainHeight);
 		UE_LOG(LogVoxelCharacter, Log,
 			TEXT("FindSpawnablePosition: Position (%.0f, %.0f) is above water at Z=%.0f"),
-			NearPosition.X, NearPosition.Y, TerrainHeight);
+			Start.X, Start.Y, TerrainHeight);
 		return true;
 	}
 
 	UE_LOG(LogVoxelCharacter, Log,
 		TEXT("FindSpawnablePosition: Position (%.0f, %.0f) is underwater (terrain Z=%.0f, water=%.0f). Searching outward..."),
-		NearPosition.X, NearPosition.Y, TerrainHeight, WaterLevel);
+		Start.X, Start.Y, TerrainHeight, WaterLevel);
 
 	// Spiral search outward at ChunkWorldSize intervals in 8 directions
 	static const FVector2D Directions[] =
@@ -234,8 +254,8 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 
 		for (const FVector2D& Dir : Directions)
 		{
-			const float SampleX = NearPosition.X + Dir.X * Radius;
-			const float SampleY = NearPosition.Y + Dir.Y * Radius;
+			const float SampleX = Start.X + Dir.X * Radius;
+			const float SampleY = Start.Y + Dir.Y * Radius;
 
 			if (IsAboveWater(SampleX, SampleY, TerrainHeight))
 			{
@@ -250,7 +270,7 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 
 	UE_LOG(LogVoxelCharacter, Warning,
 		TEXT("FindSpawnablePosition: No land found within %.0f units of (%.0f, %.0f)"),
-		MaxSearchRadius, NearPosition.X, NearPosition.Y);
+		MaxSearchRadius, Start.X, Start.Y);
 	return false;
 }
 

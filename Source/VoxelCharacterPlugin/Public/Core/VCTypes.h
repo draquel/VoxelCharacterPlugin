@@ -253,6 +253,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnVCCombatantRevived);
 /** Voxel edit mode (dig / place on the mouse actions) was turned on or off. Local, never replicated. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCEditModeChanged, bool, bEnabled);
 
+/** The pawn entered or left the push-back band before a bounded world's edge (world modes review WM-I5). */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCWorldEdgeChanged, bool, bNearEdge);
+
 /**
  * Everything a save system keeps per player (feature 9): the items the avatar carried (JSON per
  * slot, as the death snapshot), progression, the rest point, where the avatar stood and its vitals.

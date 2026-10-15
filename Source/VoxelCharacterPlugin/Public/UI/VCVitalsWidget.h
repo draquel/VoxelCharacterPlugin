@@ -47,6 +47,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
 	bool IsEditModeShown() const;
 
+	/** @return True while the world edge hint is visible (the pawn is in the push-back band before a bounded world's edge, WM-I5). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|UI")
+	bool IsWorldEdgeHintShown() const;
+
 	/** Show an objective line above the bars (feature 4). Empty text hides it. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|UI")
 	void SetObjective(const FText& Text);
@@ -87,6 +91,13 @@ protected:
 	UFUNCTION()
 	void HandleEditModeChanged(bool bEnabled);
 
+	/** The pawn entered or left the push-back band before the world's edge (WM-I5): show or hide the hint. */
+	UFUNCTION()
+	void HandleWorldEdgeChanged(bool bNearEdge);
+
+	/** Show or hide the world edge hint. */
+	void SetWorldEdgeHintShown(bool bShown);
+
 	UFUNCTION()
 	void HandleCarriedLightChanged(bool bLit, float FuelSeconds, float MaxFuel);
 
@@ -118,6 +129,10 @@ protected:
 	/** "EDIT" cue; collapsed while edit mode is off. */
 	UPROPERTY()
 	TObjectPtr<UTextBlock> EditModeText;
+
+	/** World edge hint (WM-I5): shown while the pawn is in the push-back band before a bounded world's edge. */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> WorldEdgeText;
 
 	/** "Torch M:SS" fuel line; collapsed while nothing lit is carried. */
 	UPROPERTY()

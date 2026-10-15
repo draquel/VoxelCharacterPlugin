@@ -99,6 +99,8 @@ void UVCVitalsWidget::BuildWidgetTree()
 	};
 	ToastText = MakeLine(TEXT("ToastText"), 20, FLinearColor(1.f, 0.9f, 0.3f));
 	ObjectiveText = MakeLine(TEXT("ObjectiveText"), 14, FLinearColor(0.85f, 0.95f, 1.f));
+	WorldEdgeText = MakeLine(TEXT("WorldEdgeText"), 16, FLinearColor(0.55f, 0.85f, 1.f));
+	WorldEdgeText->SetText(NSLOCTEXT("VCVitals", "WorldEdge", "A strong current pushes you back: this is the edge of the world"));
 
 	HealthBar = MakeBar(WidgetTree, Root, HealthText, FLinearColor(0.75f, 0.12f, 0.12f), TEXT("Health"));
 	StaminaBar = MakeBar(WidgetTree, Root, StaminaText, FLinearColor(0.15f, 0.6f, 0.2f), TEXT("Stamina"));
@@ -151,6 +153,7 @@ void UVCVitalsWidget::InitWithCharacter(AVCCharacterBase* Character)
 	}
 	Character->OnEditModeChanged.AddDynamic(this, &UVCVitalsWidget::HandleEditModeChanged);
 	Character->OnCarriedLightChanged.AddDynamic(this, &UVCVitalsWidget::HandleCarriedLightChanged);
+	Character->OnWorldEdgeChanged.AddDynamic(this, &UVCVitalsWidget::HandleWorldEdgeChanged);
 
 	if (UAbilitySystemComponent* ASC = Character->GetAbilitySystemComponent())
 	{
@@ -176,8 +179,10 @@ void UVCVitalsWidget::Unbind()
 		}
 		Character->OnEditModeChanged.RemoveDynamic(this, &UVCVitalsWidget::HandleEditModeChanged);
 		Character->OnCarriedLightChanged.RemoveDynamic(this, &UVCVitalsWidget::HandleCarriedLightChanged);
+		Character->OnWorldEdgeChanged.RemoveDynamic(this, &UVCVitalsWidget::HandleWorldEdgeChanged);
 	}
 	SetEditModeShown(false);
+	SetWorldEdgeHintShown(false);
 	SetCarriedLight(false, 0.f, 0.f);
 	if (UAbilitySystemComponent* ASC = BoundASC.Get())
 	{
@@ -197,6 +202,7 @@ void UVCVitalsWidget::RefreshFromCharacter()
 	AVCCharacterBase* Character = BoundCharacter.Get();
 	UAbilitySystemComponent* ASC = BoundASC.Get();
 	SetEditModeShown(Character && Character->IsEditModeEnabled());
+	SetWorldEdgeHintShown(Character && Character->IsNearWorldEdge());
 	if (Character)
 	{
 		float Fuel = 0.f, MaxFuel = 0.f;
@@ -397,4 +403,22 @@ void UVCVitalsWidget::SetStamina(float Current, float Max)
 	{
 		StaminaText->SetText(FText::FromString(FString::Printf(TEXT("%.0f / %.0f"), Current, Max)));
 	}
+}
+
+void UVCVitalsWidget::HandleWorldEdgeChanged(bool bNearEdge)
+{
+	SetWorldEdgeHintShown(bNearEdge);
+}
+
+void UVCVitalsWidget::SetWorldEdgeHintShown(bool bShown)
+{
+	if (WorldEdgeText)
+	{
+		WorldEdgeText->SetVisibility(bShown ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+}
+
+bool UVCVitalsWidget::IsWorldEdgeHintShown() const
+{
+	return WorldEdgeText && WorldEdgeText->GetVisibility() != ESlateVisibility::Collapsed;
 }

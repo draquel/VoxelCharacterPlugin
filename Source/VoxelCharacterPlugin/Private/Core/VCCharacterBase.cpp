@@ -32,6 +32,9 @@
 #include "VoxelCollisionManager.h"
 #include "VoxelCharacterPlugin.h"
 #include "Engine/Engine.h"
+#include "GameFramework/DamageType.h"
+#include "GameFramework/GameModeBase.h"
+#include "Combat/VCCombatStatics.h"
 
 #if WITH_INTERACTION_PLUGIN
 #include "Components/InteractionComponent.h"
@@ -284,6 +287,8 @@ void AVCCharacterBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void AVCCharacterBase::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	TickWorldSafety(DeltaSeconds);
 
 	// --- Terrain Ready Spawn ---
 	// Primary: OnChunkCollisionReady delegate. Fallback: periodic poll + timeout.
@@ -948,6 +953,12 @@ void AVCCharacterBase::PlaceOnTerrainAndResume()
 		}
 		bResumeAtExactLocation = false;
 		PendingTerrainChunks.Empty();
+		// No floor at all under the saved spot by the timeout: nothing will come (the spot is outside the world, or its
+		// terrain never generates). Go to the respawn point instead of dropping into the void (WM-I4).
+		if (!bFloor && RecoverFromMissingTerrain())
+		{
+			return;
+		}
 		SetActorEnableCollision(true);
 		if (UCapsuleComponent* Capsule = GetCapsuleComponent())
 		{
@@ -1008,20 +1019,213 @@ void AVCCharacterBase::PlaceOnTerrainAndResume()
 	else
 	{
 		UE_LOG(LogVoxelCharacter, Warning,
-			TEXT("PlaceOnTerrainAndResume: Trace MISSED — character at (%.0f, %.0f, %.0f), World=%s, will fall freely"),
+			TEXT("PlaceOnTerrainAndResume: Trace MISSED — character at (%.0f, %.0f, %.0f), World=%s"),
 			SpawnPos.X, SpawnPos.Y, SpawnPos.Z,
 			*GetWorld()->GetName());
+		// Nothing under the pawn after the wait: go to the respawn point and wait there (WM-I4). Without one (or after
+		// two tries) it falls, and falling out of the world respawns it.
+		if (RecoverFromMissingTerrain())
+		{
+			return;
+		}
 	}
 
 	// Resume normal movement
 	GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 	bIsWaitingForTerrain = false;
+	TerrainRecoveryAttempts = 0;
 
 	UE_LOG(LogVoxelCharacter, Log,
 		TEXT("Terrain ready — ActorCollision=%s, CapsuleCollision=%s, MovementMode=%d"),
 		GetActorEnableCollision() ? TEXT("Enabled") : TEXT("DISABLED"),
 		GetCapsuleComponent() ? (*StaticEnum<ECollisionEnabled::Type>()->GetNameStringByValue(static_cast<int64>(GetCapsuleComponent()->GetCollisionEnabled()))) : TEXT("?"),
 		static_cast<int32>(GetCharacterMovement()->MovementMode.GetValue()));
+}
+
+// ---------------------------------------------------------------------------
+// Leaving the world (world modes review WM-I4, KI14; WM-I5)
+// ---------------------------------------------------------------------------
+
+bool AVCCharacterBase::GetLastSafeLocation(FVector& OutLocation) const
+{
+	OutLocation = LastSafeLocation;
+	return bHasLastSafeLocation;
+}
+
+bool AVCCharacterBase::ResolveRecoveryLocation(bool bAllowLastSafe, FVector& OutLocation) const
+{
+	if (bAllowLastSafe && bHasLastSafeLocation)
+	{
+		OutLocation = LastSafeLocation;
+		return true;
+	}
+	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	const FVoxelWorldBounds Bounds = ChunkMgr ? ChunkMgr->GetWorldBounds() : FVoxelWorldBounds();
+	const FVector Here = GetActorLocation();
+	// A candidate must be inside the world and away from here: the point is to leave a spot with no terrain.
+	auto Usable = [&Bounds, &Here, ChunkMgr](const FVector& Candidate)
+	{
+		const float MinMove = ChunkMgr && ChunkMgr->GetConfiguration() ? ChunkMgr->GetConfiguration()->GetChunkWorldSize() : 4800.f;
+		return Bounds.ContainsXY(Candidate.X, Candidate.Y) && FVector::Dist2D(Candidate, Here) > MinMove;
+	};
+
+	FTransform RestPoint;
+	if (const AVCPlayerState* PS = GetPlayerState<AVCPlayerState>(); PS && PS->GetRespawnPoint(RestPoint) && Usable(RestPoint.GetLocation()))
+	{
+		OutLocation = RestPoint.GetLocation();
+		return true;
+	}
+	if (AGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode() : nullptr)
+	{
+		if (const AActor* Start = GetController() ? GameMode->FindPlayerStart(GetController()) : nullptr; Start && Usable(Start->GetActorLocation()))
+		{
+			OutLocation = Start->GetActorLocation();
+			return true;
+		}
+	}
+	if (ChunkMgr && ChunkMgr->GetConfiguration())
+	{
+		// The world's centre: an island's middle, a plane's origin.
+		OutLocation = Bounds.IsBounded() ? Bounds.Center : ChunkMgr->GetConfiguration()->WorldOrigin;
+		return true;
+	}
+	return false;
+}
+
+bool AVCCharacterBase::RecoverFromMissingTerrain()
+{
+	static constexpr int32 MaxRecoveries = 2;
+	if (!HasAuthority() || TerrainRecoveryAttempts >= MaxRecoveries)
+	{
+		return false;
+	}
+	FVector Target;
+	if (!ResolveRecoveryLocation(/*bAllowLastSafe=*/false, Target))
+	{
+		return false;
+	}
+	++TerrainRecoveryAttempts;
+	UE_LOG(LogVoxelCharacter, Warning,
+		TEXT("%s: no terrain under (%.0f, %.0f, %.0f) after %.1fs; moving to the respawn point (%.0f, %.0f, %.0f), try %d."),
+		*GetName(), GetActorLocation().X, GetActorLocation().Y, GetActorLocation().Z, TerrainWaitElapsed,
+		Target.X, Target.Y, Target.Z, TerrainRecoveryAttempts);
+	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	{
+		PC->Client_ShowToast(NSLOCTEXT("VCCharacter", "NoGroundHere", "No ground here: moved to your respawn point"));
+	}
+	bResumeAtExactLocation = false;
+	SetActorLocation(Target, false, nullptr, ETeleportType::TeleportPhysics);
+	FreezeForTerrainWait();
+	InitiateChunkBasedWait();
+	return true;
+}
+
+void AVCCharacterBase::FellOutOfWorld(const UDamageType& DamageType)
+{
+	if (!HasAuthority())
+	{
+		return; // the server decides; the replicated pawn follows
+	}
+	const bool bDead = CombatComponent && ICGFDamageableInterface::Execute_IsDead(CombatComponent);
+	if (bIsCorpse || bDead || !GetController())
+	{
+		// A corpse, a body already dying, or no player: the engine default (destroy).
+		Super::FellOutOfWorld(DamageType);
+		return;
+	}
+	if (bFellOutOfWorld)
+	{
+		return;
+	}
+	bFellOutOfWorld = true;
+
+	// Stop the fall and put the body back on the last ground it stood on inside the world, so the death, the corpse
+	// and an at-death-location respawn all happen there.
+	FVector Back;
+	const bool bHasBack = ResolveRecoveryLocation(/*bAllowLastSafe=*/true, Back);
+	if (UCharacterMovementComponent* Move = GetCharacterMovement())
+	{
+		Move->StopMovementImmediately();
+	}
+	if (bHasBack)
+	{
+		SetActorLocation(Back, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+	UE_LOG(LogVoxelCharacter, Warning, TEXT("%s fell out of the world; dying and respawning (body back at %s)."),
+		*GetName(), bHasBack ? *Back.ToCompactString() : TEXT("(nowhere known)"));
+	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	{
+		PC->Client_ShowToast(NSLOCTEXT("VCCharacter", "FellOutOfWorld", "You fell out of the world"));
+	}
+
+	// Death through the combat pipeline, so the respawn, the item snapshot and the corpse follow as for any death.
+	if (CombatComponent)
+	{
+		const FCGFDamageContext Fall = UVCCombatStatics::MakeDamageContext(nullptr, nullptr, 1.0e6f,
+			CGFGameplayTags::Damage_Type_Pure, /*bIgnoreFaction=*/true);
+		UVCCombatStatics::ApplyDamageToActor(this, Fall);
+	}
+	if (!(CombatComponent && ICGFDamageableInterface::Execute_IsDead(CombatComponent)))
+	{
+		// Could not die (no combat component, or immune): it is back on safe ground; let it carry on from there.
+		bFellOutOfWorld = false;
+		if (UCharacterMovementComponent* Move = GetCharacterMovement())
+		{
+			Move->SetMovementMode(MOVE_Falling);
+		}
+	}
+}
+
+void AVCCharacterBase::TickWorldSafety(float DeltaSeconds)
+{
+	// The world edge hint (every machine; the HUD only exists where the player is local).
+	const UVCMovementComponent* Move = Cast<UVCMovementComponent>(GetCharacterMovement());
+	const bool bNear = Move && Move->IsNearWorldEdge() && !bIsCorpse;
+	if (bNear != bNearWorldEdge)
+	{
+		bNearWorldEdge = bNear;
+		OnWorldEdgeChanged.Broadcast(bNear);
+	}
+
+	if (!HasAuthority() || bIsWaitingForTerrain || bIsCorpse || bFellOutOfWorld || !Move)
+	{
+		return;
+	}
+
+	SafeLocationTimer -= DeltaSeconds;
+	if (SafeLocationTimer > 0.f)
+	{
+		return;
+	}
+	SafeLocationTimer = 0.25f;
+
+	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	if (!ChunkMgr)
+	{
+		return;
+	}
+	const FVector Here = GetActorLocation();
+	if (!bHasOutOfWorldZ && OutOfWorldDepth > 0.f)
+	{
+		const FVoxelWorldBounds Bounds = ChunkMgr->GetWorldBounds();
+		// Only from a real terrain range (a mode without one reports about +-1e9).
+		if (Bounds.MinZ > -1.0e6f)
+		{
+			OutOfWorldZ = Bounds.MinZ - OutOfWorldDepth;
+			bHasOutOfWorldZ = true;
+		}
+	}
+	if (bHasOutOfWorldZ && Here.Z < OutOfWorldZ && !(CombatComponent && ICGFDamageableInterface::Execute_IsDead(CombatComponent)))
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("%s is %.0f below the world's lowest terrain: out of the world."), *GetName(), OutOfWorldDepth);
+		FellOutOfWorld(*GetDefault<UDamageType>());
+		return;
+	}
+	if (Move->IsMovingOnGround() && ChunkMgr->IsInsideWorld(Here.X, Here.Y))
+	{
+		LastSafeLocation = Here;
+		bHasLastSafeLocation = true;
+	}
 }
 
 // ---------------------------------------------------------------------------

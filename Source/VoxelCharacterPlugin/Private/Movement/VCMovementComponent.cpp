@@ -209,9 +209,76 @@ void UVCMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 	{
 		TerrainContextCacheTimer = 0.f;
 		UpdateVoxelTerrainContext();
+		RefreshWorldBounds();
+	}
+
+	// World edge band (WM-I5): every machine, from the position, for the HUD hint.
+	if (bHasWorldBounds && UpdatedComponent)
+	{
+		ApplyWorldEdgePushBack(CachedWorldBounds, UpdatedComponent->GetComponentLocation(), FVector::ZeroVector, 0.f,
+			WorldEdgePushBackDistance, WorldEdgePushBackSpeed, WorldEdgeProximity);
+	}
+	else
+	{
+		WorldEdgeProximity = 0.f;
 	}
 
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+}
+
+// ---------------------------------------------------------------------------
+// World edge (world modes review WM-I5, decision D9)
+// ---------------------------------------------------------------------------
+
+void UVCMovementComponent::RefreshWorldBounds()
+{
+	if (bHasWorldBounds)
+	{
+		return;
+	}
+	if (const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld()))
+	{
+		CachedWorldBounds = ChunkMgr->GetWorldBounds();
+		bHasWorldBounds = true;
+	}
+}
+
+FVector UVCMovementComponent::ApplyWorldEdgePushBack(const FVoxelWorldBounds& Bounds, const FVector& Location, const FVector& Velocity,
+	float MaxSpeed, float BandWidth, float PushSpeed, float& OutProximity)
+{
+	OutProximity = 0.f;
+	// Islands only: a plane has no edge and a planet's shell holds its pawns by gravity.
+	if (BandWidth <= 0.f || (Bounds.Shape != EVoxelWorldBoundsShape::Circle && Bounds.Shape != EVoxelWorldBoundsShape::Rectangle))
+	{
+		return Velocity;
+	}
+	const double Distance = Bounds.GetDistanceToEdgeXY(Location.X, Location.Y);
+	if (Distance >= BandWidth)
+	{
+		return Velocity;
+	}
+	const float T = FMath::Clamp(1.f - static_cast<float>(Distance) / BandWidth, 0.f, 1.f);
+	OutProximity = T;
+	const FVector2D Out2D = Bounds.GetOutwardNormalXY(Location.X, Location.Y);
+	const FVector Out(Out2D.X, Out2D.Y, 0.0);
+	// Allowed outward speed: the full max speed at the band's inner side, -PushSpeed (moving inward) at the edge.
+	const float Allowed = FMath::Lerp(FMath::Max(MaxSpeed, 0.f), -PushSpeed, T);
+	const float Outward = static_cast<float>(FVector::DotProduct(Velocity, Out));
+	return Outward > Allowed ? Velocity - Out * (Outward - Allowed) : Velocity;
+}
+
+void UVCMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration)
+{
+	Super::CalcVelocity(DeltaTime, Friction, bFluid, BrakingDeceleration);
+
+	// The current before the world's edge (WM-I5). Inside the movement simulation, so the client's prediction and the
+	// server agree. Flying is exempt: debug flight and the streaming benchmark cross the edge on purpose.
+	if (bHasWorldBounds && UpdatedComponent && MovementMode != MOVE_Flying && MovementMode != MOVE_None)
+	{
+		float Proximity = 0.f;
+		Velocity = ApplyWorldEdgePushBack(CachedWorldBounds, UpdatedComponent->GetComponentLocation(), Velocity, GetMaxSpeed(),
+			WorldEdgePushBackDistance, WorldEdgePushBackSpeed, Proximity);
+	}
 }
 
 // ---------------------------------------------------------------------------
