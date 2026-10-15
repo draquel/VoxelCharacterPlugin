@@ -55,6 +55,40 @@ bool FVCSurface_GatherTable::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
+// Gathering yields once per voxel (WORLD_MODES_REVIEW_PLAN.md G3): a dig pays out only for a voxel it turned
+// from solid to air, the one nearest the brush centre. Digs that only lower densities pay nothing.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCSurface_GatherOncePerVoxel, "VoxelCharacter.Gather.OncePerVoxel", VC_SURFACE_FLAGS)
+bool FVCSurface_GatherOncePerVoxel::RunTest(const FString& Parameters)
+{
+	const FVoxelData Wood(20, 255);
+	const FVoxelData Stone(2, 255);
+	const TArray<float> DistSq = { 0.0f, 5625.0f, 11250.0f };
+
+	// The aimed voxel loses 80 a dig: 255 -> 175 -> 95. Its neighbours lose 21.
+	TArray<FVoxelData> Before = { Wood, Stone, Stone };
+	TArray<FVoxelData> After = { FVoxelData(20, 175), FVoxelData(2, 234), FVoxelData(2, 234) };
+	TestEqual(TEXT("First dig empties nothing: no pay"), UVCGatherTable::FindDugVoxel(Before, After, DistSq), INDEX_NONE);
+
+	Before = After;
+	After = { FVoxelData(20, 95), FVoxelData(2, 213), FVoxelData(2, 213) };
+	TestEqual(TEXT("Second dig empties the aimed voxel: it pays"), UVCGatherTable::FindDugVoxel(Before, After, DistSq), 0);
+
+	Before = After;
+	After = { FVoxelData(20, 15), FVoxelData(2, 192), FVoxelData(2, 192) };
+	TestEqual(TEXT("Digging the emptied voxel again pays nothing"), UVCGatherTable::FindDugVoxel(Before, After, DistSq), INDEX_NONE);
+
+	// Two voxels emptied by one dig: the one nearest the centre decides the material.
+	Before = { FVoxelData(0, 0), FVoxelData(2, 130), FVoxelData(20, 130) };
+	After = { FVoxelData(0, 0), FVoxelData(2, 60), FVoxelData(20, 60) };
+	TestEqual(TEXT("Nearest emptied voxel"), UVCGatherTable::FindDugVoxel(Before, After, DistSq), 1);
+
+	TestEqual(TEXT("Mismatched arrays are clamped, not overrun"),
+		UVCGatherTable::FindDugVoxel(Before, TArray<FVoxelData>{ FVoxelData(0, 0) }, DistSq), INDEX_NONE);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
 // Respawn (feature 8): AtLastRest picks the rest point when there is one.
 // ---------------------------------------------------------------------------
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCSurface_RespawnAtLastRest, "VoxelCharacter.Respawn.AtLastRest", VC_SURFACE_FLAGS)

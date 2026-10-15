@@ -1340,15 +1340,48 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 		Brush.FalloffType = EVoxelBrushFalloff::Smooth;
 		Brush.DensityDelta = 80;
 
-		// What is being dug, read before the brush empties it (feature 8: gathering).
-		const uint8 DugMaterial = ChunkMgr->GetEditMergedVoxelAtWorldPosition(VoxelWorldPos).MaterialID;
+		// Gathering (feature 8) pays for a voxel dug out, not for a swing: read every voxel the brush can
+		// reach before and after it runs, and pay once when the dig turned a solid voxel to air. A dug voxel
+		// keeps its material id, so paying whenever the brush changed anything let one voxel yield forever (G3).
+		// Sampled at voxel centres, so the position-to-index floor lands on the voxel the brush edits.
+		TArray<FVector> Reachable;
+		TArray<FVoxelData> Before;
+		TArray<float> DistSq;
+		const int32 Reach = FMath::CeilToInt(Brush.Radius / Config->VoxelSize);
+		for (int32 DZ = -Reach; DZ <= Reach; ++DZ)
+		{
+			for (int32 DY = -Reach; DY <= Reach; ++DY)
+			{
+				for (int32 DX = -Reach; DX <= Reach; ++DX)
+				{
+					const FVector Offset = FVector(DX, DY, DZ) * Config->VoxelSize;
+					if (Offset.SizeSquared() > FMath::Square(Brush.Radius))
+					{
+						continue;
+					}
+					Reachable.Add(VoxelWorldPos + Offset + FVector(Config->VoxelSize * 0.5f));
+					Before.Add(ChunkMgr->GetEditMergedVoxelAtWorldPosition(Reachable.Last()));
+					DistSq.Add(static_cast<float>(Offset.SizeSquared()));
+				}
+			}
+		}
 
 		EditMgr->BeginEditOperation(TEXT("Player dig"));
 		const int32 Modified = EditMgr->ApplyBrushEdit(VoxelWorldPos, Brush, EEditMode::Subtract);
 		EditMgr->EndEditOperation();
 		if (Modified > 0)
 		{
-			GatherFromVoxel(DugMaterial);
+			TArray<FVoxelData> After;
+			After.Reserve(Reachable.Num());
+			for (const FVector& Sample : Reachable)
+			{
+				After.Add(ChunkMgr->GetEditMergedVoxelAtWorldPosition(Sample));
+			}
+			const int32 Dug = UVCGatherTable::FindDugVoxel(Before, After, DistSq);
+			if (Dug != INDEX_NONE)
+			{
+				GatherFromVoxel(Before[Dug].MaterialID);
+			}
 		}
 
 		UE_LOG(LogVoxelCharacter, Verbose, TEXT("Voxel destroyed at [%d,%d,%d]"),

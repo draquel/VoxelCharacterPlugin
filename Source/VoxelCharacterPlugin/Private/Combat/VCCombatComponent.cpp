@@ -137,7 +137,10 @@ ECGFDamageResult UVCCombatComponent::ApplyDamage(const FCGFDamageContext& Contex
 	{
 		return ECGFDamageResult::Rejected_NoAbilitySystem;
 	}
-	if (TargetASC->HasMatchingGameplayTag(CGFGameplayTags::State_Invulnerable))
+	// The engine's damage switch (AActor::bCanBeDamaged: the God cheat, the voxel streaming benchmark's
+	// flown pawn) counts as invulnerable too.
+	const AActor* Owner = GetOwner();
+	if (TargetASC->HasMatchingGameplayTag(CGFGameplayTags::State_Invulnerable) || (Owner && !Owner->CanBeDamaged()))
 	{
 		return ECGFDamageResult::Rejected_Invulnerable;
 	}
