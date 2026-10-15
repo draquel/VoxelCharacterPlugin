@@ -359,6 +359,41 @@ public:
 	float FloorProbeDistance = 400.f;
 
 	// =================================================================
+	// Leaving the world (world modes review WM-I4, KI14; WM-I5)
+	// =================================================================
+
+	/**
+	 * A player falling this far below the voxel world's lowest terrain has fallen out of the world, and recovers as at
+	 * KillZ (FellOutOfWorld) without the minutes-long fall to it. 0 = KillZ only.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|Spawn", meta = (ClampMin = "0"))
+	float OutOfWorldDepth = 20000.f;
+
+	/**
+	 * Falling out of the world (KillZ, or OutOfWorldDepth below the terrain) runs the death and respawn path instead of
+	 * the engine default, which destroyed the pawn and left the player without one (KI14). The body goes back to the last
+	 * ground it stood on inside the world first, so the corpse and a respawn at the death location are there. A corpse or
+	 * an unpossessed body keeps the engine default. Server only.
+	 */
+	virtual void FellOutOfWorld(const UDamageType& DamageType) override;
+
+	/**
+	 * The last place this pawn stood on the ground inside the world (sampled a few times a second on the server).
+	 * @param OutLocation Receives the location (the capsule centre)
+	 * @return False until the pawn has stood somewhere
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Spawn")
+	bool GetLastSafeLocation(FVector& OutLocation) const;
+
+	/** Fired when the pawn enters or leaves the push-back band before a bounded world's edge (the HUD hint binds here). */
+	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Movement")
+	FOnVCWorldEdgeChanged OnWorldEdgeChanged;
+
+	/** @return True while the pawn is in the push-back band before the world's edge */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement")
+	bool IsNearWorldEdge() const { return bNearWorldEdge; }
+
+	// =================================================================
 	// Debug
 	// =================================================================
 
@@ -462,6 +497,43 @@ protected:
 
 	/** Unfreeze and place character on terrain surface. */
 	void PlaceOnTerrainAndResume();
+
+	/**
+	 * The terrain wait ran out with nothing under the pawn (WM-I4): move it to the respawn point (the last rest point,
+	 * else a player start, else the world's centre) and wait for terrain there. Server only; at most twice per wait.
+	 * @return True if the pawn was moved and is waiting again
+	 */
+	bool RecoverFromMissingTerrain();
+
+	/**
+	 * Where a pawn that left the world goes back to: the last safe ground, else the rest point, else a player start,
+	 * else the world's centre.
+	 * @param bAllowLastSafe Whether the last safe location may be used
+	 * @param OutLocation Receives the location (a surface point for the spawn search to settle)
+	 * @return False if nothing is known (no voxel world and no player start)
+	 */
+	bool ResolveRecoveryLocation(bool bAllowLastSafe, FVector& OutLocation) const;
+
+	/** Server: remember safe ground, catch a fall below the world early. Every machine: the world edge hint. */
+	void TickWorldSafety(float DeltaSeconds);
+
+	/** Last ground the pawn stood on inside the world (see GetLastSafeLocation). */
+	FVector LastSafeLocation = FVector::ZeroVector;
+	bool bHasLastSafeLocation = false;
+	float SafeLocationTimer = 0.f;
+
+	/** World Z below which the pawn has fallen out of the world (lowest terrain - OutOfWorldDepth); cached. */
+	float OutOfWorldZ = -UE_BIG_NUMBER;
+	bool bHasOutOfWorldZ = false;
+
+	/** FellOutOfWorld ran for this pawn (it is dying or has been moved back). */
+	bool bFellOutOfWorld = false;
+
+	/** Recoveries from a terrain wait with nothing under the pawn, this wait (RecoverFromMissingTerrain). */
+	int32 TerrainRecoveryAttempts = 0;
+
+	/** In the push-back band before the world's edge (see OnWorldEdgeChanged). */
+	bool bNearWorldEdge = false;
 
 	/** Bind GAS attribute change delegates to character subsystems. */
 	void BindAttributeChangeDelegates(UAbilitySystemComponent* ASC);

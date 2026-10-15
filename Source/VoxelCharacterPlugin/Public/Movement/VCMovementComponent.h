@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Core/VCTypes.h"
+#include "VoxelWorldModeTypes.h"
 #include "VCMovementComponent.generated.h"
 
 struct FGameplayAttributeData;
@@ -109,6 +110,54 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
 	EVoxelSurfaceType CurrentSurfaceType = EVoxelSurfaceType::Default;
 
+	// --- World edge (world modes review WM-I5, decision D9) ---
+	// A bounded world (an island) ends at invisible walls on its edge (R + falloff). Before them a current pushes the
+	// pawn back: within WorldEdgePushBackDistance of the edge the pawn's outward speed is capped, from its full speed at
+	// the band's inner side down to moving inward at WorldEdgePushBackSpeed at the edge. A swimmer heading out stalls
+	// about a third of the band before the wall and drifts back when it lets go. Flying (debug, benches) is exempt.
+
+	/** Width of the band before the world's edge where the current pushes back (world units). 0 turns it off. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|WorldEdge", meta = (ClampMin = "0.0"))
+	float WorldEdgePushBackDistance = 4000.f;
+
+	/** Speed the current carries the pawn back toward the world at the edge itself (it fades to 0 across the band). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|WorldEdge", meta = (ClampMin = "0.0"))
+	float WorldEdgePushBackSpeed = 250.f;
+
+	/**
+	 * How deep the pawn is in the push-back band: 0 outside it (or in an unbounded world), 1 at the world's edge.
+	 * Refreshed every tick from the pawn's position; drives the HUD hint.
+	 * @return Proximity in [0, 1]
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|WorldEdge")
+	float GetWorldEdgeProximity() const { return WorldEdgeProximity; }
+
+	/** @return True while the pawn is in the push-back band before the world's edge */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|WorldEdge")
+	bool IsNearWorldEdge() const { return WorldEdgeProximity > 0.f; }
+
+	/**
+	 * The voxel world's bounds as this component cached them (unbounded until the world is found).
+	 * @return The bounds
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|WorldEdge")
+	FVoxelWorldBounds GetWorldBounds() const { return CachedWorldBounds; }
+
+	/**
+	 * Pure: the push-back for one velocity (see WorldEdgePushBackDistance). Caps the velocity's outward component in X
+	 * and Y; vertical speed and motion along or into the world are untouched.
+	 * @param Bounds       The world's bounds
+	 * @param Location     The pawn's position
+	 * @param Velocity     Velocity to adjust
+	 * @param MaxSpeed     The pawn's current max speed (the cap at the band's inner side)
+	 * @param BandWidth    WorldEdgePushBackDistance
+	 * @param PushSpeed    WorldEdgePushBackSpeed
+	 * @param OutProximity Receives the proximity in [0, 1] (0 outside the band)
+	 * @return The adjusted velocity
+	 */
+	static FVector ApplyWorldEdgePushBack(const FVoxelWorldBounds& Bounds, const FVector& Location, const FVector& Velocity,
+		float MaxSpeed, float BandWidth, float PushSpeed, float& OutProximity);
+
 	// --- GAS Attribute Callbacks ---
 
 	/** Called when MoveSpeedMultiplier attribute changes. */
@@ -118,6 +167,7 @@ public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void PhysCustom(float DeltaTime, int32 Iterations) override;
 	virtual void PhysSwimming(float DeltaTime, int32 Iterations) override;
+	virtual void CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration) override;
 	virtual void FindFloor(const FVector& CapsuleLocation, FFindFloorResult& OutFloorResult, bool bCanUseCachedLocation, const FHitResult* DownwardSweepResult = nullptr) const override;
 	virtual bool IsValidLandingSpot(const FVector& CapsuleLocation, const FHitResult& Hit) const override;
 
@@ -227,6 +277,16 @@ protected:
 
 	/** Base MaxWalkSpeed before GAS multiplier. Captured on BeginPlay. */
 	float BaseMaxWalkSpeed = 0.f;
+
+	/** The voxel world's bounds (WM-I5), cached once the chunk manager is found; unbounded until then. */
+	FVoxelWorldBounds CachedWorldBounds;
+	bool bHasWorldBounds = false;
+
+	/** Push-back band proximity, 0..1 (see GetWorldEdgeProximity). */
+	float WorldEdgeProximity = 0.f;
+
+	/** Cache the world's bounds from the chunk manager if not done yet. */
+	void RefreshWorldBounds();
 
 	/** Base MaxAcceleration before swimming override. Captured on BeginPlay. */
 	float BaseMaxAcceleration = 0.f;

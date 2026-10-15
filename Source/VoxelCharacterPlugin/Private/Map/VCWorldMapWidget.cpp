@@ -217,6 +217,16 @@ FReply UVCWorldMapWidget::NativeOnMouseMove(const FGeometry& InGeometry, const F
 		// screen Y = world -X north). Content follows the mouse.
 		PanOffset.Y -= Delta.X * RenderedWorldPerPixel;
 		PanOffset.X += Delta.Y * RenderedWorldPerPixel;
+		// The view's centre stays over the world (WM-I2): an island's map does not pan off into the void.
+		if (const UVoxelMapSubsystem* Subsystem = MapSubsystem.Get())
+		{
+			const FBox2D WorldBox = Subsystem->GetWorldBounds().GetBox2D();
+			if (WorldBox.bIsValid)
+			{
+				PanOffset.X = FMath::Clamp(PanOffset.X, WorldBox.Min.X, WorldBox.Max.X);
+				PanOffset.Y = FMath::Clamp(PanOffset.Y, WorldBox.Min.Y, WorldBox.Max.Y);
+			}
+		}
 		bMapDirty = true;
 
 		return FReply::Handled();

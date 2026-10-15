@@ -21,6 +21,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"CommonGameFramework",
 				"NetCore",
 				"AIModule",
+				"VoxelCore", // FVoxelWorldBounds in UVCMovementComponent's header (world edge push-back)
 			}
 		);
 
@@ -30,7 +31,6 @@ public class VoxelCharacterPlugin : ModuleRules
 				"Slate",
 				"SlateCore",
 				"UMG",
-				"VoxelCore",
 				"VoxelStreaming",
 				"VoxelNavigation", // UVCVoxelPathProvider (feature 10)
 				"VoxelScatter",

@@ -63,6 +63,8 @@ public:
 	 * from noise parameters) — does not require chunks to be loaded.
 	 * If the given position is over water, performs a spiral search outward
 	 * at chunk-sized intervals to find the nearest above-water terrain.
+	 * Only points inside the world's bounds count (an island's R + falloff): a position outside
+	 * searches from the nearest point a chunk inside the edge (world modes review WM-I3).
 	 *
 	 * @param World World context
 	 * @param NearPosition Desired spawn position (world space)
