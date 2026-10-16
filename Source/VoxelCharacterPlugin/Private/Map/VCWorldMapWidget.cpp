@@ -320,6 +320,12 @@ void UVCWorldMapWidget::RebuildMapTexture()
 	const float WorldMaxX = ViewCenterX + ViewWorldExtent;
 	const float WorldMinY = ViewCenterY - ViewWorldExtent;
 
+	// The map keeps tile images under a budget (world modes review WM-E2): a tile may have only its overview, or no
+	// image at all, until asked for. Zoomed in far enough that the overview would show blurred (more texels per tile
+	// than half again its resolution), ask for detail; otherwise an image of any kind. Only the tiles in view ask.
+	const float TexelsPerTile = TileWorldSize / FMath::Max(RenderedWorldPerPixel, KINDA_SMALL_NUMBER);
+	const bool bWantDetail = TexelsPerTile > 1.5f * Subsystem->GetTileOverviewResolution();
+
 	// Iterate visible tiles and blit them into the texture
 	for (int32 TY = -RenderedTileRadius; TY <= RenderedTileRadius; ++TY)
 	{
@@ -334,6 +340,11 @@ void UVCWorldMapWidget::RebuildMapTexture()
 			if (!bExplored)
 			{
 				continue;
+			}
+			if (!Tile || (bWantDetail && Tile->Resolution < TileResolution))
+			{
+				// Drawn again in the background; OnMapTileReady redraws the map when it lands.
+				Subsystem->RequestTileImage(TileCoord, bWantDetail);
 			}
 
 			// World origin of this tile

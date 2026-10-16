@@ -124,10 +124,20 @@ The world map only renders explored tiles. Unexplored areas within the view appe
 | State | Rendering |
 |-------|-----------|
 | Unexplored | Dark background (RGB: 10, 10, 10) |
-| Explored, tile not yet generated | Slightly lighter fog (RGB: 25, 25, 25) |
-| Explored, tile generated | Full terrain colors from tile pixel data |
+| Explored, tile not yet generated (or its image evicted) | Slightly lighter fog (RGB: 25, 25, 25) |
+| Explored, tile generated | Full terrain colors from tile pixel data, its detail image or its overview |
 
 Exploration state is queried from `UVoxelMapSubsystem::IsTileExplored()`.
+
+### Tile Images on Demand
+
+The map keeps tile images under a fixed budget (world modes review WM-E2): a tile may have only its overview (a quarter
+of the resolution a side) or no image at all until asked for (VoxelWorlds `Documentation/Features/MAP_SYSTEM.md`). While
+`RebuildMapTexture()` blits the view, every explored tile in it without an image asks for one
+(`UVoxelMapSubsystem::RequestTileImage`), and when the view shows more than one and a half times an overview's resolution
+per tile (zoom above 1.5 at the default texture size) tiles that have only the overview ask for detail. The drawings
+arrive through `OnMapTileReady` and redraw the map. At zoom 1 the texture shows 16 texels per tile: exactly an overview,
+so a fully explored island draws without asking for anything.
 
 ### Texture Rendering
 
