@@ -1331,14 +1331,36 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 	FVoxelBrushParams Brush;
 	Brush.Shape = EVoxelBrushShape::Sphere;
 
+	// Cubic worlds edit whole blocks (world modes review WM-C2, KC5): a dig empties exactly the aimed voxel and a
+	// place fills exactly one, each a full-strength cube brush around that one voxel (density to 0 / 255), so one
+	// click is one block. Smooth worlds keep the density brushes that dent and build the surface gradually.
+	const bool bBlockEdit = Config->MeshingMode == EMeshingMode::Cubic;
+	// A cubic voxel's block spans [VoxelWorldPos, VoxelWorldPos + VoxelSize]; the single-voxel brush aims at its centre.
+	const FVector BlockCentre = VoxelWorldPos + FVector(Config->VoxelSize * 0.5f);
+	auto MakeBlockBrush = [&Config](FVoxelBrushParams& OutBrush)
+	{
+		OutBrush.Shape = EVoxelBrushShape::Cube;
+		OutBrush.Radius = Config->VoxelSize * 0.4f; // under half a voxel: the cube reaches no neighbour
+		OutBrush.Strength = 1.f;
+		OutBrush.FalloffType = EVoxelBrushFalloff::Sharp;
+		OutBrush.DensityDelta = 255;
+	};
+
 	switch (ModType)
 	{
 	case EVoxelModificationType::Destroy:
 	{
-		Brush.Radius = Config->VoxelSize * 1.5f;
-		Brush.Strength = 1.f;
-		Brush.FalloffType = EVoxelBrushFalloff::Smooth;
-		Brush.DensityDelta = 80;
+		if (bBlockEdit)
+		{
+			MakeBlockBrush(Brush);
+		}
+		else
+		{
+			Brush.Radius = Config->VoxelSize * 1.5f;
+			Brush.Strength = 1.f;
+			Brush.FalloffType = EVoxelBrushFalloff::Smooth;
+			Brush.DensityDelta = 80;
+		}
 
 		// Gathering (feature 8) pays for a voxel dug out, not for a swing: read every voxel the brush can
 		// reach before and after it runs, and pay once when the dig turned a solid voxel to air. A dug voxel
@@ -1367,7 +1389,7 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 		}
 
 		EditMgr->BeginEditOperation(TEXT("Player dig"));
-		const int32 Modified = EditMgr->ApplyBrushEdit(VoxelWorldPos, Brush, EEditMode::Subtract);
+		const int32 Modified = EditMgr->ApplyBrushEdit(bBlockEdit ? BlockCentre : VoxelWorldPos, Brush, EEditMode::Subtract);
 		EditMgr->EndEditOperation();
 		if (Modified > 0)
 		{
@@ -1392,13 +1414,16 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 	case EVoxelModificationType::Place:
 	{
 		// Reject a placement that would close terrain around any pawn (this player, other players, NPCs).
-		// The brush below fills the single voxel SAMPLE at VoxelWorldPos, and the smooth mesher puts the new
-		// surface about half a voxel around that sample -- so the solid cube is centred on the sample, not
+		// Smooth: the brush below fills the single voxel SAMPLE at VoxelWorldPos, and the smooth mesher puts the
+		// new surface about half a voxel around that sample -- so the solid cube is centred on the sample, not
 		// spanning [sample, sample + VoxelSize] (the old test was shifted half a voxel and ignored NPCs).
+		// Cubic: the new block is exactly the voxel's cell, [sample, sample + VoxelSize]; a pawn only touching
+		// one of its faces is not inside it.
 		{
-			const float HalfExtent = Config->VoxelSize * 0.5f + 10.f;
+			const FVector BoxCentre = bBlockEdit ? BlockCentre : VoxelWorldPos;
+			const float HalfExtent = bBlockEdit ? Config->VoxelSize * 0.5f - 2.f : Config->VoxelSize * 0.5f + 10.f;
 			const FCollisionObjectQueryParams PawnObjects(ECC_Pawn);
-			if (GetWorld() && GetWorld()->OverlapAnyTestByObjectType(VoxelWorldPos, FQuat::Identity, PawnObjects,
+			if (GetWorld() && GetWorld()->OverlapAnyTestByObjectType(BoxCentre, FQuat::Identity, PawnObjects,
 				FCollisionShape::MakeBox(FVector(HalfExtent))))
 			{
 				UE_LOG(LogVoxelCharacter, Verbose,
@@ -1409,14 +1434,21 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 			}
 		}
 
-		Brush.Radius = Config->VoxelSize * 0.8f;
-		Brush.Strength = 1.f;
-		Brush.FalloffType = EVoxelBrushFalloff::Sharp;
+		if (bBlockEdit)
+		{
+			MakeBlockBrush(Brush);
+		}
+		else
+		{
+			Brush.Radius = Config->VoxelSize * 0.8f;
+			Brush.Strength = 1.f;
+			Brush.FalloffType = EVoxelBrushFalloff::Sharp;
+			Brush.DensityDelta = 80;
+		}
 		Brush.MaterialID = MaterialID;
-		Brush.DensityDelta = 80;
 
 		EditMgr->BeginEditOperation(TEXT("Player place"));
-		EditMgr->ApplyBrushEdit(VoxelWorldPos, Brush, EEditMode::Add);
+		EditMgr->ApplyBrushEdit(bBlockEdit ? BlockCentre : VoxelWorldPos, Brush, EEditMode::Add);
 		EditMgr->EndEditOperation();
 
 		UE_LOG(LogVoxelCharacter, Verbose, TEXT("Voxel placed at [%d,%d,%d] Material=%d"),
