@@ -1248,6 +1248,25 @@ bool AVCCharacterBase::TraceForVoxel(FHitResult& OutHit, float MaxDistance) cons
 	return GetWorld()->LineTraceSingleByChannel(OutHit, Start, End, ECC_Visibility, Params);
 }
 
+FIntVector AVCCharacterBase::GetEditVoxelCoord(const FVector& ImpactPoint, const FVector& ImpactNormal, const UVoxelWorldConfiguration* Config, bool bPlace)
+{
+	if (!Config)
+	{
+		return FIntVector::ZeroValue;
+	}
+	const float VoxelSize = Config->VoxelSize;
+	FVector Target = ImpactPoint;
+	if (bPlace)
+	{
+		Target += ImpactNormal * (VoxelSize * 0.5f);
+	}
+	else if (Config->MeshingMode == EMeshingMode::Cubic)
+	{
+		Target -= ImpactNormal * (VoxelSize * 0.5f);
+	}
+	return FVoxelCoordinates::WorldToVoxel(Target - Config->WorldOrigin, VoxelSize);
+}
+
 // ---------------------------------------------------------------------------
 // Bridge: Inventory
 // ---------------------------------------------------------------------------
@@ -1959,8 +1978,7 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 					UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
 					if (ChunkMgr && ChunkMgr->GetConfiguration())
 					{
-						const FVector RelPos = Hit.ImpactPoint - ChunkMgr->GetConfiguration()->WorldOrigin;
-						const FIntVector VoxelCoord = FVoxelCoordinates::WorldToVoxel(RelPos, ChunkMgr->GetConfiguration()->VoxelSize);
+						const FIntVector VoxelCoord = GetEditVoxelCoord(Hit.ImpactPoint, Hit.ImpactNormal, ChunkMgr->GetConfiguration(), /*bPlace*/ false);
 						PC->Server_RequestVoxelModification(VoxelCoord, EVoxelModificationType::Destroy, 0);
 					}
 				}
@@ -1983,8 +2001,7 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 			UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
 			if (ChunkMgr && ChunkMgr->GetConfiguration())
 			{
-				const FVector RelPos = Hit.ImpactPoint - ChunkMgr->GetConfiguration()->WorldOrigin;
-				const FIntVector VoxelCoord = FVoxelCoordinates::WorldToVoxel(RelPos, ChunkMgr->GetConfiguration()->VoxelSize);
+				const FIntVector VoxelCoord = GetEditVoxelCoord(Hit.ImpactPoint, Hit.ImpactNormal, ChunkMgr->GetConfiguration(), /*bPlace*/ false);
 				PC->Server_RequestVoxelModification(VoxelCoord, EVoxelModificationType::Destroy, 0);
 			}
 		}
@@ -2021,10 +2038,7 @@ void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 					if (ChunkMgr && ChunkMgr->GetConfiguration())
 					{
 						// Place block adjacent to the hit face (offset by normal)
-						const float VoxelSize = ChunkMgr->GetConfiguration()->VoxelSize;
-						const FVector PlacePos = Hit.ImpactPoint + Hit.ImpactNormal * (VoxelSize * 0.5f);
-						const FVector RelPos = PlacePos - ChunkMgr->GetConfiguration()->WorldOrigin;
-						const FIntVector VoxelCoord = FVoxelCoordinates::WorldToVoxel(RelPos, VoxelSize);
+						const FIntVector VoxelCoord = GetEditVoxelCoord(Hit.ImpactPoint, Hit.ImpactNormal, ChunkMgr->GetConfiguration(), /*bPlace*/ true);
 						PC->Server_RequestVoxelModification(VoxelCoord, EVoxelModificationType::Place, 2); // Stone
 					}
 				}
@@ -2043,10 +2057,7 @@ void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 			UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
 			if (ChunkMgr && ChunkMgr->GetConfiguration())
 			{
-				const float VoxelSize = ChunkMgr->GetConfiguration()->VoxelSize;
-				const FVector PlacePos = Hit.ImpactPoint + Hit.ImpactNormal * (VoxelSize * 0.5f);
-				const FVector RelPos = PlacePos - ChunkMgr->GetConfiguration()->WorldOrigin;
-				const FIntVector VoxelCoord = FVoxelCoordinates::WorldToVoxel(RelPos, VoxelSize);
+				const FIntVector VoxelCoord = GetEditVoxelCoord(Hit.ImpactPoint, Hit.ImpactNormal, ChunkMgr->GetConfiguration(), /*bPlace*/ true);
 				PC->Server_RequestVoxelModification(VoxelCoord, EVoxelModificationType::Place, 2); // Stone
 			}
 		}

@@ -254,8 +254,8 @@ Third-person camera must trace against voxel geometry to prevent clipping into t
 
 ### Terrain closing around a pawn
 
-Edits must never trap a pawn. `Server_RequestVoxelModification` refuses a placement whose voxel cube (centred on the
-sample, half a voxel plus a margin) overlaps ANY pawn and tells the player through `Client_ShowToast` ("Too close to
+Edits must never trap a pawn. `Server_RequestVoxelModification` refuses a placement whose voxel cube (smooth worlds:
+centred on the sample, half a voxel plus a margin; cubic worlds: the block's own cell) overlaps ANY pawn and tells the player through `Client_ShowToast` ("Too close to
 place a block"); the demo `AVoxelWorldTestActor` build / place inputs refuse brushes that overlap a pawn. As a safety
 net for everything else (stamps, scripts), an edit near a pawn arms `UVCMovementComponent`, and when the new
 collision lands nearby `ResolveTerrainEmbedding()` lifts the pawn onto the new surface if its centre and upper body are
@@ -306,6 +306,14 @@ drives the `EDIT` cue on `UVCVitalsWidget`. The toggle also mirrors into the Vox
 `bEnableEditInputs` set (the demo's brush sphere) obeys the same key instead of polling the raw mouse. This is a
 stop-gap so attacking/interacting never digs; the plan is to bind edit to an item / mechanic later, which should
 replace the key, not the gate.
+
+**Block-accurate editing in cubic worlds (world modes review WM-C2):** the dig / place target comes from
+`AVCCharacterBase::GetEditVoxelCoord(ImpactPoint, ImpactNormal, Config, bPlace)`: a place fills the voxel half a voxel in
+front of the hit face; in a cubic world a dig takes the block half a voxel behind it (the impact point lies on the face,
+so `floor(ImpactPoint)` was the air voxel on +X/+Y/+Z faces, KC5), while smooth worlds still dig at the voxel containing
+the impact point. On the server a cubic world edits whole blocks: one full-strength cube brush around that one voxel
+(density to 0 / 255), so one click removes or places exactly one block; smooth worlds keep the density brushes. The game
+module's `vox.Dig` (crosshair form) uses the same helper.
 
 Do not bypass this chain. New action types insert into the chain, they don't replace it.
 

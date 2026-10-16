@@ -21,6 +21,7 @@ class UCameraComponent;
 class UAbilitySystemComponent;
 class UVCInputConfig;
 class UVoxelCollisionManager;
+class UVoxelWorldConfiguration;
 class UVCCombatComponent;
 struct FInputActionValue;
 
@@ -309,6 +310,22 @@ public:
 	/** Line trace from camera into the world for voxel block targeting. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Voxel")
 	bool TraceForVoxel(FHitResult& OutHit, float MaxDistance = 500.f) const;
+
+	/**
+	 * The voxel an edit aimed at a terrain hit changes (world modes review WM-C2, KC5). A place fills the voxel
+	 * half a voxel in front of the hit face. In a cubic world a dig removes the block whose face was hit: the
+	 * voxel half a voxel behind the impact point along the normal (the impact point itself lies on the face, so
+	 * floor() picks the air voxel on +X, +Y and +Z faces, and floating-point noise picks a side on the others).
+	 * Smooth worlds dig at the voxel containing the impact point, as before.
+	 *
+	 * @param ImpactPoint  Where the trace hit the terrain
+	 * @param ImpactNormal The hit face's normal
+	 * @param Config       The world's configuration (voxel size, origin, meshing mode)
+	 * @param bPlace       true = the voxel a placement fills, false = the voxel a dig removes
+	 * @return Global voxel coordinate (relative to WorldOrigin); zero without a configuration
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Voxel")
+	static FIntVector GetEditVoxelCoord(const FVector& ImpactPoint, const FVector& ImpactNormal, const UVoxelWorldConfiguration* Config, bool bPlace);
 
 	/**
 	 * Whether the primary / secondary actions may dig and place voxels. Off by default so attacking and
