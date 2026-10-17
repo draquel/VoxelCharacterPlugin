@@ -82,6 +82,10 @@ void AVCPlayerController::UpdateRotation(float DeltaTime)
 	{
 		// The default gravity: the engine's world-space view (heightmap worlds, and a planet's north pole).
 		LastGravityDirection = Move ? Move->GetGravityDirection() : FVector::ZeroVector;
+		if (Move)
+		{
+			bLevelViewInGravity = false;
+		}
 		Super::UpdateRotation(DeltaTime);
 		return;
 	}
@@ -98,6 +102,12 @@ void AVCPlayerController::UpdateRotation(float DeltaTime)
 	// The input and the pitch clamp relative to local up, no roll about it. Only these frame-independent operations are
 	// done in the gravity frame (its own twist, which spins near the south pole, never shows).
 	FRotator Relative = FVCGravityFrame::ToGravityRelative(Move, ViewRotation);
+	if (bLevelViewInGravity)
+	{
+		// The first planet frame since a possession: the restart's world-level rotation, level along its heading.
+		Relative.Pitch = 0.0;
+		bLevelViewInGravity = false;
+	}
 	FRotator DeltaRot(RotationInput);
 	if (PlayerCameraManager)
 	{
@@ -120,6 +130,7 @@ void AVCPlayerController::UpdateRotation(float DeltaTime)
 void AVCPlayerController::OnPossess(APawn* InPawn)
 {
 	Super::OnPossess(InPawn);
+	bLevelViewInGravity = true;
 
 	// Add the default gameplay mapping context
 	if (InputConfig && InputConfig->IMC_Gameplay)
@@ -142,6 +153,12 @@ void AVCPlayerController::OnPossess(APawn* InPawn)
 		}
 	}
 #endif
+}
+
+void AVCPlayerController::AcknowledgePossession(APawn* P)
+{
+	Super::AcknowledgePossession(P);
+	bLevelViewInGravity = true;
 }
 
 void AVCPlayerController::PawnLeavingGame()
