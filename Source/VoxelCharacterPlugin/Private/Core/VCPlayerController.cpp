@@ -15,6 +15,9 @@
 #include "Core/VCCharacterAttributeSet.h"
 #include "Input/VCInputConfig.h"
 #include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCGravityFrame.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Camera/PlayerCameraManager.h"
 #include "Engine/Engine.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputMappingContext.h"
@@ -68,6 +71,49 @@ void AVCPlayerController::BeginPlay()
 	if (IsLocalController())
 	{
 		CreatePersistentWidgets();
+	}
+}
+
+void AVCPlayerController::UpdateRotation(float DeltaTime)
+{
+	const ACharacter* PlayerCharacter = Cast<ACharacter>(GetPawn());
+	const UCharacterMovementComponent* Move = PlayerCharacter ? PlayerCharacter->GetCharacterMovement() : nullptr;
+	if (!Move || !Move->HasCustomGravity())
+	{
+		// The default gravity: the engine's world-space view (heightmap worlds, and a planet's north pole).
+		LastGravityDirection = Move ? Move->GetGravityDirection() : FVector::ZeroVector;
+		Super::UpdateRotation(DeltaTime);
+		return;
+	}
+
+	// Carry the view across the gravity's change since the last frame: it stays put relative to the ground.
+	const FVector Gravity = Move->GetGravityDirection();
+	FRotator ViewRotation = GetControlRotation();
+	if (!LastGravityDirection.IsNearlyZero() && !LastGravityDirection.Equals(Gravity))
+	{
+		ViewRotation = (FQuat::FindBetweenNormals(LastGravityDirection, Gravity) * ViewRotation.Quaternion()).Rotator();
+	}
+	LastGravityDirection = Gravity;
+
+	// The input and the pitch clamp relative to local up, no roll about it. Only these frame-independent operations are
+	// done in the gravity frame (its own twist, which spins near the south pole, never shows).
+	FRotator Relative = FVCGravityFrame::ToGravityRelative(Move, ViewRotation);
+	FRotator DeltaRot(RotationInput);
+	if (PlayerCameraManager)
+	{
+		PlayerCameraManager->ProcessViewRotation(DeltaTime, Relative, DeltaRot);
+	}
+	else
+	{
+		Relative += DeltaRot;
+	}
+	Relative.Roll = 0.0;
+	ViewRotation = FVCGravityFrame::ToWorld(Move, Relative);
+	SetControlRotation(ViewRotation);
+
+	if (APawn* const P = GetPawnOrSpectator())
+	{
+		P->FaceRotation(ViewRotation, DeltaTime);
 	}
 }
 

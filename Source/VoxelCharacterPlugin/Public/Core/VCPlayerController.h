@@ -244,6 +244,17 @@ protected:
 	virtual void InitPlayerState() override;
 	virtual void OnRep_PlayerState() override;
 
+	/**
+	 * Planets (spherical SP-F3): the view in the pawn's gravity frame. The control rotation stays in world space, turned
+	 * each frame by the change in gravity (so the view stays put relative to the ground as the pawn walks over the curve),
+	 * the camera manager adds the input and clamps the pitch relative to local up, and the roll about it is zero. Without
+	 * custom gravity (every heightmap world) the engine's version runs.
+	 */
+	virtual void UpdateRotation(float DeltaTime) override;
+
+	/** The pawn's gravity direction the view was last carried with (zero before the first planet frame). */
+	FVector LastGravityDirection = FVector::ZeroVector;
+
 	/** Bind the player state's progression delegate (server via InitPlayerState, clients via OnRep_PlayerState). */
 	void BindProgression();
 

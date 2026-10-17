@@ -3,6 +3,7 @@
 #include "Core/VCAnimInstance.h"
 #include "Core/VCCharacterBase.h"
 #include "Movement/VCMovementComponent.h"
+#include "Movement/VCGravityFrame.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/KismetMathLibrary.h"
 
@@ -27,9 +28,9 @@ void UVCAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 		return;
 	}
 
-	// --- Locomotion ---
+	// --- Locomotion (speed, direction and aim in the gravity frame: the world's without custom gravity) ---
 	const FVector Velocity = MovComp->Velocity;
-	Speed = Velocity.Size2D();
+	Speed = FVCGravityFrame::GetHorizontalSpeed(MovComp, Velocity);
 
 	const bool bWasFalling = bIsFalling;
 	bIsFalling = MovComp->IsFalling();
@@ -41,8 +42,8 @@ void UVCAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	// Direction: angle between velocity and character forward (for strafing)
 	if (Speed > 1.f)
 	{
-		const FRotator ActorRotation = Character->GetActorRotation();
-		const FRotator VelocityRotation = Velocity.Rotation();
+		const FRotator ActorRotation = FVCGravityFrame::ToGravityRelative(MovComp, Character->GetActorRotation());
+		const FRotator VelocityRotation = FVCGravityFrame::ToGravityRelative(MovComp, Velocity.Rotation());
 		Direction = FMath::FindDeltaAngleDegrees(ActorRotation.Yaw, VelocityRotation.Yaw);
 	}
 	else
@@ -56,8 +57,9 @@ void UVCAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	// --- Aim ---
 	if (const AController* Controller = Character->GetController())
 	{
-		const FRotator ControlRotation = Controller->GetControlRotation();
-		const FRotator DeltaRotation = UKismetMathLibrary::NormalizedDeltaRotator(ControlRotation, Character->GetActorRotation());
+		const FRotator ControlRotation = FVCGravityFrame::ToGravityRelative(MovComp, Controller->GetControlRotation());
+		const FRotator DeltaRotation = UKismetMathLibrary::NormalizedDeltaRotator(ControlRotation,
+			FVCGravityFrame::ToGravityRelative(MovComp, Character->GetActorRotation()));
 		AimPitch = FMath::ClampAngle(DeltaRotation.Pitch, -90.f, 90.f);
 		AimYaw = FMath::ClampAngle(DeltaRotation.Yaw, -90.f, 90.f);
 	}

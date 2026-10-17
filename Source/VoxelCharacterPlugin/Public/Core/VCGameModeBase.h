@@ -110,6 +110,17 @@ public:
 protected:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual void Logout(AController* Exiting) override;
+	virtual void StartPlay() override;
+
+	/**
+	 * Once the voxel world is up, settle what depends on its shape: on a planet the world-item pool parks inside its
+	 * core, at the centre, instead of the default spot under a flat world's ground, which is a small planet's south pole
+	 * (spherical SP-F5). Polled from StartPlay until the chunk manager is initialised (at most a minute).
+	 */
+	void ApplyVoxelWorldShape();
+
+	FTimerHandle VoxelWorldShapeTimer;
+	int32 VoxelWorldShapePolls = 0;
 
 	/** A player state carrying a pending spawn transform (a loaded save) spawns there instead of a player start. */
 	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;

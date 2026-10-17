@@ -16,6 +16,7 @@
 #include "Camera/VCThirdPersonCameraMode.h"
 #include "Movement/VCMovementComponent.h"
 #include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCGravityFrame.h"
 #include "Camera/VCUnderwaterPostProcess.h"
 #include "Input/VCInputConfig.h"
 #include "Camera/CameraComponent.h"
@@ -330,7 +331,7 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 
 				// "Good enough" placement: if most chunks ready and we've waited a while,
 				// proceed even if some edge chunks fail. Center chunk is the most important.
-				const int32 TotalChunks = (2 * TerrainWaitChunkRadius + 1) * (2 * TerrainWaitChunkRadius + 1);
+				const int32 TotalChunks = TerrainWaitTotalChunks;
 				const int32 ReadyChunks = TotalChunks - PendingTerrainChunks.Num();
 				if (TerrainWaitElapsed > 10.f && ReadyChunks >= FMath::CeilToInt(TotalChunks * 0.75f))
 				{
@@ -356,8 +357,7 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 		{
 			UE_LOG(LogVoxelCharacter, Warning,
 				TEXT("Terrain wait timeout (%.1fs) — %d/%d chunks still pending. Force-placing."),
-				TerrainWaitTimeout, PendingTerrainChunks.Num(),
-				(2 * TerrainWaitChunkRadius + 1) * (2 * TerrainWaitChunkRadius + 1));
+				TerrainWaitTimeout, PendingTerrainChunks.Num(), TerrainWaitTotalChunks);
 			PendingTerrainChunks.Empty();
 			PlaceOnTerrainAndResume();
 		}
@@ -844,6 +844,11 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 	{
 		SetActorLocation(ValidSpawn);
 	}
+	// A planet: gravity at the new spot and the body upright in it before anything moves (spherical SP-F1, SP-F4).
+	if (UVCMovementComponent* VCMove = Cast<UVCMovementComponent>(GetCharacterMovement()); VCMove && VCMove->UpdatePlanetGravity())
+	{
+		VCMove->SnapUprightToGravity();
+	}
 
 	UE_LOG(LogVoxelCharacter, Log,
 		TEXT("InitiateChunkBasedWait: Bound to CollisionManager %p in world '%s' (PIE=%d)"),
@@ -854,32 +859,58 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 	const FVector RelPos = CharPos - Config->WorldOrigin;
 	const FIntVector CenterChunk = FVoxelCoordinates::WorldToChunk(RelPos, Config->ChunkSize, Config->VoxelSize);
 
-	// Build the grid of chunks we need to wait for (radius on X/Y, center chunk Z only)
-	PendingTerrainChunks.Empty();
-	for (int32 DX = -TerrainWaitChunkRadius; DX <= TerrainWaitChunkRadius; ++DX)
+	// Build the grid of chunks we need to wait for (radius on X/Y, center chunk Z only). On a planet the grid lies in the
+	// tangent plane at the spawn point (plus the chunk under the feet along local down): at mid latitudes the surface
+	// crosses chunk layers diagonally, so an X/Y grid at one Z misses the ground (spherical SP-F4).
+	TArray<FIntVector> WaitChunks;
+	const FVoxelWorldBounds Bounds = ChunkMgr->GetWorldBounds();
+	if (Bounds.Shape == EVoxelWorldBoundsShape::Shell)
 	{
-		for (int32 DY = -TerrainWaitChunkRadius; DY <= TerrainWaitChunkRadius; ++DY)
+		const FVector Up = ChunkMgr->GetUpVectorAt(CharPos);
+		const FVector T1 = FVector::CrossProduct(FMath::Abs(Up.Z) < 0.9 ? FVector::UpVector : FVector::ForwardVector, Up).GetSafeNormal();
+		const FVector T2 = FVector::CrossProduct(Up, T1);
+		const float ChunkWorldSize = Config->GetChunkWorldSize();
+		for (int32 DX = -TerrainWaitChunkRadius; DX <= TerrainWaitChunkRadius; ++DX)
 		{
-			const FIntVector ChunkCoord(CenterChunk.X + DX, CenterChunk.Y + DY, CenterChunk.Z);
-
-			if (ColMgr->HasCollision(ChunkCoord))
+			for (int32 DY = -TerrainWaitChunkRadius; DY <= TerrainWaitChunkRadius; ++DY)
 			{
-				// Already ready — skip
-				continue;
+				WaitChunks.AddUnique(ChunkMgr->WorldToChunkCoord(CharPos + (T1 * DX + T2 * DY) * ChunkWorldSize));
 			}
-
-			PendingTerrainChunks.Add(ChunkCoord);
-
-			// Request collision with high priority so it's processed ASAP
-			ColMgr->RequestCollision(ChunkCoord, 2000.f);
 		}
+		WaitChunks.AddUnique(ChunkMgr->WorldToChunkCoord(CharPos - Up * (0.5f * ChunkWorldSize)));
+	}
+	else
+	{
+		for (int32 DX = -TerrainWaitChunkRadius; DX <= TerrainWaitChunkRadius; ++DX)
+		{
+			for (int32 DY = -TerrainWaitChunkRadius; DY <= TerrainWaitChunkRadius; ++DY)
+			{
+				WaitChunks.Add(FIntVector(CenterChunk.X + DX, CenterChunk.Y + DY, CenterChunk.Z));
+			}
+		}
+	}
+	TerrainWaitTotalChunks = WaitChunks.Num();
+	PendingTerrainChunks.Empty();
+	for (const FIntVector& ChunkCoord : WaitChunks)
+	{
+		if (ColMgr->HasCollision(ChunkCoord))
+		{
+			// Already ready — skip
+			continue;
+		}
+
+		PendingTerrainChunks.Add(ChunkCoord);
+
+		// Request collision with high priority so it's processed ASAP
+		ColMgr->RequestCollision(ChunkCoord, 2000.f);
 	}
 
 	UE_LOG(LogVoxelCharacter, Log,
-		TEXT("InitiateChunkBasedWait: Center chunk (%d,%d,%d), waiting for %d chunks in %dx%d grid"),
+		TEXT("InitiateChunkBasedWait: Center chunk (%d,%d,%d), waiting for %d chunks in %dx%d grid%s"),
 		CenterChunk.X, CenterChunk.Y, CenterChunk.Z,
 		PendingTerrainChunks.Num(),
-		2 * TerrainWaitChunkRadius + 1, 2 * TerrainWaitChunkRadius + 1);
+		2 * TerrainWaitChunkRadius + 1, 2 * TerrainWaitChunkRadius + 1,
+		Bounds.Shape == EVoxelWorldBoundsShape::Shell ? TEXT(" (tangent plane)") : TEXT(""));
 
 	if (PendingTerrainChunks.Num() == 0)
 	{
@@ -929,21 +960,23 @@ static constexpr float ExactFloorGraceSeconds = 15.f;
 
 void AVCCharacterBase::PlaceOnTerrainAndResume()
 {
+	// Local up: +Z, or the radius on a planet (the movement component's gravity, set when the wait began).
+	const FVector Up = FVCGravityFrame::GetUp(GetCharacterMovement());
 	if (bResumeAtExactLocation)
 	{
 		// Look for a floor just below the feet; a surface trace from above would put a player saved
 		// inside a dungeon on the terrain over it.
 		const float CapsuleHalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-		const FVector Feet = GetActorLocation() - FVector(0.f, 0.f, CapsuleHalfHeight);
+		const FVector Feet = GetActorLocation() - Up * CapsuleHalfHeight;
 		FCollisionQueryParams Params;
 		Params.AddIgnoredActor(this);
 		FHitResult Hit;
-		const bool bFloor = GetWorld()->SweepSingleByChannel(Hit, Feet + FVector(0.f, 0.f, 20.f), Feet - FVector(0.f, 0.f, FloorProbeDistance),
+		const bool bFloor = GetWorld()->SweepSingleByChannel(Hit, Feet + Up * 20.f, Feet - Up * FloorProbeDistance,
 			FQuat::Identity, ECC_WorldStatic, FCollisionShape::MakeSphere(20.f), Params);
 		// The saved spot stood ON a floor, so the real one is within a few units of the feet. A hit far
 		// below is the voxel void under a dungeon whose tile floor has not streamed in yet: give the
 		// tiles a grace period before accepting it.
-		const float Drop = bFloor ? (Feet.Z - Hit.ImpactPoint.Z) : 0.f;
+		const float Drop = bFloor ? FVector::DotProduct(Feet - Hit.ImpactPoint, Up) : 0.f;
 		const bool bFloorIsClose = bFloor && Drop <= 50.f;
 		if (!bFloorIsClose && TerrainWaitElapsed < (bFloor ? ExactFloorGraceSeconds : TerrainWaitTimeout))
 		{
@@ -966,9 +999,9 @@ void AVCCharacterBase::PlaceOnTerrainAndResume()
 		}
 		if (bFloor)
 		{
-			SetActorLocation(Hit.ImpactPoint + FVector(0.f, 0.f, CapsuleHalfHeight + 2.f));
+			SetActorLocation(Hit.ImpactPoint + Up * (CapsuleHalfHeight + 2.f));
 			UE_LOG(LogVoxelCharacter, Log, TEXT("PlaceOnTerrainAndResume: resumed at the saved spot, floor %.0f below (%s)."),
-				Feet.Z - Hit.ImpactPoint.Z, Hit.GetComponent() ? *Hit.GetComponent()->GetName() : TEXT("null"));
+				Drop, Hit.GetComponent() ? *Hit.GetComponent()->GetName() : TEXT("null"));
 		}
 		else
 		{
@@ -986,10 +1019,11 @@ void AVCCharacterBase::PlaceOnTerrainAndResume()
 		Capsule->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	}
 
-	// Sphere sweep downward to find terrain surface (more robust than line trace at a single point)
+	// Sphere sweep downward (along local down: the radius on a planet) to find terrain surface (more robust than line
+	// trace at a single point)
 	const FVector SpawnPos = GetActorLocation();
-	const FVector TraceStart(SpawnPos.X, SpawnPos.Y, SpawnPos.Z + 50000.f);
-	const FVector TraceEnd(SpawnPos.X, SpawnPos.Y, SpawnPos.Z - 50000.f);
+	const FVector TraceStart = SpawnPos + Up * 50000.f;
+	const FVector TraceEnd = SpawnPos - Up * 50000.f;
 	const float SweepRadius = 50.f; // Small sphere to avoid exact-point misses on trimesh seams
 
 	FCollisionQueryParams Params;
@@ -1008,7 +1042,7 @@ void AVCCharacterBase::PlaceOnTerrainAndResume()
 	if (bTraceHit)
 	{
 		const float CapsuleHalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-		SetActorLocation(Hit.ImpactPoint + FVector(0.f, 0.f, CapsuleHalfHeight));
+		SetActorLocation(Hit.ImpactPoint + Up * CapsuleHalfHeight);
 
 		UE_LOG(LogVoxelCharacter, Log,
 			TEXT("PlaceOnTerrainAndResume: Trace HIT at (%.0f, %.0f, %.0f) — Component=%s — placed at Z=%.0f"),
@@ -1030,7 +1064,11 @@ void AVCCharacterBase::PlaceOnTerrainAndResume()
 		}
 	}
 
-	// Resume normal movement
+	// Resume normal movement (upright in the gravity at the landing spot on a planet)
+	if (UVCMovementComponent* VCMove = Cast<UVCMovementComponent>(GetCharacterMovement()); VCMove && VCMove->UpdatePlanetGravity())
+	{
+		VCMove->SnapUprightToGravity();
+	}
 	GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 	bIsWaitingForTerrain = false;
 	TerrainRecoveryAttempts = 0;
@@ -1062,11 +1100,14 @@ bool AVCCharacterBase::ResolveRecoveryLocation(bool bAllowLastSafe, FVector& Out
 	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
 	const FVoxelWorldBounds Bounds = ChunkMgr ? ChunkMgr->GetWorldBounds() : FVoxelWorldBounds();
 	const FVector Here = GetActorLocation();
-	// A candidate must be inside the world and away from here: the point is to leave a spot with no terrain.
-	auto Usable = [&Bounds, &Here, ChunkMgr](const FVector& Candidate)
+	// A candidate must be inside the world and away from here: the point is to leave a spot with no terrain. (On a planet
+	// distances are 3D: two points over each other in X and Y are on different sides of it.)
+	const bool bShell = Bounds.Shape == EVoxelWorldBoundsShape::Shell;
+	auto Usable = [&Bounds, &Here, ChunkMgr, bShell](const FVector& Candidate)
 	{
 		const float MinMove = ChunkMgr && ChunkMgr->GetConfiguration() ? ChunkMgr->GetConfiguration()->GetChunkWorldSize() : 4800.f;
-		return Bounds.ContainsXY(Candidate.X, Candidate.Y) && FVector::Dist2D(Candidate, Here) > MinMove;
+		return Bounds.ContainsXY(Candidate.X, Candidate.Y)
+			&& (bShell ? FVector::Dist(Candidate, Here) : FVector::Dist2D(Candidate, Here)) > MinMove;
 	};
 
 	FTransform RestPoint;
@@ -1085,8 +1126,10 @@ bool AVCCharacterBase::ResolveRecoveryLocation(bool bAllowLastSafe, FVector& Out
 	}
 	if (ChunkMgr && ChunkMgr->GetConfiguration())
 	{
-		// The world's centre: an island's middle, a plane's origin.
-		OutLocation = Bounds.IsBounded() ? Bounds.Center : ChunkMgr->GetConfiguration()->WorldOrigin;
+		// The world's centre: an island's middle, a plane's origin; a planet's spawn point over its terrain (its centre is
+		// inside it, SP-F4).
+		OutLocation = bShell ? ChunkMgr->GetPlanetSpawnPosition()
+			: (Bounds.IsBounded() ? Bounds.Center : ChunkMgr->GetConfiguration()->WorldOrigin);
 		return true;
 	}
 	return false;
@@ -1205,27 +1248,77 @@ void AVCCharacterBase::TickWorldSafety(float DeltaSeconds)
 		return;
 	}
 	const FVector Here = GetActorLocation();
-	if (!bHasOutOfWorldZ && OutOfWorldDepth > 0.f)
+	const FVoxelWorldBounds WorldBounds = ChunkMgr->GetWorldBounds();
+	if (WorldBounds.Shape == EVoxelWorldBoundsShape::Shell)
 	{
-		const FVoxelWorldBounds Bounds = ChunkMgr->GetWorldBounds();
-		// Only from a real terrain range (a mode without one reports about +-1e9).
-		if (Bounds.MinZ > -1.0e6f)
+		// A planet: below its terrain is toward the centre (SP-F5).
+		if (IsOutOfWorld(WorldBounds, Here, OutOfWorldDepth) && !(CombatComponent && ICGFDamageableInterface::Execute_IsDead(CombatComponent)))
 		{
-			OutOfWorldZ = Bounds.MinZ - OutOfWorldDepth;
-			bHasOutOfWorldZ = true;
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("%s is %.0f inside the planet's lowest terrain: out of the world."), *GetName(), OutOfWorldDepth);
+			FellOutOfWorld(*GetDefault<UDamageType>());
+			return;
 		}
 	}
-	if (bHasOutOfWorldZ && Here.Z < OutOfWorldZ && !(CombatComponent && ICGFDamageableInterface::Execute_IsDead(CombatComponent)))
+	else
 	{
-		UE_LOG(LogVoxelCharacter, Warning, TEXT("%s is %.0f below the world's lowest terrain: out of the world."), *GetName(), OutOfWorldDepth);
-		FellOutOfWorld(*GetDefault<UDamageType>());
-		return;
+		if (!bHasOutOfWorldZ && OutOfWorldDepth > 0.f)
+		{
+			// Only from a real terrain range (a mode without one reports about +-1e9).
+			if (WorldBounds.MinZ > -1.0e6f)
+			{
+				OutOfWorldZ = WorldBounds.MinZ - OutOfWorldDepth;
+				bHasOutOfWorldZ = true;
+			}
+		}
+		if (bHasOutOfWorldZ && Here.Z < OutOfWorldZ && !(CombatComponent && ICGFDamageableInterface::Execute_IsDead(CombatComponent)))
+		{
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("%s is %.0f below the world's lowest terrain: out of the world."), *GetName(), OutOfWorldDepth);
+			FellOutOfWorld(*GetDefault<UDamageType>());
+			return;
+		}
 	}
 	if (Move->IsMovingOnGround() && ChunkMgr->IsInsideWorld(Here.X, Here.Y))
 	{
 		LastSafeLocation = Here;
 		bHasLastSafeLocation = true;
 	}
+}
+
+bool AVCCharacterBase::IsOutOfWorld(const FVoxelWorldBounds& Bounds, const FVector& Location, float Depth)
+{
+	if (Depth <= 0.f)
+	{
+		return false;
+	}
+	if (Bounds.Shape == EVoxelWorldBoundsShape::Shell)
+	{
+		return FVector::Dist(Location, Bounds.Center) < static_cast<double>(Bounds.InnerRadius) - Depth;
+	}
+	// Only from a real terrain range (a mode without one reports about +-1e9).
+	return Bounds.MinZ > -1.0e6f && Location.Z < Bounds.MinZ - Depth;
+}
+
+void AVCCharacterBase::FaceRotation(FRotator NewControlRotation, float DeltaTime)
+{
+	const UCharacterMovementComponent* Move = GetCharacterMovement();
+	if (!Move || !Move->HasCustomGravity())
+	{
+		Super::FaceRotation(NewControlRotation, DeltaTime);
+		return;
+	}
+	if (!(bUseControllerRotationPitch || bUseControllerRotationYaw || bUseControllerRotationRoll))
+	{
+		return;
+	}
+	// In the gravity frame: take the components the flags ask for from the control rotation, keep the body upright
+	// otherwise (APawn::FaceRotation does this in world space, which tilts the body on a planet).
+	const FRotator Control = FVCGravityFrame::ToGravityRelative(Move, NewControlRotation);
+	const FRotator Current = FVCGravityFrame::ToGravityRelative(Move, GetActorRotation());
+	const FRotator Facing(
+		bUseControllerRotationPitch ? Control.Pitch : 0.0,
+		bUseControllerRotationYaw ? Control.Yaw : Current.Yaw,
+		bUseControllerRotationRoll ? Control.Roll : 0.0);
+	SetActorRotation(FVCGravityFrame::ToWorld(Move, Facing));
 }
 
 // ---------------------------------------------------------------------------
@@ -1384,8 +1477,8 @@ FVector AVCCharacterBase::GetInteractionTraceOrigin() const
 		}
 	}
 
-	// Third person: trace from character eye height (avoids targeting behind character)
-	return GetActorLocation() + FVector(0.f, 0.f, BaseEyeHeight);
+	// Third person: trace from character eye height (avoids targeting behind character), along local up on a planet
+	return GetActorLocation() + FVCGravityFrame::VectorToWorld(GetCharacterMovement(), FVector(0.f, 0.f, BaseEyeHeight));
 }
 
 FVector AVCCharacterBase::GetInteractionTraceDirection() const
@@ -1851,8 +1944,8 @@ void AVCCharacterBase::Input_Move(const FInputActionValue& Value)
 		}
 		else
 		{
-			// Ground/air: yaw only (existing behavior)
-			const FRotator YawRotation(0.f, Controller->GetControlRotation().Yaw, 0.f);
+			// Ground/air: yaw only, in the gravity frame (the world's yaw without custom gravity; spherical SP-F3)
+			const FRotator YawRotation = FVCGravityFrame::GetYawRotation(GetCharacterMovement(), Controller->GetControlRotation());
 			const FVector ForwardDir = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
 			const FVector RightDir = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 			AddMovementInput(ForwardDir, MoveInput.Y);

@@ -13,6 +13,7 @@
 #include "Integration/VCInteractionBridge.h"
 #include "Integration/VCEquipmentBridge.h"
 #include "Integration/VCAbilityBridge.h"
+#include "VoxelWorldModeTypes.h"
 #include "VCCharacterBase.generated.h"
 
 class UVCCameraManager;
@@ -381,7 +382,8 @@ public:
 
 	/**
 	 * A player falling this far below the voxel world's lowest terrain has fallen out of the world, and recovers as at
-	 * KillZ (FellOutOfWorld) without the minutes-long fall to it. 0 = KillZ only.
+	 * KillZ (FellOutOfWorld) without the minutes-long fall to it. On a planet: this far inside the shell's inner radius,
+	 * along the radius (spherical SP-F5). 0 = KillZ only.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|Spawn", meta = (ClampMin = "0"))
 	float OutOfWorldDepth = 20000.f;
@@ -393,6 +395,22 @@ public:
 	 * an unpossessed body keeps the engine default. Server only.
 	 */
 	virtual void FellOutOfWorld(const UDamageType& DamageType) override;
+
+	/**
+	 * Planets: face the control rotation's yaw in the gravity frame and stay upright (first person turns the body with
+	 * the view; spherical SP-F3). Without custom gravity, the engine's world-space version.
+	 */
+	virtual void FaceRotation(FRotator NewControlRotation, float DeltaTime = 0.f) override;
+
+	/**
+	 * Pure: whether a position has fallen out of a world (WM-I4; spherical SP-F5). Heightmap worlds: below the lowest
+	 * terrain (Bounds.MinZ) by Depth. A planet (a shell): closer to the centre than the shell's inner radius by Depth.
+	 * @param Bounds The voxel world's bounds
+	 * @param Location The pawn's position
+	 * @param Depth OutOfWorldDepth (0 = never)
+	 * @return True when out of the world
+	 */
+	static bool IsOutOfWorld(const FVoxelWorldBounds& Bounds, const FVector& Location, float Depth);
 
 	/**
 	 * The last place this pawn stood on the ground inside the world (sampled a few times a second on the server).
@@ -496,6 +514,9 @@ protected:
 
 	/** Chunks still waiting for collision during terrain-ready spawn. */
 	TSet<FIntVector> PendingTerrainChunks;
+
+	/** How many chunks the terrain wait asked for (the "mostly ready" fallback's denominator). */
+	int32 TerrainWaitTotalChunks = 0;
 
 	/** Handle for the OnCollisionReady delegate (for cleanup in EndPlay). */
 	FDelegateHandle CollisionReadyDelegateHandle;
