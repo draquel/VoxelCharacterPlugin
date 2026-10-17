@@ -129,6 +129,10 @@ void UVCWorldMapWidget::NativeConstruct()
 		if (const APawn* PlayerPawn = PC->GetPawn())
 		{
 			PanOffset = FVector2D(PlayerPawn->GetActorLocation().X, PlayerPawn->GetActorLocation().Y);
+			if (MapSubsystem.IsValid() && MapSubsystem->IsPlanetMap())
+			{
+				GlobeView = (PlayerPawn->GetActorLocation() - MapSubsystem->GetPlanetCenter()).GetSafeNormal();
+			}
 		}
 	}
 
@@ -152,7 +156,20 @@ void UVCWorldMapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 	Super::NativeTick(MyGeometry, InDeltaTime);
 
 	bool bViewChanged = false;
-	if (bMapDirty)
+	const bool bPlanet = MapSubsystem.IsValid() && MapSubsystem->IsPlanetMap();
+	if (bMapDirty && bPlanet)
+	{
+		// The globe redraws at most 30 times a second (tiles stream in one by one).
+		const double Now = FPlatformTime::Seconds();
+		if (Now - LastPlanetRebuildSeconds >= 1.0 / 30.0)
+		{
+			LastPlanetRebuildSeconds = Now;
+			RebuildMapTexture();
+			bMapDirty = false;
+			bViewChanged = true;
+		}
+	}
+	else if (bMapDirty)
 	{
 		RebuildMapTexture();
 		bMapDirty = false;
@@ -207,6 +224,16 @@ FReply UVCWorldMapWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, con
 
 FReply UVCWorldMapWidget::NativeOnMouseMove(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
+	if (bIsPanning && bRenderedPlanet)
+	{
+		// A planet: turn the globe so the content follows the mouse, north up.
+		const FVector2D CurrentMousePos = InMouseEvent.GetScreenSpacePosition();
+		const FVector2D Delta = CurrentMousePos - LastMousePos;
+		LastMousePos = CurrentMousePos;
+		GlobeView = FVCGlobeProjection::Make(GlobeView, GetGlobeRadiusPx()).Dragged(Delta).View;
+		bMapDirty = true;
+		return FReply::Handled();
+	}
 	if (bIsPanning && RenderedWorldPerPixel > 0.f)
 	{
 		const FVector2D CurrentMousePos = InMouseEvent.GetScreenSpacePosition();
@@ -257,6 +284,12 @@ void UVCWorldMapWidget::RebuildMapTexture()
 	{
 		return;
 	}
+	if (Subsystem->IsPlanetMap())
+	{
+		RebuildPlanetMapTexture();
+		return;
+	}
+	bRenderedPlanet = false;
 
 	const int32 TexSize = FMath::Clamp(MapTextureFixedSize, 256, 2048);
 
@@ -400,6 +433,67 @@ void UVCWorldMapWidget::RebuildMapTexture()
 	MapImage->SetDesiredSizeOverride(FVector2D(TexSize, TexSize));
 }
 
+double UVCWorldMapWidget::GetGlobeRadiusPx() const
+{
+	const UVoxelMapSubsystem* Subsystem = MapSubsystem.Get();
+	if (!Subsystem)
+	{
+		return 1.0;
+	}
+	// The plane's view shows BaseWorldExtent / CurrentZoom from the centre to the texture's edge (32 tiles at zoom 1);
+	// the globe at the same scale.
+	const double HalfTex = 0.5 * FMath::Clamp(MapTextureFixedSize, 256, 2048);
+	const double ViewWorldExtent = 32.0 * Subsystem->GetTileWorldSize() / FMath::Max(CurrentZoom, KINDA_SMALL_NUMBER);
+	return HalfTex * Subsystem->GetPlanetRadius() / FMath::Max(ViewWorldExtent, 1.0);
+}
+
+void UVCWorldMapWidget::RebuildPlanetMapTexture()
+{
+	UVoxelMapSubsystem* Subsystem = MapSubsystem.Get();
+	const int32 TexSize = FMath::Clamp(MapTextureFixedSize, 256, 2048);
+	if (!WorldMapTexture || WorldMapTexture->GetSizeX() != TexSize)
+	{
+		WorldMapTexture = UTexture2D::CreateTransient(TexSize, TexSize, PF_B8G8R8A8, TEXT("WorldMapTexture"));
+		if (!WorldMapTexture)
+		{
+			return;
+		}
+		WorldMapTexture->Filter = TF_Bilinear;
+		WorldMapTexture->SRGB = true;
+		WorldMapTexture->CompressionSettings = TC_VectorDisplacementmap;
+		WorldMapTexture->AddressX = TA_Clamp;
+		WorldMapTexture->AddressY = TA_Clamp;
+	}
+	FTexture2DMipMap& Mip = WorldMapTexture->GetPlatformData()->Mips[0];
+	uint8* PixelData = static_cast<uint8*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
+	if (!PixelData)
+	{
+		return;
+	}
+
+	RenderedGlobe = FVCGlobeProjection::Make(GlobeView, GetGlobeRadiusPx());
+	bRenderedPlanet = true;
+	RenderedTexSize = TexSize;
+	RenderedWorldPerPixel = static_cast<float>(Subsystem->GetPlanetRadius() / RenderedGlobe.RadiusPx);
+
+	// Detail where a tile spans more texels than half again its overview (as the plane's view decides).
+	const double TexelsPerTile = Subsystem->GetTileWorldSize() * RenderedGlobe.RadiusPx / FMath::Max(Subsystem->GetPlanetRadius(), 1.0);
+	FVCPlanetMapSampler Sampler;
+	Sampler.bWantDetail = TexelsPerTile > 1.5 * Subsystem->GetTileOverviewResolution();
+	Sampler.Background = FColor(2, 2, 5, 255);
+	const double Half = 0.5 * TexSize;
+	const FVCGlobeProjection Globe = RenderedGlobe;
+	Sampler.Fill(*Subsystem, PixelData, TexSize, 16, [&Globe, Half](double X, double Y, FVector& OutDirection)
+	{
+		return Globe.ScreenToDirection(FVector2D(X - Half, Y - Half), OutDirection);
+	});
+
+	Mip.BulkData.Unlock();
+	WorldMapTexture->UpdateResource();
+	MapImage->SetBrushFromTexture(WorldMapTexture);
+	MapImage->SetDesiredSizeOverride(FVector2D(TexSize, TexSize));
+}
+
 // ---------------------------------------------------------------------------
 // Player Marker
 // ---------------------------------------------------------------------------
@@ -418,6 +512,27 @@ void UVCWorldMapWidget::UpdatePlayerMarker()
 	}
 
 	const FVector PlayerPos = PC->GetPawn()->GetActorLocation();
+
+	if (bRenderedPlanet)
+	{
+		// The globe: where the player's direction shows, hidden on the far side.
+		const FVector Direction = (PlayerPos - MapSubsystem->GetPlanetCenter()).GetSafeNormal();
+		FVector2D Screen;
+		const bool bVisible = RenderedGlobe.DirectionToScreen(Direction, Screen)
+			&& FMath::Abs(Screen.X) <= 0.5f * RenderedTexSize && FMath::Abs(Screen.Y) <= 0.5f * RenderedTexSize;
+		PlayerMarker->SetVisibility(bVisible ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+		if (UCanvasPanelSlot* PlanetMarkerSlot = Cast<UCanvasPanelSlot>(PlayerMarker->Slot))
+		{
+			PlanetMarkerSlot->SetPosition(Screen);
+		}
+		if (MapCoordinateText)
+		{
+			const FVector2D LatLon = FVCPlanetMapFrame::At(MapSubsystem->GetPlanetCenter(), MapSubsystem->GetPlanetRadius(), PlayerPos).GetLatLon();
+			MapCoordinateText->SetText(FText::FromString(
+				FString::Printf(TEXT("Player: Lat %.2f  Lon %.2f  |  Zoom: %.1fx"), LatLon.X, LatLon.Y, CurrentZoom)));
+		}
+		return;
+	}
 
 	// Player's offset from the view center, in texture pixels (north-up: east right, north up)
 	const float PixelOffsetX = (PlayerPos.Y - PanOffset.Y) / RenderedWorldPerPixel;
@@ -462,7 +577,15 @@ void UVCWorldMapWidget::UpdateMarkers()
 	}
 
 	TArray<FVCMapMarker> Markers;
-	if (UVCMapMarkerRegistry* Registry = MarkerRegistry.Get())
+	UVCMapMarkerRegistry* PlanetRegistry = bRenderedPlanet ? MarkerRegistry.Get() : nullptr;
+	if (PlanetRegistry && MapSubsystem.IsValid())
+	{
+		// The globe: markers within the visible cap (the view's centre on the datum sphere and the chord to the rim).
+		const double Radius = MapSubsystem->GetPlanetRadius();
+		const double VisibleAngle = FMath::Min(UE_DOUBLE_HALF_PI, 0.5 * RenderedTexSize * UE_SQRT_2 / RenderedGlobe.RadiusPx);
+		PlanetRegistry->GatherMarkersNear(MapSubsystem->GetPlanetCenter() + RenderedGlobe.View * Radius, 2.0 * Radius * FMath::Sin(0.5 * VisibleAngle), Markers);
+	}
+	else if (UVCMapMarkerRegistry* Registry = MarkerRegistry.Get())
 	{
 		// The rendered view: PanOffset-centred, RenderedTexSize pixels at RenderedWorldPerPixel.
 		const float ViewWorldExtent = 0.5f * RenderedTexSize * RenderedWorldPerPixel;
@@ -484,9 +607,14 @@ void UVCWorldMapWidget::UpdateMarkers()
 		}
 
 		// Same mapping as the player marker (north-up: east right, north up).
-		const FVector2D PixelOffset(
+		FVector2D PixelOffset(
 			(Marker.WorldPosition.Y - PanOffset.Y) / RenderedWorldPerPixel,
 			(PanOffset.X - Marker.WorldPosition.X) / RenderedWorldPerPixel);
+		if (bRenderedPlanet && (!MapSubsystem.IsValid() || !RenderedGlobe.DirectionToScreen(
+			(Marker.WorldLocation - MapSubsystem->GetPlanetCenter()).GetSafeNormal(), PixelOffset)))
+		{
+			continue; // on the globe's far side
+		}
 		if (FMath::Abs(PixelOffset.X) > HalfTex || FMath::Abs(PixelOffset.Y) > HalfTex)
 		{
 			continue; // outside the map image
