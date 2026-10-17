@@ -287,6 +287,11 @@ void UVCMovementComponent::PerformMovement(float DeltaTime)
 	Super::PerformMovement(DeltaTime);
 }
 
+bool UVCMovementComponent::ShouldRemainVertical() const
+{
+	return Super::ShouldRemainVertical() || (HasCustomGravity() && IsSwimming());
+}
+
 double UVCMovementComponent::GetHorizontalSpeedSquared(const FVector& InVelocity) const
 {
 	return HasCustomGravity() ? ProjectToGravityFloor(InVelocity).SizeSquared() : InVelocity.SizeSquared2D();

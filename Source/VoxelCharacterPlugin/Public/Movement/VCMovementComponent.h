@@ -333,6 +333,13 @@ protected:
 	/** Planets: gravity from the position before the move (WM-W1), then the engine's movement. */
 	virtual void PerformMovement(float DeltaTime) override;
 
+	/**
+	 * Planets: a swimmer stays upright in its gravity as well as a walker or a faller. The engine turns pitch and roll at
+	 * RotationRate's zero rates unless the pawn should remain vertical, so as gravity turns under a swimmer nothing would
+	 * re-upright it (it lay on its side after a quarter of the planet). Heightmap worlds: the engine's rule.
+	 */
+	virtual bool ShouldRemainVertical() const override;
+
 	/** Speed across local up, squared (Velocity.SizeSquared2D() for the default gravity). */
 	double GetHorizontalSpeedSquared(const FVector& InVelocity) const;
 

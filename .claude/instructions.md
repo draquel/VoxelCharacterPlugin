@@ -242,6 +242,24 @@ If you add a new system that cares about view mode, add it to this sequence.
 
 Third-person camera must trace against voxel geometry to prevent clipping into terrain. Use `ResolveVoxelCameraCollision()` in the camera manager. First-person mode does not need this.
 
+### The gravity frame (planets, VoxelWorlds spherical Phase 3)
+
+On a planet the pawn's "up" is local up, minus the movement component's gravity direction. `FVCGravityFrame`
+(Movement/VCGravityFrame.h) converts between world space and that frame (the engine's own `WorldToGravityTransform`):
+`ToGravityRelative` / `ToWorld`, `GetYawRotation` (the heading in the local horizontal), `VectorToWorld`, `GetUp`,
+`GetHorizontalSpeed`. Every movement-component overload returns its input unchanged without custom gravity, so heightmap
+worlds keep the old arithmetic. Rules:
+
+- `AVCPlayerController::UpdateRotation` keeps the control rotation in world space, turns it each frame by the change in
+  gravity, and clamps pitch / zeroes roll in the gravity frame; without custom gravity it is the engine's.
+- Anything that reads the control rotation's yaw (ground input, the third-person offset, facing in first person,
+  `AVCCharacterBase::FaceRotation`) goes through `GetYawRotation`; eye heights and camera offsets through `VectorToWorld`;
+  the anim instance reads speed, direction and aim in the gravity frame.
+- Only frame-independent things are done in the gravity frame (zero a pitch or roll, take a yaw-only heading, clamp a
+  pitch). The frame's own twist spins near a planet's south pole, so never keep a gravity-relative yaw across frames.
+- Still world-Z on a planet (spherical Phase 4): NPC AI movement, item drop traces and the placeable slope, the chop aim
+  point and placement traces, the edit brush axis.
+
 ## Movement Component
 
 ### Voxel Terrain Context
@@ -266,6 +284,20 @@ inside solid voxels (players and NPCs both use this component).
 If VoxelWorlds uses async mesh generation (marching cubes), the standard `FindFloor` may fail during mesh rebuilds. The override must handle transitional states gracefully — if no valid floor is found and the character was grounded last frame, maintain grounded state briefly to avoid jitter.
 
 ### Movement Modes
+
+### Planet gravity (spherical SP-F1, SP-F2)
+
+On a planet (the voxel world's bounds are a shell) `UVCMovementComponent::PerformMovement` points the engine's custom
+gravity direction (UE 5.4+ `SetGravityDirection`) at the planet centre from the position before every move
+(`UpdatePlanetGravity`), so the server's replay, the client's prediction and NPCs agree with no new replicated state;
+simulated proxies take the engine's replicated gravity direction. The engine then walks, falls, finds floors, steps,
+jumps and stays upright in gravity space. This component's own vertical code is in the same frame: the swim controls,
+buoyancy, surface damping and cap and the vertical clamp (`GetGravitySpaceZ` / `SetGravitySpaceZ`), the dive floor probe,
+the floor-normal / landing / grace line traces (along `GetGravityDirection()`), the shore climb (heights by
+`GetGravitySpaceZ`, the probe capsule along local up), the terrain context's samples, the breath head point, the embed
+resolve and the sprint's ground speed. After placing a pawn on a planet call `UpdatePlanetGravity()` then
+`SnapUprightToGravity()` (the spawn, `vox.TP` and the recovery paths do). Heightmap worlds never set a custom gravity;
+with the default gravity every expression is the old Z arithmetic (tested bit for bit in `VoxelCharacter.Planet.GravityFrame`).
 
 - Walking: standard, modified by voxel surface friction
 - Swimming: triggered by voxel water detection, speed scaled by `VoxelSwimmingSpeedMultiplier`
@@ -328,6 +360,16 @@ Do not bypass this chain. New action types insert into the chain, they don't rep
 - Returns false if no land within `MaxSearchRadius` (default 50,000 units)
 
 **Critical**: The character must be placed AT the terrain surface height (not above it) so the chunk Z coordinate calculation picks the correct terrain-level chunks. Movement and collision are disabled during the wait, so the character won't fall.
+
+**Planets (spherical SP-F4):** the search is by direction (`FindPlanetSpawnPoint`): the terrain along the direction from
+the centre (`UVoxelChunkManager::GetSurfacePointAt`), dry when it is above the sea sphere, else rings of directions one
+chunk of arc apart in 8 bearings. `InitiateChunkBasedWait` then waits on a chunk grid in the tangent plane (plus the chunk
+under the feet along local down), `PlaceOnTerrainAndResume` traces along local up and stands the pawn upright, the
+recovery location is `UVoxelChunkManager::GetPlanetSpawnPosition` (the planet centre is inside it), and the
+out-of-world rule is radial (`AVCCharacterBase::IsOutOfWorld`: `OutOfWorldDepth` inside the shell's inner radius).
+Water depth everywhere (`QueryTerrainContext`, `IsPositionUnderwater`, the spawn search) is the chunk manager's sea
+(`GetSeaSurface(true)`: the plane at `WaterLevel + WorldOrigin.Z`, or the sphere of `WaterRadius` on a planet).
+`AVCGameModeBase` parks the world-item pool at the planet centre once the voxel world is up.
 
 ### Capsule Overlap Gate for Block Placement
 
