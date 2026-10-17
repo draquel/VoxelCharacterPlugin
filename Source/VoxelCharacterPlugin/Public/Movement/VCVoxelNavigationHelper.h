@@ -94,7 +94,7 @@ public:
 	 * @param StartDirection Unit direction from the centre to start from
 	 * @param StepArc Ring spacing (world units of arc)
 	 * @param MaxSearchArc Farthest ring (world units of arc)
-	 * @param SurfaceAt The terrain surface point along a unit direction (UVoxelChunkManager::GetSurfacePointAt)
+	 * @param SurfaceAt The terrain surface point along a unit direction (UVoxelChunkManager::GetGeneratedSurfacePoint)
 	 * @param Sea The sea (disabled: every direction is dry)
 	 * @param OutPosition Receives the surface point found
 	 * @param OutRing Receives the ring it was found on (0 = the start)
