@@ -5,6 +5,8 @@
 #if WITH_AUTOMATION_TESTS
 
 #include "Core/VCCharacterBase.h"
+#include "Core/VCNPCCharacterBase.h"
+#include "AI/VCNPCAIController.h"
 #include "Movement/VCGravityFrame.h"
 #include "Movement/VCMovementComponent.h"
 #include "Movement/VCVoxelNavigationHelper.h"
@@ -440,6 +442,158 @@ bool FVCPlanet_OutOfWorld::RunTest(const FString& Parameters)
 	return true;
 }
 
-#undef VC_PLANET_FLAGS
 
+// ---------------------------------------------------------------------------
+// Spherical Phase 4, WM-SY12 (SP-F6): NPC AI in the gravity frame. With the default gravity the horizontal helpers and the
+// AI's steering, wander and flee geometry are the old Z-up expressions bit for bit; with planet gravity at every site they
+// lie across local up: steering toward a waypoint is its horizontal direction, wander goals are on the tangent plane at
+// their distance, flee directions turn about local up, and a facing is upright with its forward along the target's
+// horizontal direction.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlanet_NPCSteering, "VoxelCharacter.Planet.NPCSteering", VC_PLANET_FLAGS)
+bool FVCPlanet_NPCSteering::RunTest(const FString& Parameters)
+{
+	using namespace VCPlanetWalkableTestHelpers;
+	UCharacterMovementComponent* Move = NewObject<UCharacterMovementComponent>();
+	FRandomStream Random(777);
+
+	int32 Mismatches = 0;
+	for (int32 i = 0; i < 500; ++i)
+	{
+		const FVector A(Random.FRandRange(-5.0e4, 5.0e4), Random.FRandRange(-5.0e4, 5.0e4), Random.FRandRange(-5.0e4, 5.0e4));
+		const FVector B(Random.FRandRange(-5.0e4, 5.0e4), Random.FRandRange(-5.0e4, 5.0e4), Random.FRandRange(-5.0e4, 5.0e4));
+		const float Angle = Random.FRandRange(0.f, 2.f * UE_PI);
+		const float Dist = Random.FRandRange(100.f, 3000.f);
+		const float Deg = Random.FRandRange(-120.f, 120.f);
+		const FVector To = B - A;
+		Mismatches += FVCGravityFrame::Horizontal(Move, To) != FVector(To.X, To.Y, 0.0) ? 1 : 0;
+		Mismatches += FVCGravityFrame::HorizontalDirection(Move, To) != To.GetSafeNormal2D() ? 1 : 0;
+		Mismatches += FVCGravityFrame::HorizontalDistance(Move, A, B) != FVector::Dist2D(A, B) ? 1 : 0;
+		Mismatches += FVCGravityFrame::UpComponent(Move, To) != To.Z ? 1 : 0;
+		Mismatches += FVCGravityFrame::FacingRotation(Move, To) != FRotator(0.f, To.Rotation().Yaw, 0.f) ? 1 : 0;
+		Mismatches += AVCNPCAIController::SteerDirection(Move, To) != FVector(To.X, To.Y, 0.f).GetSafeNormal() ? 1 : 0;
+		Mismatches += AVCNPCAIController::WanderGoalAt(Move, A, Angle, Dist) != A + FVector(FMath::Cos(Angle) * Dist, FMath::Sin(Angle) * Dist, 0.f) ? 1 : 0;
+		Mismatches += AVCNPCAIController::FleeDirection(Move, To.GetSafeNormal2D(), Deg) != To.GetSafeNormal2D().RotateAngleAxis(Deg, FVector::UpVector) ? 1 : 0;
+	}
+	AddInfo(FString::Printf(TEXT("Default gravity: %d of 4,000 expressions differ from the old ones"), Mismatches));
+	TestEqual(TEXT("Default gravity: the old AI geometry bit for bit"), Mismatches, 0);
+
+	double WorstAcross = 0.0, WorstSteer = 0.0, WorstWander = 0.0, WorstFlee = 0.0, WorstFacing = 0.0;
+	for (const FSite& Site : Sites)
+	{
+		const FVector Up = LatLon(Site.Lat, Site.Lon);
+		Move->SetGravityDirection(-Up);
+		const FVector Pawn = Up * (PlanetRadius + 100.0);
+		for (int32 i = 0; i < 50; ++i)
+		{
+			const FVector Waypoint = Pawn + Random.GetUnitVector() * Random.FRandRange(200.0, 3000.0);
+			const FVector To = Waypoint - Pawn;
+			const FVector Steer = AVCNPCAIController::SteerDirection(Move, To);
+			const FVector Expected = (To - Up * FVector::DotProduct(To, Up)).GetSafeNormal();
+			WorstAcross = FMath::Max(WorstAcross, FMath::Abs(FVector::DotProduct(Steer, Up)));
+			WorstSteer = FMath::Max(WorstSteer, (Steer - Expected).Size());
+			WorstAcross = FMath::Max(WorstAcross, FMath::Abs(FVCGravityFrame::HorizontalDistance(Move, Pawn, Waypoint) - (To - Up * FVector::DotProduct(To, Up)).Size()));
+
+			const float Angle = Random.FRandRange(0.f, 2.f * UE_PI);
+			const FVector Goal = AVCNPCAIController::WanderGoalAt(Move, Pawn, Angle, 1500.f);
+			WorstWander = FMath::Max(WorstWander, FMath::Abs(FVector::DotProduct(Goal - Pawn, Up)) + FMath::Abs((Goal - Pawn).Size() - 1500.0));
+
+			const float Deg = Random.FRandRange(-120.f, 120.f);
+			const FVector Flee = AVCNPCAIController::FleeDirection(Move, Steer, Deg);
+			WorstFlee = FMath::Max(WorstFlee, FMath::Abs(FVector::DotProduct(Flee, Up))
+				+ FMath::Abs(AngleDeg(Flee, Steer) - FMath::Abs(Deg)) * 1.0e-3);
+
+			const FRotator Face = FVCGravityFrame::FacingRotation(Move, To);
+			WorstFacing = FMath::Max(WorstFacing, AngleDeg(Face.Vector(), Expected));
+			WorstFacing = FMath::Max(WorstFacing, AngleDeg(FRotationMatrix(Face).GetUnitAxis(EAxis::Z), Up));
+		}
+	}
+	AddInfo(FString::Printf(TEXT("Planet gravity: across up %.2e, steer %.2e, wander %.2e, flee %.2e, facing %.2e deg"),
+		WorstAcross, WorstSteer, WorstWander, WorstFlee, WorstFacing));
+	TestTrue(TEXT("Steering and distances across local up"), WorstAcross < 1.0e-6);
+	TestTrue(TEXT("Steering toward the waypoint's horizontal direction"), WorstSteer < 1.0e-6);
+	TestTrue(TEXT("Wander goals on the tangent plane at their distance"), WorstWander < 1.0e-3);
+	TestTrue(TEXT("Flee directions turn about local up"), WorstFlee < 1.0e-3);
+	TestTrue(TEXT("Facing upright toward the target's horizontal direction"), WorstFacing < 1.0e-3);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Spherical Phase 4, WM-SY12: the eye height along local up for the player character and NPCs (GetPawnViewLocation, which
+// sight traces, the melee sweep and auto-aim start from); on a plane the engine's location, bit for bit.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlanet_EyeHeight, "VoxelCharacter.Planet.EyeHeight", VC_PLANET_FLAGS)
+bool FVCPlanet_EyeHeight::RunTest(const FString& Parameters)
+{
+	using namespace VCPlanetWalkableTestHelpers;
+	auto Settle = [](ACharacter* Character)
+	{
+		if (UCharacterMovementComponent* Move = Character ? Character->GetCharacterMovement() : nullptr)
+		{
+			Move->bRunPhysicsWithNoController = true;
+			Move->SetMovementMode(MOVE_Falling);
+			for (int32 Frame = 0; Frame < 3; ++Frame)
+			{
+				Move->TickComponent(1.0f / 60.0f, LEVELTICK_All, nullptr);
+			}
+		}
+	};
+	auto SpawnNPC = [](UWorld* World, const FVector& Location) -> AVCNPCCharacterBase*
+	{
+		const FTransform Transform(Location);
+		AVCNPCCharacterBase* NPC = World->SpawnActorDeferred<AVCNPCCharacterBase>(AVCNPCCharacterBase::StaticClass(), Transform,
+			nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+		if (NPC)
+		{
+			NPC->FinishSpawning(Transform);
+		}
+		return NPC;
+	};
+	{
+		FVoxelWorldHarness Planet(/*bPlanet=*/true);
+		for (const FSite& Site : Sites)
+		{
+			const FVector Up = LatLon(Site.Lat, Site.Lon);
+			AVCCharacterBase* Character = Planet.SpawnCharacter(Up * (PlanetRadius + 3000.0));
+			AVCNPCCharacterBase* NPC = SpawnNPC(Planet.World, Up * (PlanetRadius + 3500.0));
+			Settle(Character);
+			Settle(NPC);
+			for (APawn* Pawn : TArray<APawn*>{ Character, NPC })
+			{
+				if (!Pawn)
+				{
+					AddError(FString::Printf(TEXT("%s: spawn failed"), Site.Name));
+					continue;
+				}
+				const FVector Eyes = Pawn->GetPawnViewLocation() - Pawn->GetActorLocation();
+				const FVector LocalUp = Pawn->GetActorLocation().GetSafeNormal();
+				FVector ViewPoint;
+				FRotator ViewRotation;
+				Pawn->GetActorEyesViewPoint(ViewPoint, ViewRotation);
+				TestTrue(FString::Printf(TEXT("%s, %s: the eyes along local up"), Site.Name, *Pawn->GetClass()->GetName()),
+					AngleDeg(Eyes, LocalUp) < 0.01 && FMath::IsNearlyEqual(Eyes.Size(), static_cast<double>(Pawn->BaseEyeHeight), 1.0e-3));
+				TestTrue(FString::Printf(TEXT("%s, %s: the eyes' view point is there"), Site.Name, *Pawn->GetClass()->GetName()),
+					ViewPoint.Equals(Pawn->GetPawnViewLocation(), 1.0e-6));
+			}
+			if (Character) { Character->Destroy(); }
+			if (NPC) { NPC->Destroy(); }
+		}
+	}
+	{
+		FVoxelWorldHarness Plane(/*bPlanet=*/false);
+		AVCCharacterBase* Character = Plane.SpawnCharacter(FVector(1000.0, -2000.0, 5000.0));
+		AVCNPCCharacterBase* NPC = SpawnNPC(Plane.World, FVector(1500.0, -2000.0, 5000.0));
+		for (APawn* Pawn : TArray<APawn*>{ Character, NPC })
+		{
+			if (TestNotNull(TEXT("Plane: spawned"), Pawn))
+			{
+				TestTrue(TEXT("Plane: the engine's eye location, bit for bit"),
+					Pawn->GetPawnViewLocation() == Pawn->GetActorLocation() + FVector(0.f, 0.f, Pawn->BaseEyeHeight));
+			}
+		}
+	}
+	return true;
+}
+
+#undef VC_PLANET_FLAGS
 #endif // WITH_AUTOMATION_TESTS

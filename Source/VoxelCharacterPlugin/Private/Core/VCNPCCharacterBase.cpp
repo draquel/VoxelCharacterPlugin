@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Core/VCNPCCharacterBase.h"
+#include "Movement/VCGravityFrame.h"
 #include "Movement/VCMovementComponent.h"
 #include "AI/VCNPCAIController.h"
 #include "Core/VCCharacterAttributeSet.h"
@@ -64,6 +65,11 @@ AVCNPCCharacterBase::AVCNPCCharacterBase(const FObjectInitializer& ObjectInitial
 		Move->RotationRate = FRotator(0.f, 360.f, 0.f);
 		Move->MaxWalkSpeed = 300.f;
 	}
+}
+
+FVector AVCNPCCharacterBase::GetPawnViewLocation() const
+{
+	return GetActorLocation() + FVCGravityFrame::VectorToWorld(GetCharacterMovement(), FVector(0.f, 0.f, BaseEyeHeight));
 }
 
 void AVCNPCCharacterBase::Tick(float DeltaSeconds)

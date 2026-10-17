@@ -168,6 +168,12 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
 
+	/**
+	 * The eyes: BaseEyeHeight along local up (spherical Phase 4, WM-SY12): sight traces and the melee sweep start at the
+	 * head on a planet too. Without custom gravity this is the engine's location.
+	 */
+	virtual FVector GetPawnViewLocation() const override;
+
 	/** Death visuals + cleanup; runs on every machine from the combat component's OnDied. */
 	UFUNCTION()
 	virtual void HandleDied(const FCGFDamageContext& Context);

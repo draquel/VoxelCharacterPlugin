@@ -4,6 +4,7 @@
 #include "AI/VCPathProvider.h"
 #include "AI/VCVoxelPathProvider.h"
 #include "Core/VCNPCCharacterBase.h"
+#include "Movement/VCGravityFrame.h"
 #include "Combat/VCCombatComponent.h"
 #include "Tags/CGFGameplayTags.h"
 #include "Interfaces/CGFLightBearerInterface.h"
@@ -168,6 +169,35 @@ void AVCNPCAIController::AlertPackmates(AActor* Threat)
 UVCVoxelPathProvider* AVCNPCAIController::GetVoxelProvider() const
 {
 	return Cast<UVCVoxelPathProvider>(PathProvider.GetObject());
+}
+
+const UCharacterMovementComponent* AVCNPCAIController::GetPawnMovement() const
+{
+	const ACharacter* PawnCharacter = Cast<ACharacter>(GetPawn());
+	return PawnCharacter ? PawnCharacter->GetCharacterMovement() : nullptr;
+}
+
+FVector AVCNPCAIController::SteerDirection(const UCharacterMovementComponent* Movement, const FVector& ToWaypoint)
+{
+	if (Movement && Movement->HasCustomGravity())
+	{
+		return FVCGravityFrame::HorizontalDirection(Movement, ToWaypoint);
+	}
+	return FVector(ToWaypoint.X, ToWaypoint.Y, 0.f).GetSafeNormal();
+}
+
+FVector AVCNPCAIController::WanderGoalAt(const UCharacterMovementComponent* Movement, const FVector& Origin, float AngleRadians, float Distance)
+{
+	if (Movement && Movement->HasCustomGravity())
+	{
+		return Origin + FVCGravityFrame::HorizontalAtAngle(Movement, AngleRadians) * Distance;
+	}
+	return Origin + FVector(FMath::Cos(AngleRadians) * Distance, FMath::Sin(AngleRadians) * Distance, 0.f);
+}
+
+FVector AVCNPCAIController::FleeDirection(const UCharacterMovementComponent* Movement, const FVector& Away, float Degrees)
+{
+	return Away.RotateAngleAxis(Degrees, (Movement && Movement->HasCustomGravity()) ? FVCGravityFrame::GetUp(Movement) : FVector::UpVector);
 }
 
 bool AVCNPCAIController::IsAIEnabled() const
@@ -345,7 +375,7 @@ void AVCNPCAIController::Tick(float DeltaSeconds)
 	case EVCNPCAIState::Chase:
 		if (AActor* T = Target.Get())
 		{
-			if (CurrentPath.Num() == 0 || FVector::Dist2D(T->GetActorLocation(), LastPathGoal) > RepathDistance)
+			if (CurrentPath.Num() == 0 || FVCGravityFrame::HorizontalDistance(GetPawnMovement(), T->GetActorLocation(), LastPathGoal) > RepathDistance)
 			{
 				SetPathTo(T->GetActorLocation());
 			}
@@ -365,7 +395,7 @@ void AVCNPCAIController::Tick(float DeltaSeconds)
 		// At the edge of a light it fears: stand and watch the target.
 		if (const AActor* T = Target.Get())
 		{
-			const FRotator Face(0.f, (T->GetActorLocation() - MyPawn->GetActorLocation()).Rotation().Yaw, 0.f);
+			const FRotator Face = FVCGravityFrame::FacingRotation(GetPawnMovement(), T->GetActorLocation() - MyPawn->GetActorLocation());
 			SetControlRotation(Face);
 			MyPawn->SetActorRotation(Face);
 		}
@@ -607,7 +637,8 @@ bool AVCNPCAIController::FollowPath(float DeltaSeconds)
 	}
 	const UWorld* World = GetWorld();
 	const double Now = World ? World->GetTimeSeconds() : 0.0;
-	while (PathIndex < CurrentPath.Num() && FVector::Dist2D(MyPawn->GetActorLocation(), CurrentPath[PathIndex]) <= AcceptanceRadius)
+	const UCharacterMovementComponent* PawnMovement = GetPawnMovement();
+	while (PathIndex < CurrentPath.Num() && FVCGravityFrame::HorizontalDistance(PawnMovement, MyPawn->GetActorLocation(), CurrentPath[PathIndex]) <= AcceptanceRadius)
 	{
 		++PathIndex;
 		BestWaypointDistance = TNumericLimits<float>::Max();
@@ -618,7 +649,7 @@ bool AVCNPCAIController::FollowPath(float DeltaSeconds)
 		return false; // arrived
 	}
 	// Stuck on a prop or a corner: give up on this waypoint rather than pushing forever.
-	const float Distance = FVector::Dist2D(MyPawn->GetActorLocation(), CurrentPath[PathIndex]);
+	const float Distance = FVCGravityFrame::HorizontalDistance(PawnMovement, MyPawn->GetActorLocation(), CurrentPath[PathIndex]);
 	// Release the jump key shortly after a hop (an AI holding it would bounce again on landing).
 	if (LastAutoJumpTime >= 0.0 && Now - LastAutoJumpTime > 0.15)
 	{
@@ -649,7 +680,7 @@ bool AVCNPCAIController::FollowPath(float DeltaSeconds)
 		{
 			// One cell ahead with a small radius: blocking the walker's own cell would strand it (and make
 			// spawners that test walkability think it stands somewhere impossible).
-			const FVector Ahead = MyPawn->GetActorLocation() + (CurrentPath[PathIndex] - MyPawn->GetActorLocation()).GetSafeNormal2D() * 160.f;
+			const FVector Ahead = MyPawn->GetActorLocation() + FVCGravityFrame::HorizontalDirection(PawnMovement, CurrentPath[PathIndex] - MyPawn->GetActorLocation()) * 160.f;
 			UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s AI: stuck %.1fs short of waypoint %d — blocking ahead and repathing."), *MyPawn->GetName(), Distance, PathIndex);
 			Voxel->ReportBlocked(Ahead, 60.f, 8.f);
 			CurrentPath.Reset();
@@ -669,7 +700,7 @@ bool AVCNPCAIController::FollowPath(float DeltaSeconds)
 		LastProgressTime = Now;
 	}
 	const FVector To = CurrentPath[PathIndex] - MyPawn->GetActorLocation();
-	const FVector Dir = FVector(To.X, To.Y, 0.f).GetSafeNormal();
+	const FVector Dir = SteerDirection(PawnMovement, To);
 	if (!Dir.IsNearlyZero())
 	{
 		MyPawn->AddMovementInput(Dir, 1.f);
@@ -687,15 +718,43 @@ bool AVCNPCAIController::TryAutoJump(APawn* MyPawn, const FVector& Waypoint)
 		return false;
 	}
 	const FVector Location = NPC->GetActorLocation();
-	const FVector Dir = (Waypoint - Location).GetSafeNormal2D();
+	const FVector Dir = FVCGravityFrame::HorizontalDirection(Movement, Waypoint - Location);
 	if (Dir.IsNearlyZero())
 	{
 		return false;
 	}
 	const float HalfHeight = NPC->GetSimpleCollisionHalfHeight();
 	const float Radius = NPC->GetSimpleCollisionRadius();
-	const float FeetZ = Location.Z - HalfHeight;
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(NPCAutoJump), false, NPC);
+	if (Movement->HasCustomGravity())
+	{
+		// On a planet: the same probes along local up (feet, knee, the top probe and the rise).
+		const FVector Up = FVCGravityFrame::GetUp(Movement);
+		const FVector Feet = Location - Up * HalfHeight;
+		FHitResult PlanetWall;
+		const FVector Knee = Feet + Up * 30.f;
+		if (!World->LineTraceSingleByChannel(PlanetWall, Knee, Knee + Dir * (Radius + 60.f), ECC_WorldStatic, Params))
+		{
+			return false;
+		}
+		FHitResult PlanetTop;
+		const FVector WallBase = PlanetWall.ImpactPoint - Up * FVector::DotProduct(PlanetWall.ImpactPoint - Feet, Up);
+		const FVector PlanetTopStart = WallBase + Up * (MaxAutoJumpHeight + 10.f) + Dir * 15.f;
+		if (!World->LineTraceSingleByChannel(PlanetTop, PlanetTopStart, PlanetTopStart - Up * (MaxAutoJumpHeight + 40.f), ECC_WorldStatic, Params)
+			|| PlanetTop.bStartPenetrating)
+		{
+			return false;
+		}
+		const float PlanetRise = FVector::DotProduct(PlanetTop.ImpactPoint - Feet, Up);
+		if (PlanetRise <= Movement->MaxStepHeight * 0.8f || PlanetRise > MaxAutoJumpHeight)
+		{
+			return false;
+		}
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s AI: jumping a %.0f uu obstacle."), *MyPawn->GetName(), PlanetRise);
+		NPC->Jump();
+		return true;
+	}
+	const float FeetZ = Location.Z - HalfHeight;
 
 	// Something blocks at knee height just ahead...
 	FHitResult Wall;
@@ -734,11 +793,13 @@ bool AVCNPCAIController::PickWanderGoal(FVector& OutGoal) const
 		return false;
 	}
 	const UVCVoxelPathProvider* Voxel = GetVoxelProvider();
+	const UCharacterMovementComponent* PawnMovement = GetPawnMovement();
 	for (int32 Try = 0; Try < 4; ++Try)
 	{
 		const float Angle = FMath::FRandRange(0.f, 2.f * UE_PI);
 		const float Dist = FMath::FRandRange(WanderRadius * 0.3f, WanderRadius);
-		FVector Goal = LeashOrigin + FVector(FMath::Cos(Angle) * Dist, FMath::Sin(Angle) * Dist, 0.f);
+		// In the tangent plane at home on a planet (the surface projection below puts it on the ground).
+		FVector Goal = WanderGoalAt(PawnMovement, LeashOrigin, Angle, Dist);
 		if (Voxel)
 		{
 			FVector OnSurface;
@@ -787,11 +848,13 @@ bool AVCNPCAIController::PickFleeGoal(const FVector& ThreatLocation, FVector& Ou
 	{
 		return false;
 	}
-	FVector Away = (MyPawn->GetActorLocation() - ThreatLocation).GetSafeNormal2D();
+	const UCharacterMovementComponent* PawnMovement = GetPawnMovement();
+	FVector Away = FVCGravityFrame::HorizontalDirection(PawnMovement, MyPawn->GetActorLocation() - ThreatLocation);
 	if (Away.IsNearlyZero())
 	{
 		const float Angle = FMath::FRandRange(0.f, 2.f * UE_PI);
-		Away = FVector(FMath::Cos(Angle), FMath::Sin(Angle), 0.f);
+		Away = (PawnMovement && PawnMovement->HasCustomGravity()) ? FVCGravityFrame::HorizontalAtAngle(PawnMovement, Angle)
+			: FVector(FMath::Cos(Angle), FMath::Sin(Angle), 0.f);
 	}
 	const UVCVoxelPathProvider* Voxel = GetVoxelProvider();
 	// Straight away first, then increasingly sideways, so a cliff or lake behind the animal does not trap it.
@@ -799,7 +862,7 @@ bool AVCNPCAIController::PickFleeGoal(const FVector& ThreatLocation, FVector& Ou
 	FVector Fallback = MyPawn->GetActorLocation() + Away * FleeDistance;
 	for (const float Deg : Angles)
 	{
-		const FVector Dir = Away.RotateAngleAxis(Deg, FVector::UpVector);
+		const FVector Dir = FleeDirection(PawnMovement, Away, Deg);
 		FVector Goal = MyPawn->GetActorLocation() + Dir * FleeDistance;
 		if (Voxel)
 		{
@@ -888,7 +951,7 @@ void AVCNPCAIController::TryAttack()
 	}
 	// Face the target: the melee ability sweeps from the eyes along the view rotation.
 	const FVector To = T->GetActorLocation() - MyPawn->GetActorLocation();
-	const FRotator Face(0.f, To.Rotation().Yaw, 0.f);
+	const FRotator Face = FVCGravityFrame::FacingRotation(GetPawnMovement(), To);
 	SetControlRotation(Face);
 	MyPawn->SetActorRotation(Face);
 
@@ -921,7 +984,7 @@ int32 AVCNPCAIController::NearestRoutePoint() const
 	float BestDist = TNumericLimits<float>::Max();
 	for (int32 i = 0; i < PatrolRoute.Num(); ++i)
 	{
-		const float D = FVector::Dist2D(PatrolRoute[i], MyPawn->GetActorLocation());
+		const float D = FVCGravityFrame::HorizontalDistance(GetPawnMovement(), PatrolRoute[i], MyPawn->GetActorLocation());
 		if (D < BestDist)
 		{
 			BestDist = D;
@@ -940,5 +1003,5 @@ float AVCNPCAIController::DistanceFromRoute() const
 	}
 	const int32 Nearest = NearestRoutePoint();
 	const FVector Anchor = Nearest != INDEX_NONE ? PatrolRoute[Nearest] : LeashOrigin;
-	return FVector::Dist2D(Anchor, MyPawn->GetActorLocation());
+	return FVCGravityFrame::HorizontalDistance(GetPawnMovement(), Anchor, MyPawn->GetActorLocation());
 }

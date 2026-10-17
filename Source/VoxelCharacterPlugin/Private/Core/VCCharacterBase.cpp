@@ -1466,6 +1466,11 @@ bool AVCCharacterBase::DropItemInSlot(int32 SlotIndex, int32 Count)
 // Bridge: Interaction
 // ---------------------------------------------------------------------------
 
+FVector AVCCharacterBase::GetPawnViewLocation() const
+{
+	return GetActorLocation() + FVCGravityFrame::VectorToWorld(GetCharacterMovement(), FVector(0.f, 0.f, BaseEyeHeight));
+}
+
 FVector AVCCharacterBase::GetInteractionTraceOrigin() const
 {
 	if (CurrentViewMode == EVCViewMode::FirstPerson)

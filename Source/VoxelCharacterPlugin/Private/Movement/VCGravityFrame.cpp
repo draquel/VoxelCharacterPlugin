@@ -76,3 +76,53 @@ double FVCGravityFrame::GetHorizontalSpeed(const UCharacterMovementComponent* Mo
 	}
 	return Movement->ProjectToGravityFloor(Velocity).Size();
 }
+
+FVector FVCGravityFrame::Horizontal(const UCharacterMovementComponent* Movement, const FVector& WorldVector)
+{
+	if (!Movement || !Movement->HasCustomGravity())
+	{
+		return FVector(WorldVector.X, WorldVector.Y, 0.0);
+	}
+	return Movement->ProjectToGravityFloor(WorldVector);
+}
+
+FVector FVCGravityFrame::HorizontalDirection(const UCharacterMovementComponent* Movement, const FVector& WorldVector)
+{
+	if (!Movement || !Movement->HasCustomGravity())
+	{
+		return WorldVector.GetSafeNormal2D();
+	}
+	return Movement->ProjectToGravityFloor(WorldVector).GetSafeNormal();
+}
+
+double FVCGravityFrame::HorizontalDistance(const UCharacterMovementComponent* Movement, const FVector& A, const FVector& B)
+{
+	if (!Movement || !Movement->HasCustomGravity())
+	{
+		return FVector::Dist2D(A, B);
+	}
+	return Movement->ProjectToGravityFloor(A - B).Size();
+}
+
+double FVCGravityFrame::UpComponent(const UCharacterMovementComponent* Movement, const FVector& WorldVector)
+{
+	if (!Movement || !Movement->HasCustomGravity())
+	{
+		return WorldVector.Z;
+	}
+	return FVector::DotProduct(WorldVector, GetUp(Movement));
+}
+
+FRotator FVCGravityFrame::FacingRotation(const UCharacterMovementComponent* Movement, const FVector& WorldDirection)
+{
+	if (!Movement || !Movement->HasCustomGravity())
+	{
+		return FRotator(0.0, WorldDirection.Rotation().Yaw, 0.0);
+	}
+	return GetYawRotation(Movement, WorldDirection.Rotation());
+}
+
+FVector FVCGravityFrame::HorizontalAtAngle(const UCharacterMovementComponent* Movement, float AngleRadians)
+{
+	return VectorToWorld(Movement, FVector(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0));
+}

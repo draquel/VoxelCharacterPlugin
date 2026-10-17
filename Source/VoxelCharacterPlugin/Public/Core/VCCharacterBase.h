@@ -453,6 +453,12 @@ public:
 
 	// --- IVCInteractionBridge ---
 	virtual FVector GetInteractionTraceOrigin() const override;
+
+	/**
+	 * The eyes: BaseEyeHeight along local up (spherical Phase 4, WM-SY12). The engine adds it along world Z, which at a
+	 * planet's equator puts the eyes beside the head; without custom gravity this is the engine's location.
+	 */
+	virtual FVector GetPawnViewLocation() const override;
 	virtual FVector GetInteractionTraceDirection() const override;
 	virtual float GetInteractionRange() const override;
 
