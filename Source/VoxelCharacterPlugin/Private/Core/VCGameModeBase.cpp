@@ -51,7 +51,9 @@ void AVCGameModeBase::ApplyVoxelWorldShape()
 		// The centre is inside the core, which never streams: hidden, collisionless items wait there, out of every
 		// player's way and relevance.
 		Pool->SetParkingLocation(Bounds.Center);
-		UE_LOG(LogVoxelCharacter, Log, TEXT("Planet: world items park at the planet centre %s."), *Bounds.Center.ToCompactString());
+		// ... and stand and snap along the direction from it (spherical Phase 4, SP-F7).
+		Pool->SetGravityCenter(Bounds.Center);
+		UE_LOG(LogVoxelCharacter, Log, TEXT("Planet: world items park at the planet centre %s and snap along its gravity."), *Bounds.Center.ToCompactString());
 	}
 #endif
 }

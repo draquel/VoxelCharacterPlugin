@@ -2,6 +2,7 @@
 
 #include "Map/VCMinimapWidget.h"
 #include "Map/VCMapMarkerRegistry.h"
+#include "Map/VCPlanetMapProjection.h"
 #include "VoxelMapSubsystem.h"
 #include "VoxelCharacterPlugin.h"
 #include "Blueprint/WidgetTree.h"
@@ -163,8 +164,18 @@ void UVCMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 	// Request tiles for the minimap's visible area (oversized for rotation)
 	MapSubsystem->RequestTilesInRadius(PlayerPos, MinimapWorldRadius * RotationOversize);
 
+	// A planet's minimap is the tangent plane under the player, north toward the +Z pole (spherical Phase 4, WM-SY9).
+	const bool bPlanet = MapSubsystem->IsPlanetMap();
+	const FVCPlanetMapFrame PlanetFrame = bPlanet
+		? FVCPlanetMapFrame::At(MapSubsystem->GetPlanetCenter(), MapSubsystem->GetPlanetRadius(), PlayerPos)
+		: FVCPlanetMapFrame();
+	if (CoordinateText && bPlanet)
+	{
+		const FVector2D LatLon = PlanetFrame.GetLatLon();
+		CoordinateText->SetText(FText::FromString(FString::Printf(TEXT("Lat %.2f  Lon %.2f"), LatLon.X, LatLon.Y)));
+	}
 	// Update coordinate text — display in voxel coordinates (divide by VoxelSize)
-	if (CoordinateText)
+	else if (CoordinateText)
 	{
 		const float VoxelSize = MapSubsystem->GetTileWorldSize() / FMath::Max(1, MapSubsystem->GetTileResolution());
 		const int32 VoxelX = FMath::RoundToInt(PlayerPos.X / VoxelSize);
@@ -184,7 +195,9 @@ void UVCMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 	FVector CameraLoc;
 	PC->GetPlayerViewPoint(CameraLoc, CameraRot);
 
-	const float MapAngleDeg = -CameraRot.Yaw - 90.0f;
+	// On a planet the heading is measured from north on the tangent plane, as yaw is from +X on a plane.
+	const float Yaw = bPlanet ? static_cast<float>(PlanetFrame.HeadingDegrees(CameraRot.Vector())) : CameraRot.Yaw;
+	const float MapAngleDeg = -Yaw - 90.0f;
 	if (MapImage)
 	{
 		MapImage->SetRenderTransformAngle(MapAngleDeg);
@@ -199,7 +212,7 @@ void UVCMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 	// position on the minimap orbits around the center.
 	if (NorthIndicator)
 	{
-		const float NorthAngleRad = FMath::DegreesToRadians(-CameraRot.Yaw);
+		const float NorthAngleRad = FMath::DegreesToRadians(-Yaw);
 		const float Radius = MinimapSize * 0.40f;
 		const float NX = FMath::Sin(NorthAngleRad) * Radius;
 		const float NY = -FMath::Cos(NorthAngleRad) * Radius;
@@ -231,15 +244,25 @@ void UVCMinimapWidget::UpdateMarkers(const FVector& PlayerPos, float MapAngleDeg
 		}
 	}
 
+	const UVoxelMapSubsystem* Map = MapSubsystem.Get();
+	const bool bPlanet = Map && Map->IsPlanetMap();
 	TArray<FVCMapMarker> Markers;
 	if (UVCMapMarkerRegistry* Registry = MarkerRegistry.Get())
 	{
 		// Gather slightly beyond the visible radius so dots slide in smoothly at the rim.
 		const FVector2D Player2D(PlayerPos.X, PlayerPos.Y);
 		const float GatherRadius = MinimapWorldRadius * RotationOversize;
-		const FBox2D Area(Player2D - FVector2D(GatherRadius, GatherRadius), Player2D + FVector2D(GatherRadius, GatherRadius));
-		Registry->GatherMarkers(Area, Markers);
+		if (bPlanet)
+		{
+			Registry->GatherMarkersNear(PlayerPos, GatherRadius * UE_SQRT_2, Markers);
+		}
+		else
+		{
+			const FBox2D Area(Player2D - FVector2D(GatherRadius, GatherRadius), Player2D + FVector2D(GatherRadius, GatherRadius));
+			Registry->GatherMarkers(Area, Markers);
+		}
 	}
+	const FVCPlanetMapFrame PlanetFrame = bPlanet ? FVCPlanetMapFrame::At(Map->GetPlanetCenter(), Map->GetPlanetRadius(), PlayerPos) : FVCPlanetMapFrame();
 
 	// Highest priority first — they win the marker budget and draw on top (added last below).
 	Markers.Sort([](const FVCMapMarker& A, const FVCMapMarker& B) { return A.Priority > B.Priority; });
@@ -256,8 +279,11 @@ void UVCMinimapWidget::UpdateMarkers(const FVector& PlayerPos, float MapAngleDeg
 			break;
 		}
 
-		// World offset -> pixel offset -> rotate with the map image (same angle, same pivot).
-		const FVector2D PixelOffset = (Marker.WorldPosition - Player2D) * PixelsPerWorldUnit;
+		// World offset -> pixel offset -> rotate with the map image (same angle, same pivot). On a planet the offset on the
+		// tangent plane, (north, east) as (X, Y) are on a plane.
+		const FVector2D PixelOffset = bPlanet
+			? PlanetFrame.OffsetOf(Marker.WorldLocation) * PixelsPerWorldUnit
+			: (Marker.WorldPosition - Player2D) * PixelsPerWorldUnit;
 		const FVector2D Rotated = PixelOffset.GetRotated(MapAngleDeg);
 		if (Rotated.SizeSquared() > VisibleRadiusPx * VisibleRadiusPx)
 		{
@@ -366,6 +392,26 @@ void UVCMinimapWidget::RefreshMapTexture()
 
 	uint8* PixelData = static_cast<uint8*>(TextureData);
 	const int32 TotalPixels = TexSize * TexSize;
+
+	if (Subsystem->IsPlanetMap())
+	{
+		// A planet (spherical Phase 4, WM-SY9): texel (X, Y) is the tangent plane's point (north, east) = (X, Y) world
+		// units per pixel from the corner, as world (X, Y) on a plane, so the rotation below carries over.
+		const FVCPlanetMapFrame Frame = FVCPlanetMapFrame::At(Subsystem->GetPlanetCenter(), Subsystem->GetPlanetRadius(), PlayerPos);
+		FVCPlanetMapSampler Sampler;
+		Sampler.bRequireExplored = false; // the minimap's area is requested (explored) every refresh
+		Sampler.Unexplored = Sampler.Undrawn = Sampler.Background = FColor(5, 5, 5, 255);
+		Sampler.Fill(*Subsystem, PixelData, TexSize, 16, [&Frame, WorldPerPixel, ViewWorldExtent](double X, double Y, FVector& OutDirection)
+		{
+			OutDirection = Frame.DirectionAtOffset(X * WorldPerPixel - ViewWorldExtent, Y * WorldPerPixel - ViewWorldExtent);
+			return true;
+		});
+		Mip.BulkData.Unlock();
+		MapTexture->UpdateResource();
+		MapImage->SetBrushFromTexture(MapTexture);
+		MapImage->SetDesiredSizeOverride(FVector2D(static_cast<float>(TexSize), static_cast<float>(TexSize)));
+		return;
+	}
 
 	// Clear to dark background (matches border color)
 	for (int32 i = 0; i < TotalPixels; ++i)

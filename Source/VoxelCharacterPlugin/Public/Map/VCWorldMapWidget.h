@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Map/VCPlanetMapProjection.h"
 #include "VCWorldMapWidget.generated.h"
 
 class UVoxelMapSubsystem;
@@ -17,6 +18,10 @@ class UCanvasPanel;
  *
  * Shows all explored terrain with fog of war on unexplored areas.
  * Supports mouse zoom/pan for navigation and shows a player position marker.
+ *
+ * On a planet (spherical Phase 4, D11, WM-SY9) the map is a globe: an orthographic view around a direction, north up,
+ * opening on the player; dragging turns the globe, the wheel zooms (the same scale as a plane's map at each zoom, so it
+ * becomes a local map zoomed in).
  *
  * Widget tree is built programmatically in NativeOnInitialized()
  * following the project's C++ widget construction pattern.
@@ -75,6 +80,12 @@ private:
 	/** Rebuild the map texture to show tiles around PanOffset at CurrentZoom. */
 	void RebuildMapTexture();
 
+	/** RebuildMapTexture on a planet: the globe around GlobeView. */
+	void RebuildPlanetMapTexture();
+
+	/** The globe's radius on screen at the current zoom (the plane's scale: BaseWorldExtent / CurrentZoom per half texture). */
+	double GetGlobeRadiusPx() const;
+
 	/** Update the player marker position on the map. */
 	void UpdatePlayerMarker();
 
@@ -126,6 +137,16 @@ private:
 
 	/** Whether the map needs a texture rebuild. */
 	bool bMapDirty = true;
+
+	/** A planet's view: the direction at the globe's centre (spherical Phase 4). */
+	FVector GlobeView = FVector::UpVector;
+
+	/** The globe as last drawn (planets). */
+	FVCGlobeProjection RenderedGlobe;
+	bool bRenderedPlanet = false;
+
+	/** Real time of the last planet rebuild: tile arrivals redraw at most 30 times a second. */
+	double LastPlanetRebuildSeconds = 0.0;
 
 	// Cached from last render — used by player marker positioning
 	FIntPoint RenderedCenterTile = FIntPoint(0, 0);

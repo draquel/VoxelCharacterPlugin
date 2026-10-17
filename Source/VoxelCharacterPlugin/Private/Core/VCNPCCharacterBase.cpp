@@ -1,6 +1,8 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Core/VCNPCCharacterBase.h"
+#include "Core/VCCharacterBase.h"
+#include "Movement/VCGravityFrame.h"
 #include "Movement/VCMovementComponent.h"
 #include "AI/VCNPCAIController.h"
 #include "Core/VCCharacterAttributeSet.h"
@@ -66,9 +68,19 @@ AVCNPCCharacterBase::AVCNPCCharacterBase(const FObjectInitializer& ObjectInitial
 	}
 }
 
+FVector AVCNPCCharacterBase::GetPawnViewLocation() const
+{
+	return GetActorLocation() + FVCGravityFrame::VectorToWorld(GetCharacterMovement(), FVector(0.f, 0.f, BaseEyeHeight));
+}
+
 void AVCNPCCharacterBase::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (!RagdollGravityDirection.IsZero())
+	{
+		AVCCharacterBase::TickRadialRagdoll(GetMesh(), RagdollGravityDirection);
+		return;
+	}
 	if (!bToppling)
 	{
 		SetActorTickEnabled(false);
@@ -77,10 +89,20 @@ void AVCNPCCharacterBase::Tick(float DeltaSeconds)
 	ToppleElapsed += DeltaSeconds;
 	const float Alpha = ToppleSeconds > 0.f ? FMath::Clamp(ToppleElapsed / ToppleSeconds, 0.f, 1.f) : 1.f;
 	const float Eased = FMath::InterpEaseIn(0.f, 1.f, Alpha, 2.f);
-	FRotator Rot = ToppleStartRotation;
-	Rot.Roll = ToppleStartRotation.Roll + 85.f * Eased;
-	SetActorRotation(Rot);
-	SetActorLocation(ToppleStartLocation - FVector(0.f, 0.f, 20.f * Eased), false, nullptr, ETeleportType::TeleportPhysics);
+	const UCharacterMovementComponent* ToppleMovement = GetCharacterMovement();
+	if (ToppleMovement && ToppleMovement->HasCustomGravity())
+	{
+		// On a planet (spherical Phase 4, WM-SY13): roll about the body's own forward axis and sink along local down.
+		SetActorRotation(ToppleStartRotation.Quaternion() * FQuat(FVector::ForwardVector, FMath::DegreesToRadians(85.f * Eased)));
+		SetActorLocation(ToppleStartLocation - FVCGravityFrame::GetUp(ToppleMovement) * (20.f * Eased), false, nullptr, ETeleportType::TeleportPhysics);
+	}
+	else
+	{
+		FRotator Rot = ToppleStartRotation;
+		Rot.Roll = ToppleStartRotation.Roll + 85.f * Eased;
+		SetActorRotation(Rot);
+		SetActorLocation(ToppleStartLocation - FVector(0.f, 0.f, 20.f * Eased), false, nullptr, ETeleportType::TeleportPhysics);
+	}
 	if (Alpha >= 1.f)
 	{
 		bToppling = false;
@@ -248,6 +270,10 @@ void AVCNPCCharacterBase::HandleDied(const FCGFDamageContext& Context)
 			Body->SetCollisionProfileName(TEXT("Ragdoll"));
 			Body->SetSimulatePhysics(true);
 			bRagdolled = true;
+			if (AVCCharacterBase::StartRadialRagdoll(Body, GetCharacterMovement(), RagdollGravityDirection))
+			{
+				SetActorTickEnabled(true); // Tick applies the pull toward the planet centre
+			}
 		}
 	}
 	if (!bRagdolled && ToppleSeconds > 0.f)

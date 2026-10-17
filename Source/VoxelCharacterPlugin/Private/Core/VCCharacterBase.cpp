@@ -289,6 +289,12 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	// A planet's ragdoll: the pull toward the centre (until the corpse freezes).
+	if (!RagdollGravityDirection.IsZero())
+	{
+		TickRadialRagdoll(GetMesh(), RagdollGravityDirection);
+	}
+
 	TickWorldSafety(DeltaSeconds);
 
 	// --- Terrain Ready Spawn ---
@@ -622,6 +628,7 @@ void AVCCharacterBase::ApplyCorpseState()
 	{
 		Body->SetCollisionProfileName(TEXT("Ragdoll"));
 		Body->SetSimulatePhysics(true);
+		StartRadialRagdoll(Body, GetCharacterMovement(), RagdollGravityDirection);
 	}
 	if (UWorld* World = GetWorld())
 	{
@@ -667,6 +674,7 @@ void AVCCharacterBase::HandleDied(const FCGFDamageContext& Context)
 		{
 			Body->SetCollisionProfileName(TEXT("Ragdoll"));
 			Body->SetSimulatePhysics(true);
+			StartRadialRagdoll(Body, GetCharacterMovement(), RagdollGravityDirection);
 		}
 	}
 
@@ -1465,6 +1473,11 @@ bool AVCCharacterBase::DropItemInSlot(int32 SlotIndex, int32 Count)
 // ---------------------------------------------------------------------------
 // Bridge: Interaction
 // ---------------------------------------------------------------------------
+
+FVector AVCCharacterBase::GetPawnViewLocation() const
+{
+	return GetActorLocation() + FVCGravityFrame::VectorToWorld(GetCharacterMovement(), FVector(0.f, 0.f, BaseEyeHeight));
+}
 
 FVector AVCCharacterBase::GetInteractionTraceOrigin() const
 {
@@ -2449,16 +2462,17 @@ bool AVCCharacterBase::TryPlaceItem(int32 SlotIndex, const FItemInstance& Item, 
 		return false;
 	}
 
-	// Aim point: PlaceDistance ahead on the horizontal view direction, then straight down to the ground.
+	// Aim point: PlaceDistance ahead on the horizontal view direction, then straight down to the ground (along local up on
+	// a planet, where the slope test reads the normal in the gravity frame).
 	FVector Eyes;
 	FRotator View;
 	GetActorEyesViewPoint(Eyes, View);
-	const FVector Forward = FRotator(0.f, View.Yaw, 0.f).Vector();
-	const FVector Ahead = GetActorLocation() + Forward * Placeable.PlaceDistance;
+	FVector TraceStart, TraceEnd;
+	GetPlacementTrace(GetCharacterMovement(), GetActorLocation(), View, Placeable.PlaceDistance, TraceStart, TraceEnd);
 	FHitResult Hit;
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCPlaceItem), false, this);
-	const bool bHit = World->LineTraceSingleByChannel(Hit, Ahead + FVector(0.f, 0.f, 200.f), Ahead - FVector(0.f, 0.f, 400.f), ECC_Visibility, Params);
-	if (!bHit || !Placeable.AcceptsGround(Hit.ImpactNormal))
+	const bool bHit = World->LineTraceSingleByChannel(Hit, TraceStart, TraceEnd, ECC_Visibility, Params);
+	if (!bHit || !Placeable.AcceptsGround(FVCGravityFrame::VectorToGravity(GetCharacterMovement(), Hit.ImpactNormal)))
 	{
 		UE_LOG(LogVoxelCharacter, Log, TEXT("TryPlaceItem: no level ground ahead for %s."), *Item.ItemDefinitionId.PrimaryAssetName.ToString());
 		if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
@@ -2469,12 +2483,12 @@ bool AVCCharacterBase::TryPlaceItem(int32 SlotIndex, const FItemInstance& Item, 
 	}
 
 	// Face the player.
-	const FRotator Facing(0.f, View.Yaw + 180.f, 0.f);
-	const FVector Location = Hit.ImpactPoint + FVector(0.f, 0.f, Placeable.PlacementOffsetZ);
+	const FTransform Placement = GetPlacementTransform(GetCharacterMovement(), View, Hit.ImpactPoint, Placeable.PlacementOffsetZ);
+	const FVector Location = Placement.GetLocation();
 	FActorSpawnParameters SpawnParams;
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 	SpawnParams.Owner = this;
-	AActor* Placed = World->SpawnActor<AActor>(ActorClass, Location, Facing, SpawnParams);
+	AActor* Placed = World->SpawnActor<AActor>(ActorClass, Placement, SpawnParams);
 	if (!Placed)
 	{
 		return false;
@@ -2495,9 +2509,67 @@ bool AVCCharacterBase::TryPlaceItem(int32 SlotIndex, const FItemInstance& Item, 
 
 FVector AVCCharacterBase::GetChopAimPoint() const
 {
-	const FRotator View = GetControlRotation();
+	return GetChopAimPointFor(GetCharacterMovement(), GetActorLocation(), GetControlRotation());
+}
+
+void AVCCharacterBase::GetPlacementTrace(const UCharacterMovementComponent* Movement, const FVector& ActorLocation, const FRotator& View,
+	float PlaceDistance, FVector& OutStart, FVector& OutEnd)
+{
+	if (Movement && Movement->HasCustomGravity())
+	{
+		const FVector Up = FVCGravityFrame::GetUp(Movement);
+		const FVector Ahead = ActorLocation + FVCGravityFrame::FacingRotation(Movement, View.Vector()).Vector() * PlaceDistance;
+		OutStart = Ahead + Up * 200.f;
+		OutEnd = Ahead - Up * 400.f;
+		return;
+	}
 	const FVector Forward = FRotator(0.f, View.Yaw, 0.f).Vector();
-	return GetActorLocation() + Forward * 160.f;
+	const FVector Ahead = ActorLocation + Forward * PlaceDistance;
+	OutStart = Ahead + FVector(0.f, 0.f, 200.f);
+	OutEnd = Ahead - FVector(0.f, 0.f, 400.f);
+}
+
+FTransform AVCCharacterBase::GetPlacementTransform(const UCharacterMovementComponent* Movement, const FRotator& View, const FVector& GroundPoint, float OffsetZ)
+{
+	if (Movement && Movement->HasCustomGravity())
+	{
+		const FVector Forward = FVCGravityFrame::FacingRotation(Movement, View.Vector()).Vector();
+		return FTransform(FVCGravityFrame::FacingRotation(Movement, -Forward), GroundPoint + FVCGravityFrame::GetUp(Movement) * OffsetZ);
+	}
+	return FTransform(FRotator(0.f, View.Yaw + 180.f, 0.f), GroundPoint + FVector(0.f, 0.f, OffsetZ));
+}
+
+FVector AVCCharacterBase::GetChopAimPointFor(const UCharacterMovementComponent* Movement, const FVector& ActorLocation, const FRotator& View)
+{
+	if (Movement && Movement->HasCustomGravity())
+	{
+		return ActorLocation + FVCGravityFrame::FacingRotation(Movement, View.Vector()).Vector() * 160.f;
+	}
+	const FVector Forward = FRotator(0.f, View.Yaw, 0.f).Vector();
+	return ActorLocation + Forward * 160.f;
+}
+
+bool AVCCharacterBase::StartRadialRagdoll(USkeletalMeshComponent* Body, const UCharacterMovementComponent* Movement, FVector& OutGravityDirection)
+{
+	OutGravityDirection = FVector::ZeroVector;
+	if (!Body || !Movement || !Movement->HasCustomGravity())
+	{
+		return false;
+	}
+	// Chaos pulls every body along world -Z; on a planet the ragdoll falls toward the centre instead (SP-F7).
+	Body->SetEnableGravity(false);
+	OutGravityDirection = Movement->GetGravityDirection();
+	return true;
+}
+
+void AVCCharacterBase::TickRadialRagdoll(USkeletalMeshComponent* Body, const FVector& GravityDirection)
+{
+	if (Body && !GravityDirection.IsZero() && Body->IsSimulatingPhysics())
+	{
+		const UWorld* World = Body->GetWorld();
+		const float Gravity = World ? FMath::Abs(World->GetGravityZ()) : 980.f;
+		Body->AddForceToAllBodiesBelow(GravityDirection * Gravity, NAME_None, /*bAccelChange=*/true, /*bIncludeSelf=*/true);
+	}
 }
 
 bool AVCCharacterBase::TryChopScatter()

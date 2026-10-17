@@ -70,6 +70,12 @@ struct VOXELCHARACTERPLUGIN_API FVCGravityFrame
 	static FVector VectorToWorld(const UCharacterMovementComponent* Movement, const FVector& GravityVector);
 
 	/**
+	 * A world vector in the gravity frame (+Z local up); the vector itself without custom gravity. The inverse of
+	 * VectorToWorld (spherical Phase 4: a ground normal for a Z-up slope test).
+	 */
+	static FVector VectorToGravity(const UCharacterMovementComponent* Movement, const FVector& WorldVector);
+
+	/**
 	 * Local up: minus the gravity direction ((0, 0, 1) for the default gravity).
 	 * @param Movement The character's movement component (null = +Z)
 	 * @return Unit up vector
@@ -83,4 +89,41 @@ struct VOXELCHARACTERPLUGIN_API FVCGravityFrame
 	 * @return Speed in the local horizontal
 	 */
 	static double GetHorizontalSpeed(const UCharacterMovementComponent* Movement, const FVector& Velocity);
+
+	// --- The local horizontal (spherical Phase 4, WM-SY12: NPC steering) ---
+
+	/**
+	 * A world vector's part across local up: FVector(X, Y, 0) without custom gravity.
+	 * @param Movement The character's movement component (null = default gravity)
+	 * @param WorldVector World vector
+	 * @return Its horizontal part
+	 */
+	static FVector Horizontal(const UCharacterMovementComponent* Movement, const FVector& WorldVector);
+
+	/**
+	 * The unit direction of a world vector's horizontal part (zero when it lies along up): WorldVector.GetSafeNormal2D()
+	 * without custom gravity.
+	 */
+	static FVector HorizontalDirection(const UCharacterMovementComponent* Movement, const FVector& WorldVector);
+
+	/** The distance between two points across local up: FVector::Dist2D without custom gravity. */
+	static double HorizontalDistance(const UCharacterMovementComponent* Movement, const FVector& A, const FVector& B);
+
+	/** A world vector's component along local up: its Z without custom gravity. */
+	static double UpComponent(const UCharacterMovementComponent* Movement, const FVector& WorldVector);
+
+	/**
+	 * An upright rotation facing along a world direction's horizontal part: FRotator(0, Direction.Rotation().Yaw, 0)
+	 * without custom gravity, the heading in the gravity frame on a planet.
+	 */
+	static FRotator FacingRotation(const UCharacterMovementComponent* Movement, const FVector& WorldDirection);
+
+	/**
+	 * The unit horizontal direction at an angle: (cos, sin, 0) without custom gravity, the gravity frame's X and Y axes in
+	 * world space on a planet.
+	 * @param Movement The character's movement component (null = default gravity)
+	 * @param AngleRadians Angle from the frame's X axis toward its Y axis
+	 * @return Unit world direction across local up
+	 */
+	static FVector HorizontalAtAngle(const UCharacterMovementComponent* Movement, float AngleRadians);
 };

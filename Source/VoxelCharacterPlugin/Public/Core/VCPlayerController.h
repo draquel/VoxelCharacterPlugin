@@ -238,6 +238,8 @@ protected:
 
 	virtual void BeginPlay() override;
 	virtual void OnPossess(APawn* InPawn) override;
+	/** The owning client's side of a possession (remote clients): the view is levelled as in OnPossess. */
+	virtual void AcknowledgePossession(APawn* P) override;
 	virtual void OnUnPossess() override;
 	/** Remote players: the engine destroys the pawn here before Logout; the player state keeps its items / transform / vitals first (feature 9). */
 	virtual void PawnLeavingGame() override;
@@ -254,6 +256,14 @@ protected:
 
 	/** The pawn's gravity direction the view was last carried with (zero before the first planet frame). */
 	FVector LastGravityDirection = FVector::ZeroVector;
+
+	/**
+	 * Set by every possession: the first frame in a planet's gravity after it levels the view (pitch 0 relative to local
+	 * up, its heading kept). The engine's restart leaves the start spot's world-level rotation, which away from the north
+	 * pole points into the ground or the sky; a pawn that is still in the default gravity on its first frames needs none
+	 * (the carry from world down levels a world-level view), so the default branch clears it.
+	 */
+	bool bLevelViewInGravity = false;
 
 	/** Bind the player state's progression delegate (server via InitPlayerState, clients via OnRep_PlayerState). */
 	void BindProgression();

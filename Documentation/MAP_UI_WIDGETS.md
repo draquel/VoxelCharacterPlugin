@@ -176,6 +176,26 @@ The marker's canvas slot position is set relative to the center anchor (0.5, 0.5
 | `NativeDestruct` | Unbind `OnMapTileReady` delegate |
 | `NativeTick` | Rebuild texture if dirty, update player marker |
 
+## Planets (VoxelWorlds spherical Phase 4, SP-G3)
+
+On a planet (`UVoxelMapSubsystem::IsPlanetMap`) both widgets read the cube-sphere tiles (VoxelWorlds `MAP_SYSTEM.md`
+"Planets"); heightmap code paths are unchanged.
+
+- **Minimap**: the tangent plane under the player (`FVCPlanetMapFrame`: east = +Z × up, north = up × east, at a pole the
+  face's axes), drawn north along texture X and east along Y like world X and Y on a plane, so the rotation
+  (−heading − 90) and the north indicator carry over; the heading is measured from north. The coordinate text shows
+  latitude and longitude. The texture is filled from the tile images by `FVCPlanetMapSampler` (a 16-texel grid of exact
+  control points with bilinear UV inside one-face cells, per texel across a face edge), and redrawn only when the player
+  has moved a texel, turned, or a tile arrived.
+- **World map**: a globe (decision D11, `FVCGlobeProjection`): an orthographic view around a direction, north up,
+  opening on the player. Dragging brings what showed at −Δ to the centre; the wheel zooms at the plane map's scale (32
+  tiles from the centre at zoom 1, the whole disc near `MinZoom` 0.25). Redrawn at most 30 times a second while tiles
+  stream in. The footer shows the player's latitude and longitude.
+- **Markers** carry a 3D position (`FVCMapMarker::WorldLocation`, `bHasWorldLocation`); planet views gather them through
+  `UVCMapMarkerRegistry::OnGatherMarkersNear`. POIs reach planets in Phase 5, so no provider binds it yet.
+
+Tests: `VoxelCharacter.Planet.MinimapFrame`, `.WorldMapProjection`, `.MapSampler`.
+
 ## VCPlayerController Integration
 
 Both widgets are managed by `AVCPlayerController`:

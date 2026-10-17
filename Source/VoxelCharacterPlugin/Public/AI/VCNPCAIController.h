@@ -239,6 +239,35 @@ public:
 	AActor* GetTarget() const { return Target.Get(); }
 
 	/**
+	 * The direction an NPC steers toward its waypoint: across local up (spherical Phase 4, WM-SY12); the old
+	 * FVector(To.X, To.Y, 0).GetSafeNormal() without custom gravity.
+	 * @param Movement The pawn's movement component (its gravity; null = default)
+	 * @param ToWaypoint Waypoint minus the pawn's location
+	 * @return Unit direction (zero when the waypoint lies along up)
+	 */
+	static FVector SteerDirection(const class UCharacterMovementComponent* Movement, const FVector& ToWaypoint);
+
+	/**
+	 * A wander goal before it is put on the ground: Distance from Origin at Angle in the local horizontal (the tangent plane
+	 * on a planet; Origin + (cos, sin, 0) * Distance without custom gravity).
+	 * @param Movement The pawn's movement component
+	 * @param Origin Home (the leash origin)
+	 * @param AngleRadians Angle in the gravity frame's horizontal
+	 * @param Distance Distance (uu)
+	 * @return The goal (not projected to the surface)
+	 */
+	static FVector WanderGoalAt(const class UCharacterMovementComponent* Movement, const FVector& Origin, float AngleRadians, float Distance);
+
+	/**
+	 * A flee direction: Away turned by Degrees about local up (world +Z without custom gravity).
+	 * @param Movement The pawn's movement component
+	 * @param Away Horizontal unit direction away from the threat
+	 * @param Degrees Turn (degrees)
+	 * @return Unit direction
+	 */
+	static FVector FleeDirection(const class UCharacterMovementComponent* Movement, const FVector& Away, float Degrees);
+
+	/**
 	 * Pure state decision (one tick): what the NPC should do next given what it perceives.
 	 * @param In      Perception summary.
 	 * @param Current The current state.
@@ -292,6 +321,9 @@ protected:
 	bool PickFleeGoal(const FVector& ThreatLocation, FVector& OutGoal) const;
 	void AlertPack(AActor* NewTarget);
 	class UVCVoxelPathProvider* GetVoxelProvider() const;
+
+	/** The pawn's movement component (its gravity frame: the AI's horizontal on a planet; spherical Phase 4, WM-SY12). */
+	const class UCharacterMovementComponent* GetPawnMovement() const;
 
 	/** The pawn took a hit: turn on the attacker (prey flee from it) and alert the pack (QA R16). */
 	UFUNCTION()
