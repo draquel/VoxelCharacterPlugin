@@ -257,8 +257,17 @@ worlds keep the old arithmetic. Rules:
   the anim instance reads speed, direction and aim in the gravity frame.
 - Only frame-independent things are done in the gravity frame (zero a pitch or roll, take a yaw-only heading, clamp a
   pitch). The frame's own twist spins near a planet's south pole, so never keep a gravity-relative yaw across frames.
-- Still world-Z on a planet (spherical Phase 4): NPC AI movement, item drop traces and the placeable slope, the chop aim
-  point and placement traces, the edit brush axis.
+- Since spherical Phase 4: `FVCGravityFrame::Horizontal` / `HorizontalDirection` / `HorizontalDistance` / `UpComponent` /
+  `FacingRotation` / `HorizontalAtAngle` / `VectorToGravity`, each the old Z-up expression without custom gravity, carry
+  the NPC AI (steering, waypoints, stuck probe, facing, wander and flee goals; `AVCNPCAIController::SteerDirection`,
+  `WanderGoalAt`, `FleeDirection`), the auto-jump (feet, knee trace, top probe, rise along local up), placing
+  (`AVCCharacterBase::GetPlacementTrace` / `GetPlacementTransform`, the slope test on the normal in the gravity frame),
+  the chop aim point (`GetChopAimPointFor`). Characters and NPCs override `GetPawnViewLocation` (the eye height along
+  local up). Ragdolls on a planet switch the bodies' world gravity off and pull toward the centre each tick
+  (`StartRadialRagdoll` / `TickRadialRagdoll`). Every possession levels the view on the first planet frame
+  (`AVCPlayerController::bLevelViewInGravity`: the engine's restart leaves the start spot's world-level rotation).
+- The map widgets on a planet (see `Documentation/MAP_UI_WIDGETS.md` "Planets"): the minimap's tangent plane
+  (`FVCPlanetMapFrame`), the world map's globe (`FVCGlobeProjection`), `FVCPlanetMapSampler`.
 
 ## Movement Component
 
