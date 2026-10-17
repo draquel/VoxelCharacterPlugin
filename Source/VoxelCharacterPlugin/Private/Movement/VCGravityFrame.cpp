@@ -63,6 +63,15 @@ FVector FVCGravityFrame::VectorToWorld(const UCharacterMovementComponent* Moveme
 	return Movement->GetWorldToGravityTransform().RotateVector(GravityVector);
 }
 
+FVector FVCGravityFrame::VectorToGravity(const UCharacterMovementComponent* Movement, const FVector& WorldVector)
+{
+	if (!Movement || !Movement->HasCustomGravity())
+	{
+		return WorldVector;
+	}
+	return Movement->GetGravityToWorldTransform().RotateVector(WorldVector);
+}
+
 FVector FVCGravityFrame::GetUp(const UCharacterMovementComponent* Movement)
 {
 	return Movement ? -Movement->GetGravityDirection() : FVector::UpVector;

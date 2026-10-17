@@ -70,6 +70,12 @@ struct VOXELCHARACTERPLUGIN_API FVCGravityFrame
 	static FVector VectorToWorld(const UCharacterMovementComponent* Movement, const FVector& GravityVector);
 
 	/**
+	 * A world vector in the gravity frame (+Z local up); the vector itself without custom gravity. The inverse of
+	 * VectorToWorld (spherical Phase 4: a ground normal for a Z-up slope test).
+	 */
+	static FVector VectorToGravity(const UCharacterMovementComponent* Movement, const FVector& WorldVector);
+
+	/**
 	 * Local up: minus the gravity direction ((0, 0, 1) for the default gravity).
 	 * @param Movement The character's movement component (null = +Z)
 	 * @return Unit up vector

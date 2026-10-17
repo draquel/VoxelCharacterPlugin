@@ -174,6 +174,9 @@ protected:
 	 */
 	virtual FVector GetPawnViewLocation() const override;
 
+	/** A planet's ragdoll pull (AVCCharacterBase::StartRadialRagdoll); zero = none. */
+	FVector RagdollGravityDirection = FVector::ZeroVector;
+
 	/** Death visuals + cleanup; runs on every machine from the combat component's OnDied. */
 	UFUNCTION()
 	virtual void HandleDied(const FCGFDamageContext& Context);

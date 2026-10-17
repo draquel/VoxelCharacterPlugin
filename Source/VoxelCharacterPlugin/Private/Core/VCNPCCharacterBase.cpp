@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Core/VCNPCCharacterBase.h"
+#include "Core/VCCharacterBase.h"
 #include "Movement/VCGravityFrame.h"
 #include "Movement/VCMovementComponent.h"
 #include "AI/VCNPCAIController.h"
@@ -75,6 +76,11 @@ FVector AVCNPCCharacterBase::GetPawnViewLocation() const
 void AVCNPCCharacterBase::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (!RagdollGravityDirection.IsZero())
+	{
+		AVCCharacterBase::TickRadialRagdoll(GetMesh(), RagdollGravityDirection);
+		return;
+	}
 	if (!bToppling)
 	{
 		SetActorTickEnabled(false);
@@ -264,6 +270,10 @@ void AVCNPCCharacterBase::HandleDied(const FCGFDamageContext& Context)
 			Body->SetCollisionProfileName(TEXT("Ragdoll"));
 			Body->SetSimulatePhysics(true);
 			bRagdolled = true;
+			if (AVCCharacterBase::StartRadialRagdoll(Body, GetCharacterMovement(), RagdollGravityDirection))
+			{
+				SetActorTickEnabled(true); // Tick applies the pull toward the planet centre
+			}
 		}
 	}
 	if (!bRagdolled && ToppleSeconds > 0.f)

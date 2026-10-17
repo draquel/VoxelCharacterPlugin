@@ -5,6 +5,7 @@
 #if WITH_AUTOMATION_TESTS
 
 #include "Core/VCCharacterBase.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Core/VCNPCCharacterBase.h"
 #include "AI/VCNPCAIController.h"
 #include "Movement/VCGravityFrame.h"
@@ -592,6 +593,80 @@ bool FVCPlanet_EyeHeight::RunTest(const FString& Parameters)
 			}
 		}
 	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Spherical Phase 4, WM-SY16 (SP-F7): placing and chopping in the gravity frame. With the default gravity the placement
+// trace, the placed transform and the chop aim point are the old expressions bit for bit; with planet gravity the trace
+// runs along local down PlaceDistance ahead on the view's heading, the placed actor stands on local up facing back, the
+// slope test reads a level ground's normal as +Z, and a ragdoll gets the radial pull.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlanet_PlaceItem, "VoxelCharacter.Planet.PlaceItem", VC_PLANET_FLAGS)
+bool FVCPlanet_PlaceItem::RunTest(const FString& Parameters)
+{
+	using namespace VCPlanetWalkableTestHelpers;
+	UCharacterMovementComponent* Move = NewObject<UCharacterMovementComponent>();
+	FRandomStream Random(99);
+
+	int32 Mismatches = 0;
+	for (int32 i = 0; i < 500; ++i)
+	{
+		const FVector Actor(Random.FRandRange(-5.0e4, 5.0e4), Random.FRandRange(-5.0e4, 5.0e4), Random.FRandRange(-5.0e3, 5.0e3));
+		const FRotator View(Random.FRandRange(-80.0, 80.0), Random.FRandRange(-180.0, 180.0), 0.0);
+		const float Distance = Random.FRandRange(100.f, 400.f);
+		const float Offset = Random.FRandRange(0.f, 30.f);
+		FVector Start, End;
+		AVCCharacterBase::GetPlacementTrace(Move, Actor, View, Distance, Start, End);
+		const FVector Ahead = Actor + FRotator(0.f, View.Yaw, 0.f).Vector() * Distance;
+		Mismatches += (Start != Ahead + FVector(0.f, 0.f, 200.f) || End != Ahead - FVector(0.f, 0.f, 400.f)) ? 1 : 0;
+		const FVector Ground = Ahead - FVector(0.f, 0.f, 150.f);
+		const FTransform Placed = AVCCharacterBase::GetPlacementTransform(Move, View, Ground, Offset);
+		const FTransform Old(FRotator(0.f, View.Yaw + 180.f, 0.f), Ground + FVector(0.f, 0.f, Offset));
+		Mismatches += (!Placed.GetRotation().Equals(Old.GetRotation(), 0.0) || Placed.GetLocation() != Old.GetLocation()) ? 1 : 0;
+		Mismatches += AVCCharacterBase::GetChopAimPointFor(Move, Actor, View) != Actor + FRotator(0.f, View.Yaw, 0.f).Vector() * 160.f ? 1 : 0;
+		Mismatches += FVCGravityFrame::VectorToGravity(Move, View.Vector()) != View.Vector() ? 1 : 0;
+	}
+	AddInfo(FString::Printf(TEXT("Default gravity: %d of 2,000 expressions differ from the old ones"), Mismatches));
+	TestEqual(TEXT("Default gravity: the old placement and chop geometry bit for bit"), Mismatches, 0);
+
+	double WorstTrace = 0.0, WorstPlaced = 0.0, WorstNormal = 0.0, WorstChop = 0.0;
+	for (const FSite& Site : Sites)
+	{
+		const FVector Up = LatLon(Site.Lat, Site.Lon);
+		Move->SetGravityDirection(-Up);
+		const FVector Actor = Up * (PlanetRadius + 100.0);
+		for (int32 i = 0; i < 40; ++i)
+		{
+			const FRotator View(Random.FRandRange(-80.0, 80.0), Random.FRandRange(-180.0, 180.0), 0.0);
+			const FVector Heading = FVCGravityFrame::FacingRotation(Move, View.Vector()).Vector();
+			FVector Start, End;
+			AVCCharacterBase::GetPlacementTrace(Move, Actor, View, 250.f, Start, End);
+			const FVector Ahead = Actor + Heading * 250.0;
+			WorstTrace = FMath::Max(WorstTrace, (Start - (Ahead + Up * 200.0)).Size() + (End - (Ahead - Up * 400.0)).Size()
+				+ FMath::Abs(FVector::DotProduct(Heading, Up)));
+			const FTransform Placed = AVCCharacterBase::GetPlacementTransform(Move, View, Ahead, 5.f);
+			WorstPlaced = FMath::Max(WorstPlaced, AngleDeg(Placed.GetRotation().GetUpVector(), Up) + AngleDeg(Placed.GetRotation().GetForwardVector(), -Heading)
+				+ (Placed.GetLocation() - (Ahead + Up * 5.0)).Size());
+			WorstNormal = FMath::Max(WorstNormal, (FVCGravityFrame::VectorToGravity(Move, Up) - FVector::UpVector).Size()
+				+ (FVCGravityFrame::VectorToWorld(Move, FVCGravityFrame::VectorToGravity(Move, View.Vector())) - View.Vector()).Size());
+			WorstChop = FMath::Max(WorstChop, (AVCCharacterBase::GetChopAimPointFor(Move, Actor, View) - (Actor + Heading * 160.0)).Size());
+		}
+	}
+	AddInfo(FString::Printf(TEXT("Planet gravity: trace %.2e, placed %.2e, normal %.2e, chop %.2e"), WorstTrace, WorstPlaced, WorstNormal, WorstChop));
+	TestTrue(TEXT("The placement trace along local down, ahead on the heading"), WorstTrace < 1.0e-3);
+	TestTrue(TEXT("The placed actor upright, facing back, offset along up"), WorstPlaced < 1.0e-2);
+	TestTrue(TEXT("Level ground reads +Z in the gravity frame"), WorstNormal < 1.0e-6);
+	TestTrue(TEXT("The chop aim ahead on the heading"), WorstChop < 1.0e-3);
+
+	// The ragdoll pull: only with custom gravity, along it, the body's own gravity off.
+	USkeletalMeshComponent* Body = NewObject<USkeletalMeshComponent>();
+	FVector Pull;
+	TestTrue(TEXT("Planet gravity: a radial ragdoll"), AVCCharacterBase::StartRadialRagdoll(Body, Move, Pull) && Pull.Equals(Move->GetGravityDirection(), 1.0e-9)
+		&& !Body->IsGravityEnabled());
+	UCharacterMovementComponent* PlaneMove = NewObject<UCharacterMovementComponent>();
+	USkeletalMeshComponent* PlaneBody = NewObject<USkeletalMeshComponent>();
+	TestFalse(TEXT("Default gravity: no radial ragdoll"), AVCCharacterBase::StartRadialRagdoll(PlaneBody, PlaneMove, Pull) || !Pull.IsZero() || !PlaneBody->IsGravityEnabled());
 	return true;
 }
 

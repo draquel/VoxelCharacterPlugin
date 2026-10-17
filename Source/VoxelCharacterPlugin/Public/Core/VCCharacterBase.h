@@ -102,6 +102,25 @@ public:
 	FVector GetChopAimPoint() const;
 
 	/**
+	 * Where TryPlaceItem looks for ground: PlaceDistance ahead on the view's heading, from 200 above to 400 below, along
+	 * local up (spherical Phase 4, WM-SY16; world Z without custom gravity, the old expressions).
+	 * @param Movement The character's movement component (its gravity)
+	 * @param ActorLocation The character's location
+	 * @param View The view rotation
+	 * @param PlaceDistance How far ahead
+	 * @param OutStart Trace start
+	 * @param OutEnd Trace end
+	 */
+	static void GetPlacementTrace(const UCharacterMovementComponent* Movement, const FVector& ActorLocation, const FRotator& View,
+		float PlaceDistance, FVector& OutStart, FVector& OutEnd);
+
+	/** A placed actor's transform: upright on local up, facing back along the view's heading, OffsetZ above the ground. */
+	static FTransform GetPlacementTransform(const UCharacterMovementComponent* Movement, const FRotator& View, const FVector& GroundPoint, float OffsetZ);
+
+	/** The chop aim point: 160 uu ahead on the view's heading (in the local horizontal on a planet). */
+	static FVector GetChopAimPointFor(const UCharacterMovementComponent* Movement, const FVector& ActorLocation, const FRotator& View);
+
+	/**
 	 * Chop the harvestable scatter instance (a tree) nearest the aim point, if the local scatter has
 	 * one; the server re-checks and yields. No edit mode or tool needed. @return True when a chop was sent.
 	 */
@@ -177,6 +196,15 @@ public:
 	/** A corpse whose ragdoll never settles freezes after this long. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "1"))
 	float CorpseFreezeAfterSeconds = 10.f;
+
+	/** A planet's ragdoll falls toward the centre: its bodies' world gravity off, this pull applied every tick (zero = none). */
+	FVector RagdollGravityDirection = FVector::ZeroVector;
+
+	/** Start pulling a simulating body along the movement component's custom gravity, if it has one (spherical Phase 4). */
+	static bool StartRadialRagdoll(USkeletalMeshComponent* Body, const UCharacterMovementComponent* Movement, FVector& OutGravityDirection);
+
+	/** One tick of a radial ragdoll's pull (gravity's magnitude along the direction, every body). */
+	static void TickRadialRagdoll(USkeletalMeshComponent* Body, const FVector& GravityDirection);
 
 	/**
 	 * Start the melee ability if a hostile damageable is within AttackTargetRange under the crosshair.
