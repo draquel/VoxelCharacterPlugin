@@ -158,6 +158,45 @@ public:
 	static FVector ApplyWorldEdgePushBack(const FVoxelWorldBounds& Bounds, const FVector& Location, const FVector& Velocity,
 		float MaxSpeed, float BandWidth, float PushSpeed, float& OutProximity);
 
+	// --- Planet gravity (VoxelWorlds SPHERICAL_PLANET_REQUIREMENTS.md SP-F1; WORLD_MODES_REVIEW_PLAN.md §17, WM-W1) ---
+	// On a planet (the voxel world's bounds are a shell) gravity points at the centre: the engine's custom gravity
+	// direction (UE 5.4+), set from the position at the start of every move (PerformMovement), so the server's replay,
+	// the client's prediction and NPCs all use the same function of the position. Walking, falling, floors, steps, jumps
+	// and staying upright then run in the engine's gravity space; this component's own vertical code (swimming, the floor
+	// line traces, the shore climb, breath, the embed resolve) uses the same frame. Heightmap worlds never set it.
+
+	/** Local up: minus the gravity direction (radial on a planet, +Z elsewhere). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Gravity")
+	FVector GetLocalUp() const { return -GetGravityDirection(); }
+
+	/** True when the voxel world is a planet, so gravity points at its centre. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Gravity")
+	bool HasPlanetGravity() const { return bPlanetGravity; }
+
+	/**
+	 * Point gravity at the planet centre from the current position now (every move does it too). Call after placing the
+	 * pawn (spawn, teleport) so its first move and its upright pose use the new gravity. Does nothing off a planet.
+	 * @return True on a planet
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Movement|Gravity")
+	bool UpdatePlanetGravity();
+
+	/**
+	 * Stand the pawn upright in its gravity frame, keeping its gravity-relative yaw (after a placement on a planet). Does
+	 * nothing without custom gravity.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Movement|Gravity")
+	void SnapUprightToGravity();
+
+	/**
+	 * Pure: gravity toward a planet centre.
+	 * @param Location The pawn's position
+	 * @param Centre The planet centre
+	 * @param Fallback Returned when the two coincide
+	 * @return Unit direction from Location to Centre
+	 */
+	static FVector ComputePlanetGravityDirection(const FVector& Location, const FVector& Centre, const FVector& Fallback);
+
 	// --- GAS Attribute Callbacks ---
 
 	/** Called when MoveSpeedMultiplier attribute changes. */
@@ -285,8 +324,20 @@ protected:
 	/** Push-back band proximity, 0..1 (see GetWorldEdgeProximity). */
 	float WorldEdgeProximity = 0.f;
 
-	/** Cache the world's bounds from the chunk manager if not done yet. */
+	/** Cache the world's bounds from the chunk manager if not done yet (and whether it is a planet). */
 	void RefreshWorldBounds();
+
+	/** The voxel world is a planet (its bounds are a shell): gravity points at CachedWorldBounds.Center (WM-W1). */
+	bool bPlanetGravity = false;
+
+	/** Planets: gravity from the position before the move (WM-W1), then the engine's movement. */
+	virtual void PerformMovement(float DeltaTime) override;
+
+	/** Speed across local up, squared (Velocity.SizeSquared2D() for the default gravity). */
+	double GetHorizontalSpeedSquared(const FVector& InVelocity) const;
+
+	/** A vector's unit direction across local up (GetSafeNormal2D() for the default gravity). */
+	FVector GetHorizontalDirection(const FVector& InVector) const;
 
 	/** Base MaxAcceleration before swimming override. Captured on BeginPlay. */
 	float BaseMaxAcceleration = 0.f;

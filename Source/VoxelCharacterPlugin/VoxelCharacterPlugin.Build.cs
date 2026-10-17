@@ -32,6 +32,8 @@ public class VoxelCharacterPlugin : ModuleRules
 				"SlateCore",
 				"UMG",
 				"VoxelStreaming",
+				"VoxelLOD", // the planet tests stand up a real chunk manager (FDistanceBandLODStrategy)
+				"VoxelRendering", // ... and its IVoxelMeshRenderer
 				"VoxelNavigation", // UVCVoxelPathProvider (feature 10)
 				"VoxelScatter",
 				"JsonUtilities",

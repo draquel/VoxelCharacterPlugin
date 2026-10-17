@@ -3,6 +3,8 @@
 #include "Camera/VCThirdPersonCameraMode.h"
 #include "Core/VCCharacterBase.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Movement/VCGravityFrame.h"
 
 UVCThirdPersonCameraMode::UVCThirdPersonCameraMode()
 {
@@ -27,9 +29,10 @@ FTransform UVCThirdPersonCameraMode::ComputeDesiredTransform(const AVCCharacterB
 		ViewRotation = Character->GetActorRotation();
 	}
 
-	// Compute ideal pivot: character origin + local-space target offset
+	// Compute ideal pivot: character origin + local-space target offset (turned by the view's yaw in the gravity frame:
+	// the world's yaw without custom gravity, the local horizontal on a planet)
 	const FVector CharacterLocation = Character->GetActorLocation();
-	const FRotator YawOnly(0.f, ViewRotation.Yaw, 0.f);
+	const FRotator YawOnly = FVCGravityFrame::GetYawRotation(Character->GetCharacterMovement(), ViewRotation);
 	const FVector RotatedOffset = YawOnly.RotateVector(TargetOffset);
 	const FVector IdealPivot = CharacterLocation + RotatedOffset;
 

@@ -2,6 +2,7 @@
 
 #include "Movement/VCMovementComponent.h"
 #include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCGravityFrame.h"
 #include "GameFramework/Character.h"
 #include "VoxelChunkManager.h"
 #include "VoxelCollisionManager.h"
@@ -240,7 +241,60 @@ void UVCMovementComponent::RefreshWorldBounds()
 	{
 		CachedWorldBounds = ChunkMgr->GetWorldBounds();
 		bHasWorldBounds = true;
+		bPlanetGravity = CachedWorldBounds.Shape == EVoxelWorldBoundsShape::Shell;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Planet gravity (spherical SP-F1; WORLD_MODES_REVIEW_PLAN.md §17, WM-W1)
+// ---------------------------------------------------------------------------
+
+FVector UVCMovementComponent::ComputePlanetGravityDirection(const FVector& Location, const FVector& Centre, const FVector& Fallback)
+{
+	const FVector ToCentre = Centre - Location;
+	return ToCentre.IsNearlyZero() ? Fallback : ToCentre.GetSafeNormal();
+}
+
+bool UVCMovementComponent::UpdatePlanetGravity()
+{
+	RefreshWorldBounds();
+	if (!bPlanetGravity || !UpdatedComponent)
+	{
+		return false;
+	}
+	// The world mode's up is the direction from the centre (FSphericalPlanetWorldMode::GetUpVector); gravity is its
+	// opposite. The engine ignores changes under about 1e-4 (25 uu of walking on a 250,000 uu planet).
+	SetGravityDirection(ComputePlanetGravityDirection(UpdatedComponent->GetComponentLocation(), CachedWorldBounds.Center,
+		GetGravityDirection()));
+	return true;
+}
+
+void UVCMovementComponent::SnapUprightToGravity()
+{
+	if (!HasCustomGravity() || !CharacterOwner)
+	{
+		return;
+	}
+	CharacterOwner->SetActorRotation(FVCGravityFrame::GetYawRotation(this, CharacterOwner->GetActorRotation()), ETeleportType::TeleportPhysics);
+}
+
+void UVCMovementComponent::PerformMovement(float DeltaTime)
+{
+	// Every simulated move (the server's replay of a client move, the client's prediction and its replays, standalone,
+	// NPCs) starts from the gravity at its own position, so prediction and authority agree with no new replicated state;
+	// simulated proxies take the engine's replicated gravity direction.
+	UpdatePlanetGravity();
+	Super::PerformMovement(DeltaTime);
+}
+
+double UVCMovementComponent::GetHorizontalSpeedSquared(const FVector& InVelocity) const
+{
+	return HasCustomGravity() ? ProjectToGravityFloor(InVelocity).SizeSquared() : InVelocity.SizeSquared2D();
+}
+
+FVector UVCMovementComponent::GetHorizontalDirection(const FVector& InVector) const
+{
+	return HasCustomGravity() ? ProjectToGravityFloor(InVector).GetSafeNormal() : InVector.GetSafeNormal2D();
 }
 
 FVector UVCMovementComponent::ApplyWorldEdgePushBack(const FVoxelWorldBounds& Bounds, const FVector& Location, const FVector& Velocity,
@@ -295,7 +349,7 @@ void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
 	// --- Restore pre-additive root motion velocity ---
 	RestorePreAdditiveRootMotionVelocity();
 
-	// --- Dive controls: Jump = ascend, Crouch = descend ---
+	// --- Dive controls: Jump = ascend, Crouch = descend (along local up: radial on a planet, WM-W2) ---
 	// Fed in as acceleration before CalcVelocity: with no movement input CalcVelocity brakes the swimmer to a stop
 	// every frame, which ate a per-frame velocity nudge (QA R10: holding LeftCtrl sank about 5 uu/s). As acceleration
 	// the fluid drag sets the dive speed instead (about DiveDescendAcceleration / SwimmingDragCoefficient). The dive
@@ -306,23 +360,23 @@ void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
 	const bool bWantsDescent = CharacterOwner && !bWantsAscend && (CharacterOwner->bIsCrouched || IsCrouching() || bWantsToCrouch);
 	if (bWantsAscend)
 	{
-		Acceleration.Z += DiveAscendAcceleration;
+		Acceleration += GetLocalUp() * DiveAscendAcceleration;
 		AnalogInputModifier = 1.f;
 	}
 	else if (bWantsDescent)
 	{
 		// Check if the ocean floor is directly below — don't descend into it
 		const float HalfHeight = CharacterOwner->GetSimpleCollisionHalfHeight();
-		const FVector FeetPos = CharacterOwner->GetActorLocation() - FVector(0.f, 0.f, HalfHeight);
+		const FVector FeetPos = CharacterOwner->GetActorLocation() + GetGravityDirection() * HalfHeight;
 		FHitResult GroundHit;
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(DiveFloorCheck), false, CharacterOwner);
 		const bool bHitFloor = GetWorld()->LineTraceSingleByChannel(
-			GroundHit, FeetPos, FeetPos - FVector(0.f, 0.f, 50.f),
+			GroundHit, FeetPos, FeetPos + GetGravityDirection() * 50.f,
 			ECC_WorldStatic, Params);
 
 		if (!bHitFloor)
 		{
-			Acceleration.Z -= DiveDescendAcceleration;
+			Acceleration -= GetLocalUp() * DiveDescendAcceleration;
 			AnalogInputModifier = 1.f;
 		}
 	}
@@ -339,19 +393,19 @@ void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
 
 		// --- Passive buoyancy: gently push toward surface when idle ---
 		// Only applies when no significant vertical input from pitch-based movement or dive keys.
-		const bool bHasVerticalInput = bWantsAscend || bWantsDescent || FMath::Abs(Acceleration.Z) > 10.f;
+		const bool bHasVerticalInput = bWantsAscend || bWantsDescent || FMath::Abs(GetGravitySpaceZ(Acceleration)) > 10.f;
 		if (!bHasVerticalInput && SurfaceBuoyancyStrength > 0.f && CachedTerrainContext.bIsUnderwater)
 		{
 			// Scale buoyancy with depth: strongest deep, zero at surface
 			const float DepthRatio = FMath::Clamp(CachedTerrainContext.WaterDepth / FMath::Max(SwimmingEntryDepth, 1.f), 0.f, 1.f);
-			Velocity.Z += SurfaceBuoyancyStrength * DepthRatio * DeltaTime;
+			Velocity += GetLocalUp() * (SurfaceBuoyancyStrength * DepthRatio * DeltaTime);
 		}
 
 		// --- Surface damping: decelerate upward motion near water surface ---
-		if (CachedTerrainContext.WaterDepth < SwimmingEntryDepth && Velocity.Z > 0.f)
+		if (CachedTerrainContext.WaterDepth < SwimmingEntryDepth && GetGravitySpaceZ(Velocity) > 0.f)
 		{
 			const float SurfaceRatio = FMath::Clamp(CachedTerrainContext.WaterDepth / FMath::Max(SwimmingEntryDepth, 1.f), 0.f, 1.f);
-			Velocity.Z *= FMath::Lerp(SwimmingSurfaceDamping, 1.f, SurfaceRatio);
+			SetGravitySpaceZ(Velocity, GetGravitySpaceZ(Velocity) * FMath::Lerp(SwimmingSurfaceDamping, 1.f, SurfaceRatio));
 		}
 
 		// --- Surface cap: hard-stop upward velocity at the water line ---
@@ -359,14 +413,14 @@ void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
 		// Shore exit is handled by horizontal movement into shallow water, which
 		// triggers the mode transition in UpdateVoxelTerrainContext.
 		const float HalfHeight = CharacterOwner->GetSimpleCollisionHalfHeight();
-		if (CachedTerrainContext.WaterDepth < HalfHeight && Velocity.Z > 0.f)
+		if (CachedTerrainContext.WaterDepth < HalfHeight && GetGravitySpaceZ(Velocity) > 0.f)
 		{
-			Velocity.Z = 0.f;
+			SetGravitySpaceZ(Velocity, 0.0);
 		}
 	}
 
 	// --- Clamp vertical speed ---
-	Velocity.Z = FMath::Clamp(Velocity.Z, -MaxSwimSpeed, MaxSwimSpeed);
+	SetGravitySpaceZ(Velocity, FMath::Clamp(GetGravitySpaceZ(Velocity), -MaxSwimSpeed, MaxSwimSpeed));
 
 	// --- Move and handle collisions ---
 	Iterations++;
@@ -409,10 +463,10 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 		return;
 	}
 
-	// Query voxel terrain at the character's feet position
+	// Query voxel terrain at the character's feet position (along local down: radial on a planet)
 	const float HalfHeight = Owner->GetSimpleCollisionHalfHeight();
-	const FVector FeetPos = Owner->GetActorLocation() - FVector(0.f, 0.f, HalfHeight);
-	CachedTerrainContext = FVCVoxelNavigationHelper::QueryTerrainContext(GetWorld(), FeetPos);
+	const FVector FeetPos = Owner->GetActorLocation() + GetGravityDirection() * HalfHeight;
+	CachedTerrainContext = FVCVoxelNavigationHelper::QueryTerrainContext(GetWorld(), FeetPos, GetLocalUp());
 
 	// If feet-level water check missed (feet on solid ocean floor), check at body center.
 	// When standing on the seabed, feet are in a solid voxel (no water flag) but the
@@ -451,7 +505,7 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 		// exiting. Skip this when water IS detected but shallow (genuine shore exit).
 		if (!CachedTerrainContext.bIsUnderwater)
 		{
-			const FVector UpperBodyPos = Owner->GetActorLocation() + FVector(0.f, 0.f, HalfHeight * 0.5f);
+			const FVector UpperBodyPos = Owner->GetActorLocation() + GetLocalUp() * (HalfHeight * 0.5f);
 			float UpperBodyWaterDepth = 0.f;
 			if (FVCVoxelNavigationHelper::IsPositionUnderwater(GetWorld(), UpperBodyPos, UpperBodyWaterDepth))
 			{
@@ -504,7 +558,7 @@ void UVCMovementComponent::FindFloor(const FVector& CapsuleLocation, FFindFloorR
 			const FVector TraceStart = CapsuleLocation;
 			// Trace down past capsule bottom + generous margin for floor detection
 			constexpr float FloorTraceMargin = 50.f;
-			const FVector TraceEnd = CapsuleLocation - FVector(0.f, 0.f, CapsuleHalfHeight + FloorTraceMargin);
+			const FVector TraceEnd = CapsuleLocation + GetGravityDirection() * (CapsuleHalfHeight + FloorTraceMargin);
 
 			FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(VoxelFloorLineTrace), false, Owner);
 			FHitResult LineHit;
@@ -547,8 +601,8 @@ void UVCMovementComponent::FindFloor(const FVector& CapsuleLocation, FFindFloorR
 		if (Owner)
 		{
 			const float CapsuleHalfHeight = Owner->GetSimpleCollisionHalfHeight();
-			const FVector TraceStart = CapsuleLocation - FVector(0.f, 0.f, CapsuleHalfHeight);
-			const FVector TraceEnd = TraceStart - FVector(0.f, 0.f, GraceHeightThreshold);
+			const FVector TraceStart = CapsuleLocation + GetGravityDirection() * CapsuleHalfHeight;
+			const FVector TraceEnd = TraceStart + GetGravityDirection() * GraceHeightThreshold;
 
 			FCollisionQueryParams Params(SCENE_QUERY_STAT(VoxelGraceCheck), false, Owner);
 			FHitResult GraceHit;
@@ -592,7 +646,7 @@ bool UVCMovementComponent::IsValidLandingSpot(const FVector& CapsuleLocation, co
 	{
 		const float CapsuleHalfHeight = CharacterOwner ? CharacterOwner->GetSimpleCollisionHalfHeight() : 0.f;
 		const FVector TraceStart = CapsuleLocation;
-		const FVector TraceEnd = CapsuleLocation - FVector(0.f, 0.f, CapsuleHalfHeight + 50.f);
+		const FVector TraceEnd = CapsuleLocation + GetGravityDirection() * (CapsuleHalfHeight + 50.f);
 
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(VoxelLandingTrace), false, CharacterOwner);
 		FHitResult LineHit;
@@ -789,7 +843,7 @@ void UVCMovementComponent::TickStamina(float DeltaTime)
 	}
 
 	// Spend only while the sprint actually carries the pawn: holding it against a wall or a ledge costs nothing.
-	if (IsSprinting() && Velocity.SizeSquared2D() > FMath::Square(100.f))
+	if (IsSprinting() && GetHorizontalSpeedSquared(Velocity) > FMath::Square(100.f))
 	{
 		TimeSinceSprint = 0.f;
 		PendingStaminaDelta -= SprintStaminaPerSecond * DeltaTime;
@@ -831,41 +885,45 @@ bool UVCMovementComponent::TryClimbOutOfWater(const FHitResult& Hit)
 	const float HalfHeight = Character->GetSimpleCollisionHalfHeight();
 	const float Radius = Character->GetSimpleCollisionRadius();
 
-	// Only at the surface (head out or nearly), only into something steep, and only when trying to go that way.
-	const FVector Push = Acceleration.GetSafeNormal2D();
-	if (CachedTerrainContext.WaterDepth > HalfHeight * 1.5f || Hit.ImpactNormal.Z > 0.7f || Push.IsNearlyZero()
-		|| FVector::DotProduct(Push, -Hit.ImpactNormal.GetSafeNormal2D()) < 0.3f)
+	// Only at the surface (head out or nearly), only into something steep, and only when trying to go that way. Heights
+	// and the horizontal are in the gravity frame (local up on a planet, WM-W2).
+	const FVector Up = GetLocalUp();
+	const FVector Push = GetHorizontalDirection(Acceleration);
+	if (CachedTerrainContext.WaterDepth > HalfHeight * 1.5f || GetGravitySpaceZ(Hit.ImpactNormal) > 0.7f || Push.IsNearlyZero()
+		|| FVector::DotProduct(Push, -GetHorizontalDirection(Hit.ImpactNormal)) < 0.3f)
 	{
 		return false;
 	}
 
 	// Look for a floor just past the bank edge, no higher than the reach.
 	const FVector Location = UpdatedComponent->GetComponentLocation();
-	const float FeetZ = Location.Z - HalfHeight;
+	const float FeetZ = GetGravitySpaceZ(Location) - HalfHeight;
 	const float Reach = HalfHeight + ShoreClimbHeight;
-	const FVector ProbeTop = Location + Push * (Radius + 25.f) + FVector(0.f, 0.f, Reach);
-	const FVector ProbeBottom = ProbeTop - FVector(0.f, 0.f, Reach + HalfHeight);
+	const FVector ProbeTop = Location + Push * (Radius + 25.f) + Up * Reach;
+	const FVector ProbeBottom = ProbeTop - Up * (Reach + HalfHeight);
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(ShoreClimb), false, Character);
 	FHitResult Floor;
 	const FCollisionShape Capsule = FCollisionShape::MakeCapsule(Radius, HalfHeight);
-	if (!World->SweepSingleByChannel(Floor, ProbeTop, ProbeBottom, FQuat::Identity, UpdatedComponent->GetCollisionObjectType(),
+	// The capsule stands along local up (the gravity frame's rotation; identity for the default gravity).
+	const FQuat CapsuleRotation = HasCustomGravity() ? GetWorldToGravityTransform() : FQuat::Identity;
+	if (!World->SweepSingleByChannel(Floor, ProbeTop, ProbeBottom, CapsuleRotation, UpdatedComponent->GetCollisionObjectType(),
 		Capsule, Params) || Floor.bStartPenetrating || !IsWalkable(Floor))
 	{
 		return false;
 	}
 
 	// The ledge must lift the feet out of swimming depth (the water line is FeetZ + WaterDepth).
-	const float LedgeFeetZ = Floor.Location.Z - HalfHeight;
+	const float LedgeFeetZ = GetGravitySpaceZ(Floor.Location) - HalfHeight;
 	const float WaterLineZ = FeetZ + CachedTerrainContext.WaterDepth;
 	if (LedgeFeetZ < WaterLineZ - SwimmingEntryDepth * 0.5f || LedgeFeetZ > FeetZ + Reach)
 	{
 		return false;
 	}
 
-	Character->SetActorLocation(Floor.Location + FVector(0.f, 0.f, 2.f), false, nullptr, ETeleportType::None);
+	Character->SetActorLocation(Floor.Location + Up * 2.f, false, nullptr, ETeleportType::None);
 	SetMovementMode(MOVE_Walking);
 	MaxAcceleration = BaseMaxAcceleration;
-	Velocity = Push * FMath::Min(Velocity.Size2D(), MaxWalkSpeed);
+	Velocity = Push * FMath::Min(FMath::Sqrt(GetHorizontalSpeedSquared(Velocity)), MaxWalkSpeed);
 	return true;
 }
 
@@ -891,7 +949,7 @@ void UVCMovementComponent::TickBreath(float DeltaTime)
 	BreathTimer = 0.f;
 
 	const FVector Head = Character->GetActorLocation()
-		+ FVector(0.f, 0.f, Character->GetSimpleCollisionHalfHeight() * HeadHeightFraction);
+		+ GetLocalUp() * (Character->GetSimpleCollisionHalfHeight() * HeadHeightFraction);
 	float HeadDepth = 0.f;
 	// The voxel holding the water line is flagged water top to bottom, so a head floating just above the line still
 	// lands in a water voxel: it is under only when it is also below the water level.
@@ -994,7 +1052,9 @@ bool UVCMovementComponent::ResolveTerrainEmbedding()
 	{
 		return ChunkMgr->GetEditMergedVoxelAtWorldPosition(P + FVector(VoxelSize * 0.5f)).IsSolid();
 	};
-	if (!IsSolidAt(Center) || !IsSolidAt(Center + FVector(0.f, 0.f, HalfHeight * 0.5f)))
+	// Along local up (radial on a planet, WM-W2).
+	const FVector Up = GetLocalUp();
+	if (!IsSolidAt(Center) || !IsSolidAt(Center + Up * (HalfHeight * 0.5f)))
 	{
 		return false;
 	}
@@ -1005,7 +1065,7 @@ bool UVCMovementComponent::ResolveTerrainEmbedding()
 	int32 FirstAirStep = INDEX_NONE;
 	for (int32 Step = 1; Step <= EmbedResolveMaxScanVoxels; ++Step)
 	{
-		if (IsSolidAt(Center + FVector(0.f, 0.f, Step * VoxelSize)))
+		if (IsSolidAt(Center + Up * (Step * VoxelSize)))
 		{
 			AirRun = 0;
 			FirstAirStep = INDEX_NONE;
@@ -1028,14 +1088,29 @@ bool UVCMovementComponent::ResolveTerrainEmbedding()
 	}
 
 	// The surface sits between the last solid sample and the first air one; snap onto the collision there.
-	const float SurfaceGuessZ = Center.Z + (FirstAirStep - 0.5f) * VoxelSize;
-	FVector Target(Center.X, Center.Y, SurfaceGuessZ + HalfHeight + 5.f);
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(VoxelEmbedResolve), false, Character);
 	FHitResult Hit;
-	if (World->LineTraceSingleByChannel(Hit, FVector(Center.X, Center.Y, SurfaceGuessZ + 2.f * HalfHeight),
-		FVector(Center.X, Center.Y, SurfaceGuessZ - 2.f * VoxelSize), Capsule->GetCollisionObjectType(), Params))
+	FVector Target;
+	if (!HasCustomGravity())
 	{
-		Target.Z = Hit.ImpactPoint.Z + HalfHeight + 5.f;
+		const float SurfaceGuessZ = Center.Z + (FirstAirStep - 0.5f) * VoxelSize;
+		Target = FVector(Center.X, Center.Y, SurfaceGuessZ + HalfHeight + 5.f);
+		if (World->LineTraceSingleByChannel(Hit, FVector(Center.X, Center.Y, SurfaceGuessZ + 2.f * HalfHeight),
+			FVector(Center.X, Center.Y, SurfaceGuessZ - 2.f * VoxelSize), Capsule->GetCollisionObjectType(), Params))
+		{
+			Target.Z = Hit.ImpactPoint.Z + HalfHeight + 5.f;
+		}
+	}
+	else
+	{
+		// A planet: the same along local up.
+		const FVector SurfaceGuess = Center + Up * ((FirstAirStep - 0.5f) * VoxelSize);
+		Target = SurfaceGuess + Up * (HalfHeight + 5.f);
+		if (World->LineTraceSingleByChannel(Hit, SurfaceGuess + Up * (2.f * HalfHeight), SurfaceGuess - Up * (2.f * VoxelSize),
+			Capsule->GetCollisionObjectType(), Params))
+		{
+			Target = Hit.ImpactPoint + Up * (HalfHeight + 5.f);
+		}
 	}
 
 	Character->SetActorLocation(Target, false, nullptr, ETeleportType::TeleportPhysics);
@@ -1043,6 +1118,6 @@ bool UVCMovementComponent::ResolveTerrainEmbedding()
 	SetMovementMode(MOVE_Falling);
 
 	UE_LOG(LogVoxelCharacter, Log, TEXT("%s was embedded in terrain; lifted %.0f uu onto the new surface."),
-		*Character->GetName(), Target.Z - Center.Z);
+		*Character->GetName(), FVector::DotProduct(Target - Center, Up));
 	return true;
 }

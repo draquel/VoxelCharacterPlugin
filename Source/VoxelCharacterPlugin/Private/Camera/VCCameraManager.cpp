@@ -3,6 +3,8 @@
 #include "Camera/VCCameraManager.h"
 #include "Camera/CameraComponent.h"
 #include "Core/VCCharacterBase.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Movement/VCGravityFrame.h"
 #include "VoxelCharacterPlugin.h"
 
 UVCCameraManager::UVCCameraManager()
@@ -130,7 +132,8 @@ void UVCCameraManager::UpdateCamera(float DeltaTime)
 	{
 		// Check if the top mode is a third-person type (arm length > 0 means TP)
 		// Use character location as pivot
-		const FVector PivotLocation = Character->GetActorLocation() + FVector(0.f, 0.f, Character->BaseEyeHeight);
+		const FVector PivotLocation = Character->GetActorLocation()
+			+ FVCGravityFrame::VectorToWorld(Character->GetCharacterMovement(), FVector(0.f, 0.f, Character->BaseEyeHeight));
 		BlendedLocation = ResolveVoxelCameraCollision(BlendedLocation, PivotLocation);
 	}
 

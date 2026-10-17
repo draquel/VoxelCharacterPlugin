@@ -1,0 +1,445 @@
+// Copyright Daniel Raquel. All Rights Reserved.
+
+#include "Misc/AutomationTest.h"
+
+#if WITH_AUTOMATION_TESTS
+
+#include "Core/VCCharacterBase.h"
+#include "Movement/VCGravityFrame.h"
+#include "Movement/VCMovementComponent.h"
+#include "Movement/VCVoxelNavigationHelper.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "EngineUtils.h"
+#include "GameFramework/WorldSettings.h"
+#include "VoxelChunkManager.h"
+#include "VoxelSeaSurface.h"
+#include "VoxelWorldConfiguration.h"
+#include "DistanceBandLODStrategy.h"
+#include "IVoxelMeshRenderer.h"
+#include "ChunkRenderData.h"
+
+// ---------------------------------------------------------------------------
+// A walkable planet, the character side (VoxelWorlds WORLD_MODES_REVIEW_PLAN.md §17; SPHERICAL_PLANET_REQUIREMENTS.md
+// SP-F1 to SP-F5):
+// - The gravity frame: world <-> gravity-relative rotations, the yaw-only heading in the local horizontal, and every
+//   default-gravity case returning the old values bit for bit (heightmap worlds keep their arithmetic).
+// - Gravity toward the centre: a character falling at both poles, 45 degrees, the equator and a cube corner falls along
+//   the radius and stands upright; on a plane gravity stays the engine's default.
+// - The spawn search by direction: on the analytic surface, above the sea, the nearest land from a sea start.
+// - The out-of-world rule: radial on a planet.
+// ---------------------------------------------------------------------------
+
+namespace VCPlanetWalkableTestHelpers
+{
+	/** A renderer that draws nothing (the chunk manager needs one to initialise). */
+	class FNullMeshRenderer : public IVoxelMeshRenderer
+	{
+	public:
+		virtual void Initialize(UWorld* World, const UVoxelWorldConfiguration* WorldConfig) override { bInitialized = true; }
+		virtual void Shutdown() override { bInitialized = false; }
+		virtual bool IsInitialized() const override { return bInitialized; }
+		virtual void UpdateChunkMesh(const FChunkRenderData& RenderData) override {}
+		virtual void UpdateChunkMeshFromCPU(const FIntVector& ChunkCoord, int32 LODLevel, const FChunkMeshData& MeshData) override {}
+		virtual void RemoveChunk(const FIntVector& ChunkCoord) override {}
+		virtual void ClearAllChunks() override {}
+		virtual void SetChunkVisible(const FIntVector& ChunkCoord, bool bVisible) override {}
+		virtual void SetAllChunksVisible(bool bVisible) override {}
+		virtual void SetMaterial(UMaterialInterface* Material) override {}
+		virtual UMaterialInterface* GetMaterial() const override { return nullptr; }
+		virtual void UpdateMaterialParameters() override {}
+		virtual void UpdateSeamMeshFromCPU(const FIntVector& OwnerChunkCoord, uint8 SeamSlot, int32 LODLevel, FChunkMeshData&& MeshData, bool bCrossfade) override {}
+		virtual void RemoveSeamMesh(const FIntVector& OwnerChunkCoord, uint8 SeamSlot) override {}
+		virtual void ClearAllSeamMeshes() override {}
+		virtual void GetSeamMeshOwners(TArray<FIntVector>& OutOwners) const override {}
+		virtual void UpdateLODTransition(const FIntVector& ChunkCoord, float MorphFactor) override {}
+		virtual bool IsChunkLoaded(const FIntVector& ChunkCoord) const override { return false; }
+		virtual int32 GetLoadedChunkCount() const override { return 0; }
+		virtual void GetLoadedChunks(TArray<FIntVector>& OutChunks) const override {}
+		virtual int64 GetGPUMemoryUsage() const override { return 0; }
+		virtual int64 GetTotalVertexCount() const override { return 0; }
+		virtual int64 GetTotalTriangleCount() const override { return 0; }
+		virtual bool GetChunkBounds(const FIntVector& ChunkCoord, FBox& OutBounds) const override { return false; }
+		virtual FBox GetTotalBounds() const override { return FBox(ForceInit); }
+		virtual FString GetDebugStats() const override { return FString(); }
+		virtual FString GetRendererTypeName() const override { return TEXT("Null (test)"); }
+
+	private:
+		bool bInitialized = false;
+	};
+
+	constexpr float PlanetRadius = 20000.0f;
+
+	/** A game world with a chunk manager on a small planet (or a plane) that streams nothing, and room for characters. */
+	struct FVoxelWorldHarness
+	{
+		UWorld* World = nullptr;
+		UVoxelWorldConfiguration* Config = nullptr;
+		AActor* Owner = nullptr;
+		UVoxelChunkManager* Manager = nullptr;
+		FNullMeshRenderer Renderer;
+
+		explicit FVoxelWorldHarness(bool bPlanet)
+		{
+			World = UWorld::CreateWorld(EWorldType::Game, false, bPlanet ? TEXT("VCPlanetWalkableWorld") : TEXT("VCPlaneWalkableWorld"));
+			FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+			Context.SetCurrentWorld(World);
+			World->InitializeActorsForPlay(FURL());
+			if (AWorldSettings* WorldSettings = World->GetWorldSettings())
+			{
+				WorldSettings->NotifyBeginPlay();
+			}
+			Config = NewObject<UVoxelWorldConfiguration>();
+			Config->AddToRoot();
+			Config->WorldMode = bPlanet ? EWorldMode::SphericalPlanet : EWorldMode::InfinitePlane;
+			Config->WorldOrigin = FVector::ZeroVector;
+			Config->WorldRadius = PlanetRadius;
+			Config->PlanetHeightScale = 1600.0f; // terrain about +-800
+			Config->HeightScale = 1600.0f;
+			Config->BaseHeight = 0.0f;
+			Config->PlanetMaxTerrainHeight = 1000.0f;
+			Config->PlanetMaxTerrainDepth = 1000.0f;
+			Config->MeshingMode = EMeshingMode::DualContouring;
+			Config->ChunkSize = 32;
+			Config->VoxelSize = 50.0f;
+			Config->ViewDistance = 3000.0f;
+			Config->bUseGPUGeneration = false;
+			Config->bUseGPUMeshing = false;
+			Config->bGenerateCollision = false;
+			Config->bEnableScatter = false;
+			Config->bEnableCaves = false;
+			Config->bEnableBiomes = false;
+			Config->bEnableWaterLevel = true;
+			Config->WaterRadius = PlanetRadius; // a sea at the datum: coasts everywhere
+			Config->WaterLevel = 0.0f;
+			Config->NoiseParams.Seed = 9001;
+			Config->NoiseParams.Frequency = 0.0004f;
+			Config->NoiseParams.Octaves = 3;
+
+			Owner = World->SpawnActor<AActor>();
+			Manager = NewObject<UVoxelChunkManager>(Owner);
+			Manager->RegisterComponent();
+			Renderer.Initialize(World, Config);
+			Manager->Initialize(Config, new FDistanceBandLODStrategy(), &Renderer);
+			FVCVoxelNavigationHelper::ClearCache();
+		}
+
+		~FVoxelWorldHarness()
+		{
+			FVCVoxelNavigationHelper::ClearCache();
+			TArray<AActor*> Actors;
+			for (TActorIterator<AActor> It(World); It; ++It)
+			{
+				if (*It != Owner)
+				{
+					Actors.Add(*It);
+				}
+			}
+			for (AActor* Actor : Actors)
+			{
+				World->DestroyActor(Actor);
+			}
+			Manager->Shutdown();
+			Owner->Destroy();
+			GEngine->DestroyWorldContext(World);
+			World->DestroyWorld(false);
+			Config->RemoveFromRoot();
+		}
+
+		AVCCharacterBase* SpawnCharacter(const FVector& Location)
+		{
+			const FTransform Transform(Location);
+			AVCCharacterBase* Character = World->SpawnActorDeferred<AVCCharacterBase>(AVCCharacterBase::StaticClass(), Transform,
+				nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+			if (!Character)
+			{
+				return nullptr;
+			}
+			Character->bWaitForTerrain = false;
+			Character->FinishSpawning(Transform);
+			return Character;
+		}
+	};
+
+	/** Direction for a latitude and longitude (degrees; +Z north, longitude from +X toward +Y). */
+	FVector LatLon(double Lat, double Lon)
+	{
+		const double La = FMath::DegreesToRadians(Lat);
+		const double Lo = FMath::DegreesToRadians(Lon);
+		return FVector(FMath::Cos(La) * FMath::Cos(Lo), FMath::Cos(La) * FMath::Sin(Lo), FMath::Sin(La));
+	}
+
+	double AngleDeg(const FVector& A, const FVector& B)
+	{
+		return FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(FVector::DotProduct(A.GetSafeNormal(), B.GetSafeNormal()), -1.0, 1.0)));
+	}
+
+	struct FSite
+	{
+		const TCHAR* Name;
+		double Lat;
+		double Lon;
+	};
+
+	const FSite Sites[] = {
+		{ TEXT("north pole"), 90.0, 0.0 },
+		{ TEXT("south pole"), -90.0, 0.0 },
+		{ TEXT("latitude 45"), 45.0, 20.0 },
+		{ TEXT("equator"), 0.0, 100.0 },
+		{ TEXT("cube corner"), 35.264, 45.0 },
+		{ TEXT("latitude -60"), -60.0, 200.0 },
+	};
+}
+
+#define VC_PLANET_FLAGS (EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+// ---------------------------------------------------------------------------
+// The gravity frame (SP-F3) and the heightmap reductions (SP-F2): with the default gravity every gravity-relative
+// expression the movement component uses is the old Z arithmetic, bit for bit; with a custom gravity the round trip
+// holds and a yaw-only heading lies in the local horizontal.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlanet_GravityFrame, "VoxelCharacter.Planet.GravityFrame", VC_PLANET_FLAGS)
+bool FVCPlanet_GravityFrame::RunTest(const FString& Parameters)
+{
+	using namespace VCPlanetWalkableTestHelpers;
+	UCharacterMovementComponent* Move = NewObject<UCharacterMovementComponent>();
+	FRandomStream Random(4242);
+
+	// Default gravity: the helpers hand back their input, the engine's gravity-space helpers reduce to Z.
+	TestFalse(TEXT("A new movement component has the default gravity"), Move->HasCustomGravity());
+	int32 Mismatches = 0;
+	for (int32 i = 0; i < 500; ++i)
+	{
+		const FVector V(Random.FRandRange(-5.0e5, 5.0e5), Random.FRandRange(-5.0e5, 5.0e5), Random.FRandRange(-5.0e5, 5.0e5));
+		const float H = Random.FRandRange(0.0f, 200.0f);
+		const FRotator Rot(Random.FRandRange(-89.0, 89.0), Random.FRandRange(-180.0, 180.0), Random.FRandRange(-10.0, 10.0));
+		Mismatches += (Move->GetGravitySpaceZ(V) != V.Z) ? 1 : 0;
+		FVector S = V;
+		Move->SetGravitySpaceZ(S, H);
+		Mismatches += (S != FVector(V.X, V.Y, H)) ? 1 : 0;
+		Mismatches += (Move->ProjectToGravityFloor(V) != FVector(V.X, V.Y, 0.0)) ? 1 : 0;
+		Mismatches += (V + Move->GetGravityDirection() * H != V - FVector(0.f, 0.f, H)) ? 1 : 0;
+		Mismatches += (V + FVCGravityFrame::GetUp(Move) * H != V + FVector(0.f, 0.f, H)) ? 1 : 0;
+		Mismatches += (FVCGravityFrame::ToGravityRelative(Move, Rot) != Rot) ? 1 : 0;
+		Mismatches += (FVCGravityFrame::ToWorld(Move, Rot) != Rot) ? 1 : 0;
+		Mismatches += (FVCGravityFrame::GetYawRotation(Move, Rot) != FRotator(0.0, Rot.Yaw, 0.0)) ? 1 : 0;
+		Mismatches += (FVCGravityFrame::VectorToWorld(Move, V) != V) ? 1 : 0;
+		Mismatches += (FVCGravityFrame::GetHorizontalSpeed(Move, V) != V.Size2D()) ? 1 : 0;
+	}
+	AddInfo(FString::Printf(TEXT("Default gravity: %d of 5,000 expressions differ from the old Z arithmetic"), Mismatches));
+	TestEqual(TEXT("Default gravity: the old values bit for bit"), Mismatches, 0);
+
+	// Custom gravity at the sites.
+	double WorstRoundTrip = 0.0, WorstHeadingUp = 0.0, WorstPitch = 0.0;
+	for (const FSite& Site : Sites)
+	{
+		const FVector Up = LatLon(Site.Lat, Site.Lon);
+		Move->SetGravityDirection(-Up);
+		for (int32 i = 0; i < 50; ++i)
+		{
+			const FRotator World(Random.FRandRange(-80.0, 80.0), Random.FRandRange(-180.0, 180.0), 0.0);
+			const FRotator Back = FVCGravityFrame::ToWorld(Move, FVCGravityFrame::ToGravityRelative(Move, World));
+			WorstRoundTrip = FMath::Max(WorstRoundTrip, AngleDeg(Back.Vector(), World.Vector()));
+			const FRotator Yaw = FVCGravityFrame::GetYawRotation(Move, World);
+			WorstHeadingUp = FMath::Max(WorstHeadingUp, FMath::Abs(FVector::DotProduct(Yaw.Vector(), Up)));
+			WorstHeadingUp = FMath::Max(WorstHeadingUp, 1.0 - FVector::DotProduct(FRotationMatrix(Yaw).GetUnitAxis(EAxis::Z), Up));
+			// A view along the local horizontal has zero gravity-relative pitch.
+			const FRotator Level = FVCGravityFrame::ToGravityRelative(Move, Yaw);
+			WorstPitch = FMath::Max(WorstPitch, FMath::Abs(Level.Pitch));
+		}
+		const FVector Walk = (FRotationMatrix(FVCGravityFrame::GetYawRotation(Move, FRotator(0.0, 30.0, 0.0))).GetUnitAxis(EAxis::X) * 600.0) + Up * 200.0;
+		TestTrue(FString::Printf(TEXT("%s: the horizontal speed ignores the speed along up"), Site.Name),
+			FMath::IsNearlyEqual(FVCGravityFrame::GetHorizontalSpeed(Move, Walk), 600.0, 1.0e-6));
+	}
+	AddInfo(FString::Printf(TEXT("Custom gravity: round trip %.2e deg, heading off the horizontal %.2e, level pitch %.2e deg"),
+		WorstRoundTrip, WorstHeadingUp, WorstPitch));
+	TestTrue(TEXT("World -> gravity -> world round trip"), WorstRoundTrip < 1.0e-4);
+	TestTrue(TEXT("A yaw-only heading lies in the local horizontal, upright"), WorstHeadingUp < 1.0e-6);
+	TestTrue(TEXT("A level view has zero relative pitch"), WorstPitch < 1.0e-4);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// SP-F1: a character in the air over a planet falls toward its centre at every site and stands upright in its gravity;
+// on a plane gravity stays the engine's default.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlanet_GravityTowardCentre, "VoxelCharacter.Planet.GravityTowardCentre", VC_PLANET_FLAGS)
+bool FVCPlanet_GravityTowardCentre::RunTest(const FString& Parameters)
+{
+	using namespace VCPlanetWalkableTestHelpers;
+	TestTrue(TEXT("Pure: gravity toward the centre"),
+		UVCMovementComponent::ComputePlanetGravityDirection(FVector(0.0, 0.0, 30000.0), FVector(0.0, 0.0, 10000.0), FVector::UpVector).Equals(FVector(0.0, 0.0, -1.0)));
+	TestTrue(TEXT("Pure: at the centre, the fallback"),
+		UVCMovementComponent::ComputePlanetGravityDirection(FVector(5.0), FVector(5.0), FVector::ForwardVector).Equals(FVector::ForwardVector));
+	{
+		FVoxelWorldHarness Planet(/*bPlanet=*/true);
+		for (const FSite& Site : Sites)
+		{
+			const FVector Up = LatLon(Site.Lat, Site.Lon);
+			AVCCharacterBase* Character = Planet.SpawnCharacter(Up * (PlanetRadius + 3000.0));
+			UVCMovementComponent* Move = Character ? Cast<UVCMovementComponent>(Character->GetCharacterMovement()) : nullptr;
+			if (!Move)
+			{
+				AddError(FString::Printf(TEXT("%s: spawn failed"), Site.Name));
+				continue;
+			}
+			Move->bRunPhysicsWithNoController = true;
+			Move->SetMovementMode(MOVE_Falling);
+			for (int32 Frame = 0; Frame < 20; ++Frame)
+			{
+				Move->TickComponent(1.0f / 60.0f, LEVELTICK_All, nullptr);
+			}
+			const double GravityOff = AngleDeg(-Move->GetGravityDirection(), Character->GetActorLocation());
+			const double FallOff = AngleDeg(-Move->Velocity, Character->GetActorLocation());
+			Move->SnapUprightToGravity();
+			const double UprightOff = AngleDeg(Character->GetActorUpVector(), Character->GetActorLocation());
+			AddInfo(FString::Printf(TEXT("%s: gravity %.4f deg off the radius, fall %.4f deg, upright %.4f deg, speed %.0f"),
+				Site.Name, GravityOff, FallOff, UprightOff, Move->Velocity.Size()));
+			TestTrue(FString::Printf(TEXT("%s: planet gravity"), Site.Name), Move->HasPlanetGravity());
+			TestTrue(FString::Printf(TEXT("%s: gravity points at the centre"), Site.Name), GravityOff < 0.01);
+			TestTrue(FString::Printf(TEXT("%s: the body falls along the radius"), Site.Name), FallOff < 0.05 && Move->Velocity.Size() > 100.0);
+			TestTrue(FString::Printf(TEXT("%s: upright in its gravity"), Site.Name), UprightOff < 0.01);
+			Character->Destroy();
+		}
+	}
+	{
+		FVoxelWorldHarness Plane(/*bPlanet=*/false);
+		AVCCharacterBase* Character = Plane.SpawnCharacter(FVector(1000.0, -2000.0, 5000.0));
+		UVCMovementComponent* Move = Character ? Cast<UVCMovementComponent>(Character->GetCharacterMovement()) : nullptr;
+		if (!Move)
+		{
+			AddError(TEXT("Plane: spawn failed"));
+			return false;
+		}
+		Move->bRunPhysicsWithNoController = true;
+		Move->SetMovementMode(MOVE_Falling);
+		for (int32 Frame = 0; Frame < 20; ++Frame)
+		{
+			Move->TickComponent(1.0f / 60.0f, LEVELTICK_All, nullptr);
+		}
+		TestFalse(TEXT("Plane: no planet gravity"), Move->HasPlanetGravity());
+		TestFalse(TEXT("Plane: the engine's default gravity"), Move->HasCustomGravity());
+		TestTrue(TEXT("Plane: falls along world -Z"), Move->Velocity.Z < -100.0 && FMath::IsNearlyZero(Move->Velocity.X) && FMath::IsNearlyZero(Move->Velocity.Y));
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// SP-F4: the spawn search by direction on a planet: on the analytic surface along the start direction when it is dry,
+// else the nearest dry ring; on a plane the old (X, Y, height) answer.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlanet_SpawnByDirection, "VoxelCharacter.Planet.SpawnByDirection", VC_PLANET_FLAGS)
+bool FVCPlanet_SpawnByDirection::RunTest(const FString& Parameters)
+{
+	using namespace VCPlanetWalkableTestHelpers;
+
+	// The ring search on a synthetic planet: a sphere of radius 10,000 flooded but for a cap 10 degrees around +X.
+	{
+		const FVector Land = FVector::ForwardVector;
+		const double R = 10000.0;
+		const FVoxelSeaSurface Sea = FVoxelSeaSurface::MakeSphere(FVector::ZeroVector, R);
+		auto SurfaceAt = [&](const FVector& Direction)
+		{
+			const bool bDry = AngleDeg(Direction, Land) < 10.0;
+			return Direction * (bDry ? R + 100.0 : R - 100.0);
+		};
+		FVector Out;
+		int32 Ring = 0;
+		const FVector Start = LatLon(25.0, 0.0); // 25 degrees north of the land's centre
+		const bool bFound = FVCVoxelNavigationHelper::FindPlanetSpawnPoint(FVector::ZeroVector, R, Start, 500.0, 6000.0, SurfaceAt, Sea, Out, Ring);
+		const double FromStart = AngleDeg(Out, Start);
+		AddInfo(FString::Printf(TEXT("Synthetic: found %d, ring %d, %.2f deg from the start, %.2f from the land's centre"), bFound ? 1 : 0, Ring,
+			FromStart, AngleDeg(Out, Land)));
+		TestTrue(TEXT("Synthetic: land found from the sea"), bFound);
+		TestTrue(TEXT("Synthetic: in the land cap"), AngleDeg(Out, Land) < 10.0);
+		// The first ring reaching the cap: 15 degrees is 2,618 of arc, so ring 6 (3,000) at 500 a ring.
+		TestEqual(TEXT("Synthetic: the nearest ring that reaches land"), Ring, 6);
+		TestTrue(TEXT("Synthetic: that ring's arc from the start"), FMath::IsNearlyEqual(FromStart, FMath::RadiansToDegrees(Ring * 500.0 / R), 1.0e-6));
+		int32 NoRing = 0;
+		TestFalse(TEXT("Synthetic: no land within the search arc"),
+			FVCVoxelNavigationHelper::FindPlanetSpawnPoint(FVector::ZeroVector, R, -Land, 500.0, 6000.0, SurfaceAt, Sea, Out, NoRing));
+	}
+
+	// The real planet: a sea at the datum, so some sites start wet.
+	{
+		FVoxelWorldHarness Planet(/*bPlanet=*/true);
+		int32 DryStarts = 0, WetStarts = 0;
+		double WorstOnSurface = 0.0;
+		for (const FSite& Site : Sites)
+		{
+			const FVector Start = LatLon(Site.Lat, Site.Lon) * (PlanetRadius + 5000.0);
+			const bool bStartDry = Planet.Manager->GetSeaDepthAt(Planet.Manager->GetSurfacePointAt(Start).Position) < 0.0f;
+			FVector Out;
+			const bool bFound = FVCVoxelNavigationHelper::FindSpawnablePosition(Planet.World, Start, Out);
+			TestTrue(FString::Printf(TEXT("%s: found land"), Site.Name), bFound);
+			if (!bFound)
+			{
+				continue;
+			}
+			const FVoxelTerrainSurfacePoint Surface = Planet.Manager->GetSurfacePointAt(Out);
+			WorstOnSurface = FMath::Max(WorstOnSurface, FVector::Dist(Out, Surface.Position));
+			TestTrue(FString::Printf(TEXT("%s: above the sea"), Site.Name), Planet.Manager->GetSeaDepthAt(Out) < 0.0f);
+			if (bStartDry)
+			{
+				++DryStarts;
+				TestTrue(FString::Printf(TEXT("%s: a dry start stays on its direction"), Site.Name), AngleDeg(Out, Start) < 1.0e-6);
+			}
+			else
+			{
+				++WetStarts;
+				TestTrue(FString::Printf(TEXT("%s: a sea start moves to land"), Site.Name), AngleDeg(Out, Start) > 1.0e-3);
+			}
+			AddInfo(FString::Printf(TEXT("%s: start %s, spawn %.2f deg from it at altitude %.0f"), Site.Name, bStartDry ? TEXT("dry") : TEXT("wet"),
+				AngleDeg(Out, Start), Surface.Altitude));
+		}
+		AddInfo(FString::Printf(TEXT("Planet: %d dry and %d wet starts, worst distance from the analytic surface %.4f"), DryStarts, WetStarts, WorstOnSurface));
+		TestTrue(TEXT("Every spawn is on the analytic surface"), WorstOnSurface < 1.0);
+		TestTrue(TEXT("Both kinds of start were tried"), DryStarts > 0 && WetStarts > 0);
+	}
+
+	// A plane: the old answer, (X, Y) at the generated surface height.
+	{
+		FVoxelWorldHarness Plane(/*bPlanet=*/false);
+		Plane.Config->WaterLevel = -1.0e6f; // no sea in the way
+		FVector Out;
+		const bool bFound = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, FVector(1234.0, -5678.0, 9999.0), Out);
+		TestTrue(TEXT("Plane: found"), bFound);
+		TestTrue(TEXT("Plane: (X, Y, generated height) as before"),
+			Out == FVector(1234.0, -5678.0, Plane.Manager->GetGeneratedSurfaceHeight(1234.0, -5678.0)));
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// SP-F5: out of the world is radial on a planet (inside the shell's inner radius by OutOfWorldDepth), below the lowest
+// terrain elsewhere.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlanet_OutOfWorld, "VoxelCharacter.Planet.OutOfWorld", VC_PLANET_FLAGS)
+bool FVCPlanet_OutOfWorld::RunTest(const FString& Parameters)
+{
+	FVoxelWorldBounds Shell;
+	Shell.Shape = EVoxelWorldBoundsShape::Shell;
+	Shell.Center = FVector(100.0, 200.0, 300.0);
+	Shell.InnerRadius = 243500.0f;
+	Shell.OuterRadius = 256500.0f;
+	Shell.MinZ = 300.0f - 256500.0f;
+	const FVector South = Shell.Center + FVector(0.0, 0.0, -249000.0); // the south pole's surface
+	TestFalse(TEXT("Planet: the south pole's surface is in the world (world Z far below the plane rule's floor)"),
+		AVCCharacterBase::IsOutOfWorld(Shell, South, 20000.f));
+	TestFalse(TEXT("Planet: just inside the inner radius is still in"), AVCCharacterBase::IsOutOfWorld(Shell, Shell.Center + FVector(1.0, 0.0, 0.0) * 230000.0, 20000.f));
+	TestTrue(TEXT("Planet: deep inside the core is out"), AVCCharacterBase::IsOutOfWorld(Shell, Shell.Center + FVector(0.0, 0.6, 0.8) * 200000.0, 20000.f));
+	TestFalse(TEXT("Depth 0: never"), AVCCharacterBase::IsOutOfWorld(Shell, Shell.Center, 0.f));
+
+	FVoxelWorldBounds Plane;
+	Plane.Shape = EVoxelWorldBoundsShape::Unbounded;
+	Plane.MinZ = -6000.0f;
+	TestTrue(TEXT("Plane: below the lowest terrain by the depth is out"), AVCCharacterBase::IsOutOfWorld(Plane, FVector(0.0, 0.0, -26001.0), 20000.f));
+	TestFalse(TEXT("Plane: above it is in"), AVCCharacterBase::IsOutOfWorld(Plane, FVector(0.0, 0.0, -25999.0), 20000.f));
+	Plane.MinZ = -1.0e9f;
+	TestFalse(TEXT("Plane without a terrain range: never"), AVCCharacterBase::IsOutOfWorld(Plane, FVector(0.0, 0.0, -1.0e8), 20000.f));
+	return true;
+}
+
+#undef VC_PLANET_FLAGS
+
+#endif // WITH_AUTOMATION_TESTS

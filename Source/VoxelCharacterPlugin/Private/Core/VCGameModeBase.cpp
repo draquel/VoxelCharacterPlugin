@@ -9,9 +9,51 @@
 #include "GameFramework/Pawn.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
+#include "Movement/VCVoxelNavigationHelper.h"
+#include "VoxelChunkManager.h"
+#if WITH_INTERACTION_PLUGIN
+#include "Subsystems/WorldItemPoolSubsystem.h"
+#endif
 
 AVCGameModeBase::AVCGameModeBase()
 {
+}
+
+void AVCGameModeBase::StartPlay()
+{
+	Super::StartPlay();
+	VoxelWorldShapePolls = 0;
+	GetWorldTimerManager().SetTimer(VoxelWorldShapeTimer, this, &AVCGameModeBase::ApplyVoxelWorldShape, 0.5f, /*bLoop=*/true, 0.0f);
+}
+
+void AVCGameModeBase::ApplyVoxelWorldShape()
+{
+	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	if (!ChunkMgr)
+	{
+		// No voxel world (yet): keep looking for a minute, then give up quietly (a map without one).
+		if (++VoxelWorldShapePolls >= 120)
+		{
+			GetWorldTimerManager().ClearTimer(VoxelWorldShapeTimer);
+		}
+		return;
+	}
+	GetWorldTimerManager().ClearTimer(VoxelWorldShapeTimer);
+
+	const FVoxelWorldBounds Bounds = ChunkMgr->GetWorldBounds();
+	if (Bounds.Shape != EVoxelWorldBoundsShape::Shell)
+	{
+		return; // heightmap worlds keep every default
+	}
+#if WITH_INTERACTION_PLUGIN
+	if (UWorldItemPoolSubsystem* Pool = GetWorld() ? GetWorld()->GetSubsystem<UWorldItemPoolSubsystem>() : nullptr)
+	{
+		// The centre is inside the core, which never streams: hidden, collisionless items wait there, out of every
+		// player's way and relevance.
+		Pool->SetParkingLocation(Bounds.Center);
+		UE_LOG(LogVoxelCharacter, Log, TEXT("Planet: world items park at the planet centre %s."), *Bounds.Center.ToCompactString());
+	}
+#endif
 }
 
 void AVCGameModeBase::HandlePlayerDied(AController* Controller, const FTransform& DeathTransform)
