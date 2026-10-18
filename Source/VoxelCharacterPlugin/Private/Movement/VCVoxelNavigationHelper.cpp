@@ -199,8 +199,8 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 	// never comes. A start outside searches from the nearest point a chunk inside the edge instead.
 	const FVoxelWorldBounds Bounds = ChunkMgr->GetWorldBounds();
 
-	// A planet: by direction from the centre (spherical SP-F4), the surface along it from the world mode (GetSurfacePoint:
-	// noise and continentalness, what generation matches), dry above the sea sphere.
+	// A planet: by direction from the centre (spherical SP-F4), the generated surface along it (GetGeneratedSurfacePoint:
+	// noise, continentalness and the POI pads' conditioning, what generation makes; SP-B10), dry above the sea sphere.
 	if (Bounds.Shape == EVoxelWorldBoundsShape::Shell)
 	{
 		const FVector Centre = Bounds.Center;
@@ -212,7 +212,7 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 		const double Radius = Config->WorldRadius;
 		auto SurfaceAt = [ChunkMgr, &Centre, Radius](const FVector& Direction)
 		{
-			return ChunkMgr->GetSurfacePointAt(Centre + Direction * Radius).Position;
+			return ChunkMgr->GetGeneratedSurfacePoint(Centre + Direction * Radius);
 		};
 		int32 Ring = 0;
 		if (FindPlanetSpawnPoint(Centre, Radius, StartDirection, ChunkWorldSize, MaxSearchRadius, SurfaceAt, Sea, OutPosition, Ring))
