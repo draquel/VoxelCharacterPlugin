@@ -432,7 +432,9 @@ public:
 
 	/**
 	 * Pure: whether a position has fallen out of a world (WM-I4; spherical SP-F5). Heightmap worlds: below the lowest
-	 * terrain (Bounds.MinZ) by Depth. A planet (a shell): closer to the centre than the shell's inner radius by Depth.
+	 * terrain (Bounds.MinZ) by Depth. A planet (a shell): closer to the centre than the shell's inner radius by Depth, or
+	 * farther from it than the orbit radius (Bounds.OrbitRadius: the datum plus the orbit ceiling, spherical Phase 6), the
+	 * outer bound of the space a flying pawn may use.
 	 * @param Bounds The voxel world's bounds
 	 * @param Location The pawn's position
 	 * @param Depth OutOfWorldDepth (0 = never)

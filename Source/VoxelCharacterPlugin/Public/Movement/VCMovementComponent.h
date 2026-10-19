@@ -277,6 +277,38 @@ public:
 	/** Swim-rise input state (saved-move flag FLAG_Custom_1). */
 	bool bWantsToAscend = false;
 
+	// --- Debug flight (spherical Phase 6, WM-BP2, decision D20: QA tooling, not gameplay) ---
+
+	/**
+	 * QA flight (vox.Fly, vox.TPLatLon ... hold=1): MOVE_Flying steered in the gravity frame. Movement input moves across
+	 * local up as on the ground (Input_Move and vox.AutoRun give no other); the climb (SetFlightClimb, or the jump / crouch
+	 * keys held) moves along local up at up to MaxFlySpeed; with no climb the distance from the planet centre (Z on a
+	 * heightmap world) is held, so a flight across a planet keeps its altitude. The body stays upright in its gravity and
+	 * water never turns it into a swimmer. Stopping drops it into MOVE_Falling; any other mode change ends it. Not
+	 * replicated (standalone and listen-server QA).
+	 * @param bEnable Fly, or stop flying
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Movement|Debug")
+	void SetDebugFlight(bool bEnable);
+
+	/** @return True while in debug flight */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Debug")
+	bool IsDebugFlying() const { return bDebugFlight; }
+
+	/**
+	 * Hands-free climb in debug flight: -1 (down) to 1 (up) of MaxFlySpeed along local up; 0 holds the altitude reached.
+	 * @param Climb The climb rate as a fraction of MaxFlySpeed (clamped to [-1, 1])
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Movement|Debug")
+	void SetFlightClimb(float Climb);
+
+	/** @return The hands-free climb (-1..1) */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Debug")
+	float GetFlightClimb() const { return FlightClimb; }
+
+	/** @return The level debug flight holds while not climbing: distance from the planet centre (Z on a heightmap world) */
+	double GetFlightHoldLevel() const { return FlightHoldLevel; }
+
 	// --- Breath (QA R11) ---
 
 	/** Breath lost per second while the head is underwater (Breath is in seconds of air). */
@@ -339,6 +371,24 @@ protected:
 	 * re-upright it (it lay on its side after a quarter of the planet). Heightmap worlds: the engine's rule.
 	 */
 	virtual bool ShouldRemainVertical() const override;
+
+	/** Debug flight (SetDebugFlight): the gravity-frame flight with its climb and altitude hold; else the engine's. */
+	virtual void PhysFlying(float DeltaTime, int32 Iterations) override;
+
+	/** Ends debug flight when another mode takes over (a landing, a teleport's settle, death). */
+	virtual void OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode) override;
+
+	/** Debug flight state (SetDebugFlight). */
+	bool bDebugFlight = false;
+
+	/** Hands-free climb, -1..1 of MaxFlySpeed (SetFlightClimb). */
+	float FlightClimb = 0.f;
+
+	/** The level debug flight holds with no climb: distance from the planet centre, or Z on a heightmap world. */
+	double FlightHoldLevel = 0.0;
+
+	/** The flight level of a position (see FlightHoldLevel). */
+	double GetFlightLevel(const FVector& Location) const;
 
 	/** Speed across local up, squared (Velocity.SizeSquared2D() for the default gravity). */
 	double GetHorizontalSpeedSquared(const FVector& InVelocity) const;
