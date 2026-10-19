@@ -432,6 +432,10 @@ bool FVCPlanet_OutOfWorld::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Planet: just inside the inner radius is still in"), AVCCharacterBase::IsOutOfWorld(Shell, Shell.Center + FVector(1.0, 0.0, 0.0) * 230000.0, 20000.f));
 	TestTrue(TEXT("Planet: deep inside the core is out"), AVCCharacterBase::IsOutOfWorld(Shell, Shell.Center + FVector(0.0, 0.6, 0.8) * 200000.0, 20000.f));
 	TestFalse(TEXT("Depth 0: never"), AVCCharacterBase::IsOutOfWorld(Shell, Shell.Center, 0.f));
+	TestFalse(TEXT("Planet without an orbit radius: no outer bound"), AVCCharacterBase::IsOutOfWorld(Shell, Shell.Center + FVector(0.0, 0.0, -1.0e7), 20000.f));
+	Shell.OrbitRadius = 1000000.0; // the datum (250,000) + a 3 R ceiling (spherical Phase 6)
+	TestFalse(TEXT("Planet: 2 R over the south pole is in"), AVCCharacterBase::IsOutOfWorld(Shell, Shell.Center + FVector(0.0, 0.0, -750000.0), 20000.f));
+	TestTrue(TEXT("Planet: past the orbit radius is out"), AVCCharacterBase::IsOutOfWorld(Shell, Shell.Center + FVector(0.6, 0.0, -0.8) * 1000001.0, 20000.f));
 
 	FVoxelWorldBounds Plane;
 	Plane.Shape = EVoxelWorldBoundsShape::Unbounded;
@@ -440,6 +444,126 @@ bool FVCPlanet_OutOfWorld::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Plane: above it is in"), AVCCharacterBase::IsOutOfWorld(Plane, FVector(0.0, 0.0, -25999.0), 20000.f));
 	Plane.MinZ = -1.0e9f;
 	TestFalse(TEXT("Plane without a terrain range: never"), AVCCharacterBase::IsOutOfWorld(Plane, FVector(0.0, 0.0, -1.0e8), 20000.f));
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Spherical Phase 6, WM-BP2 (D20): debug flight in the gravity frame. At every site a flyer climbs along local up at the
+// set rate, holds its distance from the centre with no climb (flying across the planet too, where a straight line would
+// rise off it), comes back down, and stops into a fall; another mode ends the flight. On a plane the held level is Z.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlanet_Fly, "VoxelCharacter.Planet.Fly", VC_PLANET_FLAGS)
+bool FVCPlanet_Fly::RunTest(const FString& Parameters)
+{
+	using namespace VCPlanetWalkableTestHelpers;
+	constexpr float Dt = 1.0f / 60.0f;
+	constexpr float FlySpeed = 1200.0f;
+	auto Tick = [](UVCMovementComponent* Move, int32 Frames, const FVector* Input = nullptr)
+	{
+		for (int32 Frame = 0; Frame < Frames; ++Frame)
+		{
+			if (Input)
+			{
+				// Across local up at the pawn, as vox.AutoRun feeds it.
+				const FVector Up = Move->GetLocalUp();
+				Move->GetPawnOwner()->AddMovementInput(FVector::CrossProduct(FVector::CrossProduct(Up, *Input), Up).GetSafeNormal(), 1.0f);
+			}
+			Move->TickComponent(Dt, LEVELTICK_All, nullptr);
+		}
+	};
+	{
+		FVoxelWorldHarness Planet(/*bPlanet=*/true);
+		for (const FSite& Site : Sites)
+		{
+			const FVector Up = LatLon(Site.Lat, Site.Lon);
+			const double StartRadius = PlanetRadius + 3000.0;
+			AVCCharacterBase* Character = Planet.SpawnCharacter(Up * StartRadius);
+			UVCMovementComponent* Move = Character ? Cast<UVCMovementComponent>(Character->GetCharacterMovement()) : nullptr;
+			if (!Move)
+			{
+				AddError(FString::Printf(TEXT("%s: spawn failed"), Site.Name));
+				continue;
+			}
+			Move->bRunPhysicsWithNoController = true;
+			Move->MaxFlySpeed = FlySpeed;
+			// Brought here tilted (a teleport from elsewhere on the planet), the body is levelled in its gravity, at the exact
+			// north pole too, where that gravity is the engine's default.
+			Character->SetActorRotation(FRotator(30.0, 10.0, 20.0));
+			Move->UpdatePlanetGravity();
+			Move->SnapUprightToGravity();
+			const double SnapOff = AngleDeg(Character->GetActorUpVector(), Character->GetActorLocation());
+			TestTrue(FString::Printf(TEXT("%s: a tilted body snaps upright (%.4f deg)"), Site.Name, SnapOff), SnapOff < 0.01);
+			Move->SetDebugFlight(true);
+			TestTrue(FString::Printf(TEXT("%s: flying"), Site.Name), Move->IsDebugFlying() && Move->IsFlying());
+
+			// Climb one second at full rate: along the radius, MaxFlySpeed far.
+			Move->SetFlightClimb(1.0f);
+			Tick(Move, 60);
+			const FVector Climbed = Character->GetActorLocation();
+			const double Rise = Climbed.Size() - StartRadius;
+			const double ClimbOff = AngleDeg(Climbed, Up);
+
+			// No climb for a second: the radius holds.
+			Move->SetFlightClimb(0.0f);
+			const double HeldAt = Character->GetActorLocation().Size();
+			Tick(Move, 60);
+			const double Drift = Character->GetActorLocation().Size() - HeldAt;
+
+			// Across the planet for two seconds with no climb: the radius holds, the pawn moves along the surface.
+			const FVector Heading = FVector::CrossProduct(Up, FMath::Abs(Up.Z) < 0.9 ? FVector::UpVector : FVector::ForwardVector).GetSafeNormal();
+			const FVector Before = Character->GetActorLocation();
+			Tick(Move, 120, &Heading);
+			const double Across = AngleDeg(Character->GetActorLocation(), Before) * FMath::DegreesToRadians(1.0) * HeldAt;
+			const double CrossDrift = Character->GetActorLocation().Size() - HeldAt;
+
+			// Back down at half rate for two seconds: the rise again.
+			Move->SetFlightClimb(-0.5f);
+			Tick(Move, 120);
+			const double Fall = HeldAt - Character->GetActorLocation().Size();
+			Move->SnapUprightToGravity();
+			const double UprightOff = AngleDeg(Character->GetActorUpVector(), Character->GetActorLocation());
+
+			AddInfo(FString::Printf(TEXT("%s: climbed %.1f (%.4f deg off the radius), held drift %.3f, across %.0f with drift %.3f, down %.1f, upright %.4f deg"),
+				Site.Name, Rise, ClimbOff, Drift, Across, CrossDrift, Fall, UprightOff));
+			TestTrue(FString::Printf(TEXT("%s: the climb rises MaxFlySpeed a second"), Site.Name), FMath::Abs(Rise - FlySpeed) < 30.0);
+			TestTrue(FString::Printf(TEXT("%s: the climb follows local up"), Site.Name), ClimbOff < 0.01);
+			TestTrue(FString::Printf(TEXT("%s: no climb holds the radius"), Site.Name), FMath::Abs(Drift) < 1.0);
+			TestTrue(FString::Printf(TEXT("%s: flying across holds the radius"), Site.Name), FMath::Abs(CrossDrift) < 2.0 && Across > 0.5 * FlySpeed);
+			TestTrue(FString::Printf(TEXT("%s: the descent comes back down"), Site.Name), FMath::Abs(Fall - FlySpeed) < 30.0);
+			TestTrue(FString::Printf(TEXT("%s: upright in its gravity"), Site.Name), UprightOff < 0.01);
+			TestTrue(FString::Printf(TEXT("%s: still flying"), Site.Name), Move->IsFlying() && Move->IsDebugFlying());
+
+			// Stopping drops into a fall; another mode ends the flight.
+			Move->SetDebugFlight(false);
+			TestTrue(FString::Printf(TEXT("%s: stopping falls"), Site.Name), Move->IsFalling() && !Move->IsDebugFlying());
+			Move->SetDebugFlight(true);
+			Move->SetMovementMode(MOVE_Walking);
+			TestFalse(FString::Printf(TEXT("%s: another mode ends the flight"), Site.Name), Move->IsDebugFlying());
+			Character->Destroy();
+		}
+	}
+	{
+		FVoxelWorldHarness Plane(/*bPlanet=*/false);
+		AVCCharacterBase* Character = Plane.SpawnCharacter(FVector(1000.0, -2000.0, 5000.0));
+		UVCMovementComponent* Move = Character ? Cast<UVCMovementComponent>(Character->GetCharacterMovement()) : nullptr;
+		if (!Move)
+		{
+			AddError(TEXT("Plane: spawn failed"));
+			return false;
+		}
+		Move->bRunPhysicsWithNoController = true;
+		Move->MaxFlySpeed = FlySpeed;
+		Move->SetDebugFlight(true);
+		const FVector Heading(1.0, 0.0, 0.0);
+		Tick(Move, 60, &Heading);
+		const double ZDrift = Character->GetActorLocation().Z - 5000.0;
+		Move->SetFlightClimb(1.0f);
+		Tick(Move, 60);
+		const double Rise = Character->GetActorLocation().Z - 5000.0;
+		AddInfo(FString::Printf(TEXT("Plane: Z drift %.3f flying along X, climbed %.1f"), ZDrift, Rise));
+		TestTrue(TEXT("Plane: no climb holds Z"), FMath::Abs(ZDrift) < 1.0);
+		TestTrue(TEXT("Plane: the climb rises along +Z"), FMath::Abs(Rise - FlySpeed) < 30.0);
+	}
 	return true;
 }
 

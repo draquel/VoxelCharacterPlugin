@@ -1262,7 +1262,8 @@ void AVCCharacterBase::TickWorldSafety(float DeltaSeconds)
 		// A planet: below its terrain is toward the centre (SP-F5).
 		if (IsOutOfWorld(WorldBounds, Here, OutOfWorldDepth) && !(CombatComponent && ICGFDamageableInterface::Execute_IsDead(CombatComponent)))
 		{
-			UE_LOG(LogVoxelCharacter, Warning, TEXT("%s is %.0f inside the planet's lowest terrain: out of the world."), *GetName(), OutOfWorldDepth);
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("%s is %.0f inside the planet's lowest terrain or past its orbit ceiling (%.0f from the centre): out of the world."),
+				*GetName(), OutOfWorldDepth, FVector::Dist(Here, WorldBounds.Center));
 			FellOutOfWorld(*GetDefault<UDamageType>());
 			return;
 		}
@@ -1300,7 +1301,9 @@ bool AVCCharacterBase::IsOutOfWorld(const FVoxelWorldBounds& Bounds, const FVect
 	}
 	if (Bounds.Shape == EVoxelWorldBoundsShape::Shell)
 	{
-		return FVector::Dist(Location, Bounds.Center) < static_cast<double>(Bounds.InnerRadius) - Depth;
+		const double Dist = FVector::Dist(Location, Bounds.Center);
+		// Outside the orbit ceiling is out too (spherical Phase 6): flight and the orbit camera stay inside it.
+		return Dist < static_cast<double>(Bounds.InnerRadius) - Depth || (Bounds.OrbitRadius > 0.0 && Dist > Bounds.OrbitRadius);
 	}
 	// Only from a real terrain range (a mode without one reports about +-1e9).
 	return Bounds.MinZ > -1.0e6f && Location.Z < Bounds.MinZ - Depth;

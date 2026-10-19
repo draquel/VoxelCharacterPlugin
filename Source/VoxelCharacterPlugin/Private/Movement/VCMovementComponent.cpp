@@ -4,6 +4,7 @@
 #include "Movement/VCVoxelNavigationHelper.h"
 #include "Movement/VCGravityFrame.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/PhysicsVolume.h"
 #include "VoxelChunkManager.h"
 #include "VoxelCollisionManager.h"
 #include "VoxelWorldConfiguration.h"
@@ -271,7 +272,10 @@ bool UVCMovementComponent::UpdatePlanetGravity()
 
 void UVCMovementComponent::SnapUprightToGravity()
 {
-	if (!HasCustomGravity() || !CharacterOwner)
+	// On a planet also where its gravity is the engine's default (exactly -Z, over the north pole): a body brought there
+	// tilted (a teleport from elsewhere on the planet) is levelled too (spherical Phase 6). GetYawRotation keeps only the
+	// yaw for the default gravity.
+	if (!CharacterOwner || !(HasCustomGravity() || bPlanetGravity))
 	{
 		return;
 	}
@@ -289,7 +293,135 @@ void UVCMovementComponent::PerformMovement(float DeltaTime)
 
 bool UVCMovementComponent::ShouldRemainVertical() const
 {
-	return Super::ShouldRemainVertical() || (HasCustomGravity() && IsSwimming());
+	// A swimmer and a flyer (debug flight) as well as the engine's walker and faller: nothing else re-uprights them as
+	// gravity turns under them.
+	return Super::ShouldRemainVertical() || (HasCustomGravity() && (IsSwimming() || IsFlying()));
+}
+
+// ---------------------------------------------------------------------------
+// Debug flight (spherical Phase 6, WM-BP2, D20)
+// ---------------------------------------------------------------------------
+
+void UVCMovementComponent::SetDebugFlight(bool bEnable)
+{
+	if (bEnable)
+	{
+		RefreshWorldBounds();
+		UpdatePlanetGravity();
+		FlightClimb = 0.f;
+		if (UpdatedComponent)
+		{
+			FlightHoldLevel = GetFlightLevel(UpdatedComponent->GetComponentLocation());
+		}
+		bDebugFlight = true;
+		SetMovementMode(MOVE_Flying);
+		Velocity = FVector::ZeroVector;
+		SnapUprightToGravity();
+	}
+	else if (bDebugFlight)
+	{
+		bDebugFlight = false;
+		FlightClimb = 0.f;
+		if (MovementMode == MOVE_Flying)
+		{
+			SetMovementMode(MOVE_Falling);
+		}
+	}
+}
+
+void UVCMovementComponent::SetFlightClimb(float Climb)
+{
+	FlightClimb = FMath::Clamp(Climb, -1.f, 1.f);
+	if (FlightClimb == 0.f && UpdatedComponent)
+	{
+		FlightHoldLevel = GetFlightLevel(UpdatedComponent->GetComponentLocation());
+	}
+}
+
+double UVCMovementComponent::GetFlightLevel(const FVector& Location) const
+{
+	return bPlanetGravity ? FVector::Dist(Location, CachedWorldBounds.Center) : Location.Z;
+}
+
+void UVCMovementComponent::OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode)
+{
+	Super::OnMovementModeChanged(PreviousMovementMode, PreviousCustomMode);
+	// MOVE_None is a freeze or a teleport's hold; any mode but flying ends debug flight.
+	if (bDebugFlight && MovementMode != MOVE_Flying && MovementMode != MOVE_None)
+	{
+		bDebugFlight = false;
+		FlightClimb = 0.f;
+	}
+}
+
+void UVCMovementComponent::PhysFlying(float DeltaTime, int32 Iterations)
+{
+	if (!bDebugFlight || !UpdatedComponent)
+	{
+		Super::PhysFlying(DeltaTime, Iterations);
+		return;
+	}
+	if (DeltaTime < MIN_TICK_TIME)
+	{
+		return;
+	}
+	RestorePreAdditiveRootMotionVelocity();
+
+	// Across local up: the engine's flying velocity from the movement input; without input it stops at once, as the
+	// engine's cheat flying does (QA flight hovers where it is let go).
+	const FVector Up = GetLocalUp();
+	Acceleration -= Up * FVector::DotProduct(Acceleration, Up);
+	if (Acceleration.IsNearlyZero())
+	{
+		Velocity = FVector::ZeroVector;
+	}
+	else
+	{
+		CalcVelocity(DeltaTime, 0.5f * GetPhysicsVolume()->FluidFriction, true, GetMaxBrakingDeceleration());
+	}
+	const FVector Across = Velocity - Up * FVector::DotProduct(Velocity, Up);
+
+	// Along local up: the climb (hands-free, else the jump / crouch keys held), or back to the held level. Flying straight
+	// across a planet rises off it (the curvature); the hold takes that back each frame.
+	float Climb = FlightClimb;
+	if (Climb == 0.f && CharacterOwner)
+	{
+		if (CharacterOwner->bPressedJump || bWantsToAscend)
+		{
+			Climb = 1.f;
+		}
+		else if (bWantsToCrouch)
+		{
+			Climb = -1.f;
+		}
+	}
+	const FVector Here = UpdatedComponent->GetComponentLocation();
+	const double MaxUp = static_cast<double>(MaxFlySpeed);
+	double UpSpeed = 0.0;
+	if (Climb != 0.f)
+	{
+		UpSpeed = static_cast<double>(Climb) * MaxUp;
+		FlightHoldLevel = GetFlightLevel(Here + (Across + Up * UpSpeed) * DeltaTime);
+	}
+	else
+	{
+		UpSpeed = FMath::Clamp((FlightHoldLevel - GetFlightLevel(Here)) / DeltaTime, -MaxUp, MaxUp);
+	}
+	Velocity = Across + Up * UpSpeed;
+
+	Iterations++;
+	bJustTeleported = false;
+	const FVector Adjusted = Velocity * DeltaTime;
+	FHitResult Hit(1.f);
+	SafeMoveUpdatedComponent(Adjusted, UpdatedComponent->GetComponentQuat(), true, Hit);
+	if (Hit.Time < 1.f)
+	{
+		SlideAlongSurface(Adjusted, 1.f - Hit.Time, Hit.Normal, Hit, true);
+	}
+	if (!bJustTeleported && !HasAnimRootMotion() && !CurrentRootMotion.HasOverrideVelocity())
+	{
+		Velocity = (UpdatedComponent->GetComponentLocation() - Here) / DeltaTime;
+	}
 }
 
 double UVCMovementComponent::GetHorizontalSpeedSquared(const FVector& InVelocity) const
@@ -492,7 +624,8 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 	GroundFriction = 8.f * CachedTerrainContext.FrictionMultiplier * VoxelSurfaceGripMultiplier;
 
 	// --- Swimming mode transition ---
-	if (CachedTerrainContext.bIsUnderwater && CachedTerrainContext.WaterDepth >= SwimmingEntryDepth)
+	// Not while flying: debug flight (vox.Fly) and the streaming benchmark's fly pawn cross the sea on purpose.
+	if (CachedTerrainContext.bIsUnderwater && CachedTerrainContext.WaterDepth >= SwimmingEntryDepth && !IsFlying())
 	{
 		if (!IsSwimming())
 		{
