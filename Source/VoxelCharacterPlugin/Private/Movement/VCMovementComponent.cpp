@@ -624,7 +624,13 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 	GroundFriction = 8.f * CachedTerrainContext.FrictionMultiplier * VoxelSurfaceGripMultiplier;
 
 	// --- Swimming mode transition ---
-	// Not while flying: debug flight (vox.Fly) and the streaming benchmark's fly pawn cross the sea on purpose.
+	// Not while flying: debug flight (vox.Fly) and the streaming benchmark's fly pawn cross the sea on purpose. Not while
+	// movement is disabled (MOVE_None: a hold, a death): switching a held pawn in water back to swimming let it sink
+	// through a seabed that had streamed out under the orbit camera (spherical Phase 6, P6.5).
+	if (MovementMode == MOVE_None)
+	{
+		return;
+	}
 	if (CachedTerrainContext.bIsUnderwater && CachedTerrainContext.WaterDepth >= SwimmingEntryDepth && !IsFlying())
 	{
 		if (!IsSwimming())

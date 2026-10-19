@@ -145,8 +145,25 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 		Texel[2] = Color.R;
 		Texel[3] = Color.A;
 	};
+	// Zoomed out: the globe albedo (WM-BP11), when it is there.
+	const FVoxelMapGlobeAlbedo* Albedo = bUseGlobeAlbedo ? Map.GetGlobeAlbedo() : nullptr;
+	const int32 AlbedoN = Albedo ? Albedo->Grid.GetCellsPerEdge() : 0;
 	auto Shade = [&](int32 X, int32 Y, int32 Face, const FVector2D& UV)
 	{
+		if (Albedo)
+		{
+			const int32 AU = FMath::Clamp(FMath::FloorToInt32((UV.X + 1.0) * 0.5 * AlbedoN), 0, AlbedoN - 1);
+			const int32 AV = FMath::Clamp(FMath::FloorToInt32((UV.Y + 1.0) * 0.5 * AlbedoN), 0, AlbedoN - 1);
+			const FIntPoint Cell = Albedo->Grid.ToAtlas(Face, AU, AV);
+			if (bRequireExplored && !Map.IsGlobeCellExplored(Cell))
+			{
+				Write(X, Y, Unexplored);
+				return;
+			}
+			Write(X, Y, Albedo->At(Cell));
+			++Drawn;
+			return;
+		}
 		const double FU = (UV.X + 1.0) / CellUV;
 		const double FV = (UV.Y + 1.0) / CellUV;
 		const int32 IU = FMath::Clamp(FMath::FloorToInt32(FU), 0, N - 1);

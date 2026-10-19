@@ -10,6 +10,7 @@
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
 #include "Engine/Texture2D.h"
+#include "UObject/UObjectIterator.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/Pawn.h"
 
@@ -117,8 +118,16 @@ void UVCWorldMapWidget::NativeConstruct()
 	// Bind to tile ready events so we can refresh while map is open
 	if (MapSubsystem.IsValid() && !TileReadyHandle.IsValid())
 	{
-		TileReadyHandle = MapSubsystem->OnMapTileReady.AddLambda([this](FIntPoint)
+		TileReadyHandle = MapSubsystem->OnMapTileReady.AddLambda([this](FIntPoint Tile)
 		{
+			// Zoomed out to the globe's albedo the tile images do not show: only the albedo landing ((-1, -1)) redraws at
+			// once. Tiles, and the exploration they carry, redraw it at most every 2 s: an ExploreAll on a big planet
+			// streams tens of thousands of images, and a redraw for each held the map at 6 FPS (spherical Phase 6, P6.5).
+			if (bRenderedFromAlbedo && Tile != FIntPoint(-1, -1))
+			{
+				bAlbedoTilesPending = true;
+				return;
+			}
 			bMapDirty = true;
 		});
 	}
@@ -157,6 +166,11 @@ void UVCWorldMapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 
 	bool bViewChanged = false;
 	const bool bPlanet = MapSubsystem.IsValid() && MapSubsystem->IsPlanetMap();
+	if (bAlbedoTilesPending && bPlanet && FPlatformTime::Seconds() - LastPlanetRebuildSeconds >= 2.0)
+	{
+		bAlbedoTilesPending = false;
+		bMapDirty = true;
+	}
 	if (bMapDirty && bPlanet)
 	{
 		// The globe redraws at most 30 times a second (tiles stream in one by one).
@@ -196,9 +210,51 @@ FReply UVCWorldMapWidget::NativeOnMouseWheel(const FGeometry& InGeometry, const 
 {
 	const float Delta = InMouseEvent.GetWheelDelta();
 	const float ZoomFactor = (Delta > 0) ? 1.25f : 0.8f;
-	CurrentZoom = FMath::Clamp(CurrentZoom * ZoomFactor, MinZoom, MaxZoom);
+	float LowZoom = MinZoom, HighZoom = MaxZoom;
+	GetZoomRange(LowZoom, HighZoom);
+	CurrentZoom = FMath::Clamp(CurrentZoom * ZoomFactor, LowZoom, HighZoom);
 	bMapDirty = true;
 	return FReply::Handled();
+}
+
+void UVCWorldMapWidget::GetZoomRange(float& OutMinZoom, float& OutMaxZoom) const
+{
+	OutMinZoom = MinZoom;
+	OutMaxZoom = MaxZoom;
+	if (const UVoxelMapSubsystem* Subsystem = MapSubsystem.Get(); Subsystem && Subsystem->IsPlanetMap())
+	{
+		// A planet: out to the whole globe at any radius (WM-BP11).
+		GetPlanetZoomRange(Subsystem->GetPlanetRadius(), Subsystem->GetTileWorldSize(), MinZoom, MaxZoom, OutMinZoom, OutMaxZoom);
+	}
+}
+
+UVCWorldMapWidget* UVCWorldMapWidget::FindOpen(const UWorld* World)
+{
+	for (TObjectIterator<UVCWorldMapWidget> It; It; ++It)
+	{
+		if (It->GetWorld() == World && It->IsInViewport())
+		{
+			return *It;
+		}
+	}
+	return nullptr;
+}
+
+void UVCWorldMapWidget::SetZoom(float Zoom)
+{
+	float LowZoom = MinZoom, HighZoom = MaxZoom;
+	GetZoomRange(LowZoom, HighZoom);
+	CurrentZoom = Zoom < 0.0f ? LowZoom : FMath::Clamp(Zoom, LowZoom, HighZoom);
+	bMapDirty = true;
+}
+
+void UVCWorldMapWidget::GetPlanetZoomRange(double PlanetRadius, double TileWorldSize, float InMinZoom, float InMaxZoom, float& OutMinZoom, float& OutMaxZoom)
+{
+	// GetGlobeRadiusPx: the globe's radius on screen is HalfTex * R * Zoom / (32 TileWorldSize); a whole globe with a tenth
+	// of the view to spare is a radius of 0.9 HalfTex.
+	const double WholeGlobe = PlanetRadius > 0.0 ? 0.9 * 32.0 * TileWorldSize / PlanetRadius : static_cast<double>(InMinZoom);
+	OutMinZoom = static_cast<float>(FMath::Min(static_cast<double>(InMinZoom), WholeGlobe));
+	OutMaxZoom = FMath::Max(InMaxZoom, OutMinZoom);
 }
 
 FReply UVCWorldMapWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
@@ -480,6 +536,9 @@ void UVCWorldMapWidget::RebuildPlanetMapTexture()
 	const double TexelsPerTile = Subsystem->GetTileWorldSize() * RenderedGlobe.RadiusPx / FMath::Max(Subsystem->GetPlanetRadius(), 1.0);
 	FVCPlanetMapSampler Sampler;
 	Sampler.bWantDetail = TexelsPerTile > 1.5 * Subsystem->GetTileOverviewResolution();
+	// Zoomed out so a texel spans many tiles (a big planet's globe): its albedo, not a tile pixel each (WM-BP11).
+	Sampler.bUseGlobeAlbedo = TexelsPerTile < GlobeAlbedoTexelsPerTile;
+	bRenderedFromAlbedo = Sampler.bUseGlobeAlbedo && Subsystem->GetGlobeAlbedo() != nullptr;
 	Sampler.Background = FColor(2, 2, 5, 255);
 	const double Half = 0.5 * TexSize;
 	const FVCGlobeProjection Globe = RenderedGlobe;
