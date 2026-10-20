@@ -5,6 +5,8 @@
 #if WITH_AUTOMATION_TESTS
 
 #include "Map/VCPlanetMapProjection.h"
+#include "Map/VCWorldMapWidget.h"
+#include "Misc/Parse.h"
 #include "VoxelMapSubsystem.h"
 #include "VoxelCubeSphere.h"
 #include "Testing/VoxelTestChunkWorld.h"
@@ -206,6 +208,107 @@ bool FVCPlanet_MapSampler::RunTest(const FString& Parameters)
 			{
 				TestEqual(TEXT("The cube corner's minimap spans three faces"), Faces, 3);
 			}
+		}
+	}
+	W.Stop();
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Spherical Phase 6, WM-BP11: the world map at scale, the character side (the albedo and ExploreAll are
+// VoxelWorlds.Map.Planet.ZoomAtScale).
+// - The zoom range: on the small planet, M and L (tiles of a 4,800 uu chunk) the most zoomed out view shows the whole
+//   globe with a tenth to spare (MinZoom 0.25 showed it only up to R of about 5 x 10^5), the configured range kept where
+//   it already did; zoomed in to MaxZoom as before.
+// - Zoomed out the globe is drawn from the albedo: on a small planet's globe 200 px across, every texel on the disc is its
+//   albedo cell's colour where a tile in the cell is explored and the fog's elsewhere; no tile image is asked for.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlanet_MapZoomAtScale, "VoxelCharacter.Planet.MapZoomAtScale", VC_PLANET_MAP_FLAGS)
+bool FVCPlanet_MapZoomAtScale::RunTest(const FString& Parameters)
+{
+	constexpr double TileWorldSize = 4800.0;
+	constexpr double HalfTex = 512.0;
+	for (const double Radius : { 2.5e5, 5.0e6, 1.0e8 })
+	{
+		float Low = 0.0f, High = 0.0f;
+		UVCWorldMapWidget::GetPlanetZoomRange(Radius, TileWorldSize, 0.25f, 4.0f, Low, High);
+		// GetGlobeRadiusPx at a zoom: HalfTex * R / (32 tiles / zoom).
+		const double RadiusPx = HalfTex * Radius * Low / (32.0 * TileWorldSize);
+		AddInfo(FString::Printf(TEXT("R %.0f: zoom %.5f to %.1f; the globe %.0f px across at the lowest (the view %.0f)"), Radius, Low, High, 2.0 * RadiusPx, 2.0 * HalfTex));
+		TestTrue(*FString::Printf(TEXT("R %.0f: the whole globe in view zoomed out"), Radius), RadiusPx <= 0.9 * HalfTex + 1.0);
+		TestTrue(*FString::Printf(TEXT("R %.0f: zoomed in as before"), Radius), High == 4.0f);
+		TestTrue(*FString::Printf(TEXT("R %.0f: the configured MinZoom kept when it shows the globe"), Radius), Low <= 0.25f && (Radius > 5.0e5 || Low == 0.25f));
+	}
+
+	// The sampler on the albedo.
+	VoxelTesting::FTestChunkWorld W;
+	W.Create(TEXT("VCPlanetMapZoomAtScale"));
+	W.ConfigureSmallPlanet();
+	W.StartManager();
+	UVoxelMapSubsystem* Map = W.World->GetSubsystem<UVoxelMapSubsystem>();
+	if (TestNotNull(TEXT("The game world has a map"), Map))
+	{
+		const FVoxelMapGlobeAlbedo* Albedo = Map->GetGlobeAlbedo();
+		const double Deadline = FPlatformTime::Seconds() + 60.0;
+		while (!Albedo && FPlatformTime::Seconds() < Deadline)
+		{
+			FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+			FPlatformProcess::Sleep(0.01f);
+			Albedo = Map->GetGlobeAlbedo();
+		}
+		if (TestNotNull(TEXT("The albedo builds"), Albedo))
+		{
+			const FVector Site = FVector(0.3, 0.2, 1.0).GetSafeNormal();
+			Map->RequestTilesInRadius(W.Config->WorldOrigin + Site * (W.Config->WorldRadius + 200.0), 4000.0f);
+			// Tile images waiting or drawing (the map's debug line).
+			auto Pending = [Map]()
+			{
+				const FString Stats = Map->GetDebugStats();
+				int32 Waiting = 0, Drawing = 0;
+				FParse::Value(*Stats, TEXT("waiting="), Waiting);
+				FParse::Value(*Stats, TEXT("drawing="), Drawing);
+				return Waiting + Drawing;
+			};
+			const int32 QueuedBefore = Pending();
+			constexpr int32 TexSize = 256;
+			const FVCGlobeProjection Globe = FVCGlobeProjection::Make(Site, 100.0);
+			TArray<uint8> Texels;
+			Texels.SetNumZeroed(TexSize * TexSize * 4);
+			FVCPlanetMapSampler Sampler;
+			Sampler.bUseGlobeAlbedo = true;
+			const double Half = 0.5 * TexSize;
+			auto TexelDirection = [&Globe, Half](double X, double Y, FVector& OutDirection)
+			{
+				return Globe.ScreenToDirection(FVector2D(X - Half, Y - Half), OutDirection);
+			};
+			const int32 Drawn = Sampler.Fill(*Map, Texels.GetData(), TexSize, 16, TexelDirection);
+			int32 OnDisc = 0, Exact = 0, Fog = 0, Wrong = 0;
+			for (int32 Y = 0; Y < TexSize; ++Y)
+			{
+				for (int32 X = 0; X < TexSize; ++X)
+				{
+					FVector Direction;
+					if (!TexelDirection(X + 0.5, Y + 0.5, Direction))
+					{
+						continue;
+					}
+					++OnDisc;
+					const FIntPoint Cell = Albedo->Grid.CellOfDirection(Direction);
+					const uint8* Got = Texels.GetData() + (Y * TexSize + X) * 4;
+					const FColor Expected = Map->IsGlobeCellExplored(Cell) ? Albedo->At(Cell) : Sampler.Unexplored;
+					const bool bMatch = Got[0] == Expected.B && Got[1] == Expected.G && Got[2] == Expected.R;
+					Exact += bMatch ? 1 : 0;
+					Fog += Map->IsGlobeCellExplored(Cell) ? 0 : 1;
+					Wrong += (!bMatch && Map->IsGlobeCellExplored(Cell)) ? 1 : 0;
+				}
+			}
+			const int32 QueuedAfter = Pending();
+			AddInfo(FString::Printf(TEXT("The globe 200 px across: %d texels on the disc, %d drawn from the albedo, %d exact (%d in the fog, %d explored texels off); tile requests %d -> %d"),
+				OnDisc, Drawn, Exact, Fog, Wrong, QueuedBefore, QueuedAfter));
+			TestTrue(TEXT("Some texels drawn from the albedo"), Drawn > 0);
+			TestTrue(TEXT("The rest in the fog"), Fog > 0 && Drawn + Fog >= OnDisc * 98 / 100);
+			TestTrue(TEXT("At least 98% of the texels exact (cell boundaries may round either way)"), Exact >= OnDisc * 98 / 100);
+			TestTrue(TEXT("No tile image asked for"), QueuedAfter <= QueuedBefore);
 		}
 	}
 	W.Stop();

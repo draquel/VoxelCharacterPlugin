@@ -71,18 +71,23 @@ public:
 	 * searches from the nearest point a chunk inside the edge (world modes review WM-I3).
 	 * On a planet the search is by direction (spherical SP-F4, FindPlanetSpawnPoint): the terrain along the direction
 	 * from the centre to NearPosition, then rings of directions around it; OutPosition is then the surface point itself.
+	 * With bAnywhereOnPlanet the rings go on past MaxSearchRadius to the far side of the planet
+	 * (FindPlanetSpawnPointAtScale, spherical Phase 6, WM-BP11, G36): a big planet's open sea can lie hundreds of km
+	 * across, and a spawn there would otherwise wait for land that never comes.
 	 *
 	 * @param World World context
 	 * @param NearPosition Desired spawn position (world space)
 	 * @param OutPosition Output: valid terrain position with safe Z margin
 	 * @param MaxSearchRadius Maximum search radius in world units (default 50000)
+	 * @param bAnywhereOnPlanet Planets: search the whole planet when there is no land within MaxSearchRadius
 	 * @return True if a valid position was found
 	 */
 	static bool FindSpawnablePosition(
 		const UWorld* World,
 		const FVector& NearPosition,
 		FVector& OutPosition,
-		float MaxSearchRadius = 50000.f);
+		float MaxSearchRadius = 50000.f,
+		bool bAnywhereOnPlanet = false);
 
 	/**
 	 * Pure: the spawn search on a planet (spherical SP-F4). The terrain surface along StartDirection, when it is above the
@@ -103,6 +108,28 @@ public:
 	static bool FindPlanetSpawnPoint(const FVector& Centre, double Radius, const FVector& StartDirection, double StepArc,
 		double MaxSearchArc, TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelSeaSurface& Sea,
 		FVector& OutPosition, int32& OutRing);
+
+	/**
+	 * Pure: the spawn search on a planet of any size (spherical Phase 6, WM-BP11, G36). Past FirstArc rings of directions
+	 * a quarter of their angle apart, at most 3.5 degrees, each ring's bearings as far apart (8 to 128), out to the
+	 * antipode: the nearest land is found to within about a quarter of its distance, and land wider than about 5 degrees
+	 * (85 km on a 1,000 km planet) is never missed, in at most MaxSamples surface samples (4,090 to the antipode of a
+	 * 1,000 km planet). FindPlanetSpawnPoint covers the rings up to FirstArc.
+	 *
+	 * @param Centre Planet centre
+	 * @param Radius Datum radius (arc lengths are measured on it)
+	 * @param StartDirection Unit direction from the centre to start from
+	 * @param FirstArc The first ring's arc (world units of arc), where FindPlanetSpawnPoint's rings ended
+	 * @param SurfaceAt The terrain surface point along a unit direction
+	 * @param Sea The sea (disabled: every direction is dry)
+	 * @param OutPosition Receives the surface point found
+	 * @param OutArc Receives its arc from the start (world units, on the datum)
+	 * @param MaxSamples Most surface samples to take
+	 * @return True if dry land was found
+	 */
+	static bool FindPlanetSpawnPointAtScale(const FVector& Centre, double Radius, const FVector& StartDirection, double FirstArc,
+		TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelSeaSurface& Sea, FVector& OutPosition, double& OutArc,
+		int32 MaxSamples = 4096);
 
 	/** Clear the cached chunk manager reference (call on world teardown). */
 	static void ClearCache();

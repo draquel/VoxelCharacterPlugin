@@ -133,6 +133,14 @@ struct VOXELCHARACTERPLUGIN_API FVCPlanetMapSampler
 	bool bWantDetail = false;
 
 	/**
+	 * Draw from the planet's globe albedo instead of tile images (spherical Phase 6, WM-BP11): a view zoomed out so far
+	 * that a texel spans many tiles. Each texel shows its albedo cell's colour where an explored tile lies in the cell
+	 * (UVoxelMapSubsystem::IsGlobeCellExplored), else Unexplored (bRequireExplored); no tile images are asked for. Without
+	 * an albedo yet (it builds on first use) the tiles are drawn.
+	 */
+	bool bUseGlobeAlbedo = false;
+
+	/**
 	 * Fill the texture.
 	 * @param Map The planet's map subsystem
 	 * @param OutBGRA TexSize^2 BGRA texels

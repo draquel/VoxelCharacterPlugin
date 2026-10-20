@@ -173,7 +173,8 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 	const UWorld* World,
 	const FVector& NearPosition,
 	FVector& OutPosition,
-	float MaxSearchRadius)
+	float MaxSearchRadius,
+	bool bAnywhereOnPlanet)
 {
 	UVoxelChunkManager* ChunkMgr = FindChunkManager(World);
 	if (!ChunkMgr)
@@ -220,6 +221,16 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 			UE_LOG(LogVoxelCharacter, Log,
 				TEXT("FindSpawnablePosition: planet surface at (%.0f, %.0f, %.0f), altitude %.0f, ring %d (%.0f of arc from the start)."),
 				OutPosition.X, OutPosition.Y, OutPosition.Z, ChunkMgr->GetAltitudeAt(OutPosition), Ring, Ring * ChunkWorldSize);
+			return true;
+		}
+		// The rest of the planet (WM-BP11, G36): a big planet's open sea can lie hundreds of km across.
+		double Arc = 0.0;
+		if (bAnywhereOnPlanet && FindPlanetSpawnPointAtScale(Centre, Radius, StartDirection, FMath::Max(static_cast<double>(MaxSearchRadius), static_cast<double>(ChunkWorldSize)),
+			SurfaceAt, Sea, OutPosition, Arc))
+		{
+			UE_LOG(LogVoxelCharacter, Log,
+				TEXT("FindSpawnablePosition: no land within %.0f of arc; the nearest land found on the planet at (%.0f, %.0f, %.0f), altitude %.0f, %.0f of arc from the start."),
+				MaxSearchRadius, OutPosition.X, OutPosition.Y, OutPosition.Z, ChunkMgr->GetAltitudeAt(OutPosition), Arc);
 			return true;
 		}
 		UE_LOG(LogVoxelCharacter, Warning,
@@ -346,6 +357,55 @@ bool FVCVoxelNavigationHelper::FindPlanetSpawnPoint(const FVector& Centre, doubl
 				return true;
 			}
 		}
+	}
+	return false;
+}
+
+bool FVCVoxelNavigationHelper::FindPlanetSpawnPointAtScale(const FVector& Centre, double Radius, const FVector& StartDirection, double FirstArc,
+	TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelSeaSurface& Sea, FVector& OutPosition, double& OutArc,
+	int32 MaxSamples)
+{
+	OutArc = 0.0;
+	const FVector D = StartDirection.GetSafeNormal();
+	if (D.IsNearlyZero() || Radius <= 0.0 || FirstArc <= 0.0)
+	{
+		return false;
+	}
+	auto IsDry = [&Sea](const FVector& Surface)
+	{
+		return !Sea.bEnabled || Sea.GetDepth(Surface) < 0.0;
+	};
+	// A tangent frame at the start, as FindPlanetSpawnPoint's.
+	const FVector T1 = FVector::CrossProduct(FMath::Abs(D.Z) < 0.9 ? FVector::UpVector : FVector::ForwardVector, D).GetSafeNormal();
+	const FVector T2 = FVector::CrossProduct(D, T1);
+	// Rings a quarter of their angle apart, at most 3.5 degrees (so land wider than about 5 degrees is never missed: 85 km
+	// on a 1,000 km planet), each ring's bearings as far apart as the rings.
+	constexpr double Growth = 0.25;
+	const double MaxSpacing = FMath::DegreesToRadians(3.5);
+	int32 Samples = 0;
+	double Angle = FirstArc / Radius;
+	while (Samples < MaxSamples)
+	{
+		const double RingAngle = FMath::Min(Angle, UE_DOUBLE_PI);
+		const double Spacing = FMath::Clamp(RingAngle * Growth, 1.0e-9, MaxSpacing);
+		const int32 Bearings = FMath::Clamp(FMath::CeilToInt32(UE_DOUBLE_TWO_PI * FMath::Sin(RingAngle) / Spacing), 8, 128);
+		for (int32 Bearing = 0; Bearing < Bearings && Samples < MaxSamples; ++Bearing, ++Samples)
+		{
+			const double B = Bearing * (UE_DOUBLE_TWO_PI / Bearings);
+			const FVector Direction = (D * FMath::Cos(RingAngle) + (T1 * FMath::Cos(B) + T2 * FMath::Sin(B)) * FMath::Sin(RingAngle)).GetSafeNormal();
+			const FVector Surface = SurfaceAt(Direction);
+			if (IsDry(Surface))
+			{
+				OutPosition = Surface;
+				OutArc = RingAngle * Radius;
+				return true;
+			}
+		}
+		if (RingAngle >= UE_DOUBLE_PI)
+		{
+			break;
+		}
+		Angle += Spacing;
 	}
 	return false;
 }

@@ -606,6 +606,9 @@ protected:
 	/** Recoveries from a terrain wait with nothing under the pawn, this wait (RecoverFromMissingTerrain). */
 	int32 TerrainRecoveryAttempts = 0;
 
+	/** This wait's spawn is at the sea's surface (a planet with no land, spherical Phase 6, G36): the pawn drops in and swims. */
+	bool bSpawnAtSea = false;
+
 	/** In the push-back band before the world's edge (see OnWorldEdgeChanged). */
 	bool bNearWorldEdge = false;
 

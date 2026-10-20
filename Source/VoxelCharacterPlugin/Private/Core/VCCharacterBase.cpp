@@ -29,6 +29,7 @@
 #include "VoxelCoordinates.h"
 #include "VoxelWorldConfiguration.h"
 #include "VoxelChunkManager.h"
+#include "VoxelSeaSurface.h"
 #include "VoxelScatterManager.h"
 #include "VoxelCollisionManager.h"
 #include "VoxelCharacterPlugin.h"
@@ -847,10 +848,26 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 	// Movement/collision are disabled during wait, so the character won't fall.
 	// PlaceOnTerrainAndResume() raycast (±50000u) handles precise final placement.
 	// (Not for an exact-location resume: a saved spot inside a dungeon must stay under the surface.)
+	// On a planet the search covers the whole planet (spherical Phase 6, WM-BP11, G36): a big planet's pole can be open
+	// sea far past the near search (4.7 km of arc on the 1,000 km test planet), and a spawn there waited in the planet's
+	// core for land that never streamed. A planet with no land at all spawns at the sea's surface, swimming.
 	FVector ValidSpawn;
-	if (!bResumeAtExactLocation && FVCVoxelNavigationHelper::FindSpawnablePosition(GetWorld(), GetActorLocation(), ValidSpawn))
+	bSpawnAtSea = false;
+	if (!bResumeAtExactLocation && FVCVoxelNavigationHelper::FindSpawnablePosition(GetWorld(), GetActorLocation(), ValidSpawn, 50000.f, /*bAnywhereOnPlanet=*/true))
 	{
 		SetActorLocation(ValidSpawn);
+	}
+	else if (!bResumeAtExactLocation && ChunkMgr->GetWorldBounds().Shape == EVoxelWorldBoundsShape::Shell)
+	{
+		const FVoxelSeaSurface Sea = ChunkMgr->GetSeaSurface(/*bOriginRelativePlane=*/true);
+		const FVector Direction = (GetActorLocation() - Sea.Center).GetSafeNormal();
+		if (Sea.bEnabled && Sea.bRadial && !Direction.IsNearlyZero())
+		{
+			const float HalfHeight = GetCapsuleComponent() ? GetCapsuleComponent()->GetScaledCapsuleHalfHeight() : 90.f;
+			SetActorLocation(Sea.Center + Direction * (Sea.Radius + HalfHeight));
+			bSpawnAtSea = true;
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("InitiateChunkBasedWait: no land on the planet; spawning at the sea's surface."));
+		}
 	}
 	// A planet: gravity at the new spot and the body upright in it before anything moves (spherical SP-F1, SP-F4).
 	if (UVCMovementComponent* VCMove = Cast<UVCMovementComponent>(GetCharacterMovement()); VCMove && VCMove->UpdatePlanetGravity())
@@ -1061,12 +1078,13 @@ void AVCCharacterBase::PlaceOnTerrainAndResume()
 	else
 	{
 		UE_LOG(LogVoxelCharacter, Warning,
-			TEXT("PlaceOnTerrainAndResume: Trace MISSED — character at (%.0f, %.0f, %.0f), World=%s"),
+			TEXT("PlaceOnTerrainAndResume: Trace MISSED — character at (%.0f, %.0f, %.0f), World=%s%s"),
 			SpawnPos.X, SpawnPos.Y, SpawnPos.Z,
-			*GetWorld()->GetName());
+			*GetWorld()->GetName(), bSpawnAtSea ? TEXT(" (at the sea's surface: swimming)") : TEXT(""));
 		// Nothing under the pawn after the wait: go to the respawn point and wait there (WM-I4). Without one (or after
-		// two tries) it falls, and falling out of the world respawns it.
-		if (RecoverFromMissingTerrain())
+		// two tries) it falls, and falling out of the world respawns it. A spawn at the sea's surface (a planet without
+		// land, G36) drops into the sea instead and swims.
+		if (!bSpawnAtSea && RecoverFromMissingTerrain())
 		{
 			return;
 		}
@@ -1077,8 +1095,10 @@ void AVCCharacterBase::PlaceOnTerrainAndResume()
 	{
 		VCMove->SnapUprightToGravity();
 	}
-	GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+	// At the sea's surface the pawn drops in and swims; on ground it walks.
+	GetCharacterMovement()->SetMovementMode((bSpawnAtSea && !bTraceHit) ? MOVE_Falling : MOVE_Walking);
 	bIsWaitingForTerrain = false;
+	bSpawnAtSea = false;
 	TerrainRecoveryAttempts = 0;
 
 	UE_LOG(LogVoxelCharacter, Log,

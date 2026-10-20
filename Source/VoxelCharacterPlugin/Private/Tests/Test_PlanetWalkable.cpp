@@ -11,6 +11,7 @@
 #include "Movement/VCGravityFrame.h"
 #include "Movement/VCMovementComponent.h"
 #include "Movement/VCVoxelNavigationHelper.h"
+#include "Camera/VCThirdPersonCameraMode.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -791,6 +792,108 @@ bool FVCPlanet_PlaceItem::RunTest(const FString& Parameters)
 	UCharacterMovementComponent* PlaneMove = NewObject<UCharacterMovementComponent>();
 	USkeletalMeshComponent* PlaneBody = NewObject<USkeletalMeshComponent>();
 	TestFalse(TEXT("Default gravity: no radial ragdoll"), AVCCharacterBase::StartRadialRagdoll(PlaneBody, PlaneMove, Pull) || !Pull.IsZero() || !PlaneBody->IsGravityEnabled());
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Spherical Phase 6, WM-BP11 (G36): the spawn search at scale. On a 1,000 km planet whose only land is a cap 6 degrees
+// across, 60 degrees from the start (1,000 km of open sea), the near search (50,000 uu of arc) finds nothing; the search
+// at scale finds the cap within about a quarter of its distance, in at most 4,096 samples (on a 50 km planet too); with
+// no land at all it finds nothing.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlanet_SpawnAtScale, "VoxelCharacter.Planet.SpawnAtScale", VC_PLANET_FLAGS)
+bool FVCPlanet_SpawnAtScale::RunTest(const FString& Parameters)
+{
+	using namespace VCPlanetWalkableTestHelpers;
+
+	struct FCase
+	{
+		const TCHAR* Name;
+		double Radius;
+		double CapFromStartDeg;
+		double CapRadiusDeg;
+	};
+	const FCase Cases[] = {
+		{ TEXT("1,000 km planet, land 60 degrees away"), 1.0e8, 60.0, 3.0 },
+		{ TEXT("1,000 km planet, land on the far side"), 1.0e8, 170.0, 3.0 },
+		{ TEXT("50 km planet, land 30 degrees away"), 5.0e6, 30.0, 3.0 },
+	};
+	const FVector Start = LatLon(90.0, 0.0);
+	for (const FCase& Case : Cases)
+	{
+		const FVector Land = LatLon(90.0 - Case.CapFromStartDeg, 40.0);
+		const FVoxelSeaSurface Sea = FVoxelSeaSurface::MakeSphere(FVector::ZeroVector, Case.Radius);
+		int32 Calls = 0;
+		auto SurfaceAt = [&](const FVector& Direction)
+		{
+			++Calls;
+			const bool bDry = AngleDeg(Direction, Land) < Case.CapRadiusDeg;
+			return Direction * (bDry ? Case.Radius + 100.0 : Case.Radius - 100.0);
+		};
+		FVector Out;
+		int32 Ring = 0;
+		const bool bNear = FVCVoxelNavigationHelper::FindPlanetSpawnPoint(FVector::ZeroVector, Case.Radius, Start, 4800.0, 50000.0, SurfaceAt, Sea, Out, Ring);
+		const int32 NearCalls = Calls;
+		Calls = 0;
+		double Arc = 0.0;
+		const bool bFound = bNear || FVCVoxelNavigationHelper::FindPlanetSpawnPointAtScale(FVector::ZeroVector, Case.Radius, Start, 50000.0, SurfaceAt, Sea, Out, Arc);
+		const double TrueArc = FMath::DegreesToRadians(FMath::Max(Case.CapFromStartDeg - Case.CapRadiusDeg, 0.0)) * Case.Radius;
+		AddInfo(FString::Printf(TEXT("%s: near search %d (%d samples); at scale found %d at %.0f of arc (the land's edge %.0f away), %.2f deg into the cap, %d samples"),
+			Case.Name, bNear ? 1 : 0, NearCalls, bFound ? 1 : 0, Arc, TrueArc, Case.CapRadiusDeg - AngleDeg(Out, Land), Calls));
+		TestTrue(*FString::Printf(TEXT("%s: land found"), Case.Name), bFound);
+		TestTrue(*FString::Printf(TEXT("%s: on the land"), Case.Name), bFound && AngleDeg(Out, Land) < Case.CapRadiusDeg);
+		TestTrue(*FString::Printf(TEXT("%s: at most the sample cap"), Case.Name), Calls <= 4096);
+		if (!bNear)
+		{
+			TestTrue(*FString::Printf(TEXT("%s: within about a quarter of its distance"), Case.Name), Arc <= 1.3 * TrueArc + 50000.0);
+		}
+	}
+	// No land at all.
+	{
+		const FVoxelSeaSurface Sea = FVoxelSeaSurface::MakeSphere(FVector::ZeroVector, 1.0e8);
+		int32 Calls = 0;
+		auto Flooded = [&](const FVector& Direction)
+		{
+			++Calls;
+			return Direction * (1.0e8 - 100.0);
+		};
+		FVector Out;
+		double Arc = 0.0;
+		TestFalse(TEXT("No land: nothing found"), FVCVoxelNavigationHelper::FindPlanetSpawnPointAtScale(FVector::ZeroVector, 1.0e8, Start, 50000.0, Flooded, Sea, Out, Arc));
+		AddInfo(FString::Printf(TEXT("No land: %d samples to the antipode"), Calls));
+		TestTrue(TEXT("No land: at most the sample cap"), Calls <= 4096);
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Spherical Phase 6, G41: the third-person camera's pivot snaps on a teleport. The camera is the streaming viewer, so a
+// pivot lagging along the straight line from the old spot swept the window through the planet. A move within
+// TeleportSnapDistance in a frame lags as before; a jump past it snaps; no lag snaps.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCamera_TeleportSnap, "VoxelCharacter.Camera.TeleportSnap", VC_PLANET_FLAGS)
+bool FVCCamera_TeleportSnap::RunTest(const FString& Parameters)
+{
+	const FVector Old(1000.0, 2000.0, 250000.0);
+	bool bSnapped = false;
+	// Walking: lags.
+	const FVector Walk = UVCThirdPersonCameraMode::ComputeLaggedPivot(Old, Old + FVector(10.0, 0.0, 0.0), Old, 1.0f / 60.0f, 10.0f, 5000.0f, bSnapped);
+	TestFalse(TEXT("A step lags"), bSnapped);
+	TestTrue(TEXT("A step: the pivot moves part of the way"), Walk.X > Old.X && Walk.X < Old.X + 10.0);
+	// Fast flight (100,000 uu/s): still lags.
+	UVCThirdPersonCameraMode::ComputeLaggedPivot(Old, Old + FVector(0.0, 1700.0, 0.0), Old, 1.0f / 60.0f, 10.0f, 5000.0f, bSnapped);
+	TestFalse(TEXT("Fast flight lags"), bSnapped);
+	// A teleport across the planet: snaps.
+	const FVector Far(-180000.0, 120000.0, -90000.0);
+	const FVector Teleport = UVCThirdPersonCameraMode::ComputeLaggedPivot(Old, Far, Old, 1.0f / 60.0f, 10.0f, 5000.0f, bSnapped);
+	TestTrue(TEXT("A teleport snaps"), bSnapped);
+	TestTrue(TEXT("A teleport lands the pivot on the character"), Teleport.Equals(Far, 1.0e-6));
+	// Snapping off: lags even across the planet (the old behaviour).
+	const FVector Swept = UVCThirdPersonCameraMode::ComputeLaggedPivot(Old, Far, Old, 1.0f / 60.0f, 10.0f, 0.0f, bSnapped);
+	TestFalse(TEXT("Snap off: lags"), bSnapped);
+	TestFalse(TEXT("Snap off: the pivot sweeps along the line"), Swept.Equals(Far, 1.0));
+	// No lag: on the character.
+	TestTrue(TEXT("No lag: on the character"), UVCThirdPersonCameraMode::ComputeLaggedPivot(Old, Old + FVector(10.0, 0.0, 0.0), Old, 1.0f / 60.0f, 0.0f, 5000.0f, bSnapped).Equals(Old + FVector(10.0, 0.0, 0.0), 1.0e-9));
 	return true;
 }
 

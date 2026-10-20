@@ -36,24 +36,33 @@ FTransform UVCThirdPersonCameraMode::ComputeDesiredTransform(const AVCCharacterB
 	const FVector RotatedOffset = YawOnly.RotateVector(TargetOffset);
 	const FVector IdealPivot = CharacterLocation + RotatedOffset;
 
-	// Apply camera lag
+	// Apply camera lag (a teleport snaps: the camera is the streaming viewer, G41)
 	if (!bPivotInitialized)
 	{
 		LaggedPivot = IdealPivot;
 		bPivotInitialized = true;
 	}
-	else if (LagSpeed > 0.f && DeltaTime > 0.f)
-	{
-		LaggedPivot = FMath::VInterpTo(LaggedPivot, IdealPivot, DeltaTime, LagSpeed);
-	}
 	else
 	{
-		LaggedPivot = IdealPivot;
+		bool bSnapped = false;
+		LaggedPivot = ComputeLaggedPivot(LaggedPivot, IdealPivot, LastIdealPivot, DeltaTime, LagSpeed, TeleportSnapDistance, bSnapped);
 	}
+	LastIdealPivot = IdealPivot;
 
 	// Camera location: pull back from pivot along view direction
 	const FVector ViewDirection = ViewRotation.Vector();
 	const FVector CameraLocation = LaggedPivot - ViewDirection * ArmLength;
 
 	return FTransform(ViewRotation, CameraLocation);
+}
+
+FVector UVCThirdPersonCameraMode::ComputeLaggedPivot(const FVector& InLaggedPivot, const FVector& IdealPivot, const FVector& InLastIdealPivot,
+	float DeltaTime, float InLagSpeed, float SnapDistance, bool& bOutSnapped)
+{
+	bOutSnapped = SnapDistance > 0.f && FVector::DistSquared(IdealPivot, InLastIdealPivot) > FMath::Square(static_cast<double>(SnapDistance));
+	if (bOutSnapped || InLagSpeed <= 0.f || DeltaTime <= 0.f)
+	{
+		return IdealPivot;
+	}
+	return FMath::VInterpTo(InLaggedPivot, IdealPivot, DeltaTime, InLagSpeed);
 }

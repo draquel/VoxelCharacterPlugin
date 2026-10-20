@@ -309,6 +309,17 @@ public:
 	/** @return The level debug flight holds while not climbing: distance from the planet centre (Z on a heightmap world) */
 	double GetFlightHoldLevel() const { return FlightHoldLevel; }
 
+	/**
+	 * Debug flight: hold this level instead (no climb), reached at up to MaxFlySpeed along local up; vox.FlyTo moves it each
+	 * frame along its altitude profile (spherical Phase 6, WM-BP10).
+	 * @param Level Distance from the planet centre (Z on a heightmap world)
+	 */
+	void SetFlightHoldLevel(double Level)
+	{
+		FlightClimb = 0.f;
+		FlightHoldLevel = Level;
+	}
+
 	// --- Breath (QA R11) ---
 
 	/** Breath lost per second while the head is underwater (Breath is in seconds of air). */
