@@ -286,7 +286,9 @@ centred on the sample, half a voxel plus a margin; cubic worlds: the block's own
 place a block"); the demo `AVoxelWorldTestActor` build / place inputs refuse brushes that overlap a pawn. As a safety
 net for everything else (stamps, scripts), an edit near a pawn arms `UVCMovementComponent`, and when the new
 collision lands nearby `ResolveTerrainEmbedding()` lifts the pawn onto the new surface if its centre and upper body are
-inside solid voxels (players and NPCs both use this component).
+inside solid voxels (players and NPCs both use this component). "Near" is a brush's sphere, or for an edit with no
+centre (a POI's terraform, a dungeon stamp, undo, a clear, a load) the box of the voxels it changed in the chunk
+(`UVoxelEditManager::GetBroadcastEditBounds`; world modes review G55), within the capsule's half height plus 200 uu.
 
 ### Custom Floor Finding
 
