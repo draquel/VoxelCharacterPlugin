@@ -17,6 +17,8 @@
 #include "EngineUtils.h"
 #include "GameFramework/WorldSettings.h"
 #include "VoxelChunkManager.h"
+#include "VoxelEditManager.h"
+#include "VoxelMaterialRegistry.h"
 #include "VoxelSeaSurface.h"
 #include "VoxelWorldConfiguration.h"
 #include "DistanceBandLODStrategy.h"
@@ -894,6 +896,114 @@ bool FVCCamera_TeleportSnap::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Snap off: the pivot sweeps along the line"), Swept.Equals(Far, 1.0));
 	// No lag: on the character.
 	TestTrue(TEXT("No lag: on the character"), UVCThirdPersonCameraMode::ComputeLaggedPivot(Old, Old + FVector(10.0, 0.0, 0.0), Old, 1.0f / 60.0f, 0.0f, 5000.0f, bSnapped).Equals(Old + FVector(10.0, 0.0, 0.0), 1.0e-9));
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// World modes review G55: a system edit (a POI's terraform, a dungeon stamp) has no centre or radius, so the embed check
+// armed from the brush's sphere never armed for one. It now goes by the box of the voxels the edit changed
+// (UVoxelEditManager::GetBroadcastEditBounds): filling voxels at the pawn arms it; edits far off, in the pawn's own chunk
+// or another, and a brush far off do not. On a plane and on a planet (the same world-aligned chunk boxes).
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCEdit_SystemEditArmsEmbedCheck, "VoxelCharacter.Edit.SystemEditArmsEmbedCheck", VC_PLANET_FLAGS)
+bool FVCEdit_SystemEditArmsEmbedCheck::RunTest(const FString& Parameters)
+{
+	using namespace VCPlanetWalkableTestHelpers;
+
+	// Pure: chunk-local voxel bounds to the world, through the origin, the chunk size and the voxel size.
+	const FBox Pure = UVCMovementComponent::GetEditedVoxelWorldBox(FIntVector(1, -2, 0), FIntVector(0, 3, 31), FIntVector(1, 3, 31),
+		FVector(100.0, 0.0, -50.0), 32, 50.0f);
+	TestTrue(TEXT("Pure: the box's minimum corner"), Pure.Min.Equals(FVector(100.0 + 1600.0, -3200.0 + 150.0, -50.0 + 1550.0)));
+	TestTrue(TEXT("Pure: the box's maximum corner (the upper voxel's far side)"), Pure.Max.Equals(FVector(100.0 + 1700.0, -3200.0 + 200.0, -50.0 + 1600.0)));
+
+	for (const bool bPlanet : { false, true })
+	{
+		const TCHAR* Mode = bPlanet ? TEXT("Planet") : TEXT("Plane");
+		FVoxelWorldHarness H(bPlanet);
+		UVoxelEditManager* Edits = H.Manager->GetEditManager();
+		// In the air, so the filled voxels are the only solid ones near the pawn.
+		const FVector PawnLocation = bPlanet ? LatLon(45.0, 20.0) * (PlanetRadius + 2500.0) : FVector(230.0, 180.0, 5030.0);
+		AVCCharacterBase* Character = H.SpawnCharacter(PawnLocation);
+		UVCMovementComponent* Move = Character ? Cast<UVCMovementComponent>(Character->GetCharacterMovement()) : nullptr;
+		if (!Edits || !Move)
+		{
+			AddError(FString::Printf(TEXT("%s: no edit manager or no character"), Mode));
+			continue;
+		}
+
+		// Every broadcast these system edits make: no centre, no radius (the brush's sphere cannot arm the check).
+		float MaxRadius = 0.0f;
+		int32 Broadcasts = 0;
+		const FDelegateHandle Handle = Edits->OnChunkEdited.AddLambda([&MaxRadius, &Broadcasts](const FIntVector&, EEditSource, const FVector&, float Radius)
+		{
+			MaxRadius = FMath::Max(MaxRadius, Radius);
+			++Broadcasts;
+		});
+		const double VS = H.Config->VoxelSize;
+		const double ChunkWorldSize = H.Config->ChunkSize * VS;
+		auto Fill = [Edits](const TArray<FVector>& Points)
+		{
+			Edits->SetEditSource(EEditSource::System);
+			Edits->BeginEditOperation(TEXT("System fill"));
+			for (const FVector& P : Points)
+			{
+				Edits->ApplyEdit(P, FVoxelData::Solid(EVoxelMaterial::Stone), EEditMode::Set);
+			}
+			Edits->EndEditOperation();
+		};
+
+		TestFalse(FString::Printf(TEXT("%s: not armed before any edit"), Mode), Move->IsEmbedCheckArmed());
+
+		// Far off in the pawn's own chunk: the voxel at the corner of the chunk farthest from the pawn (over 1,000 uu).
+		const FIntVector PawnChunk = H.Manager->WorldToChunkCoord(PawnLocation);
+		const FVector ChunkMin = H.Config->WorldOrigin + FVector(PawnChunk) * ChunkWorldSize;
+		FVector SameChunkFar = FVector::ZeroVector;
+		for (int32 Axis = 0; Axis < 3; ++Axis)
+		{
+			const double Local = PawnLocation[Axis] - ChunkMin[Axis];
+			SameChunkFar[Axis] = ChunkMin[Axis] + (Local > ChunkWorldSize * 0.5 ? 0.5 * VS : ChunkWorldSize - 0.5 * VS);
+		}
+		TestEqual(FString::Printf(TEXT("%s: the far voxel is in the pawn's chunk"), Mode), H.Manager->WorldToChunkCoord(SameChunkFar), PawnChunk);
+		Fill({ SameChunkFar });
+		TestFalse(FString::Printf(TEXT("%s: a fill far off in the pawn's chunk does not arm"), Mode), Move->IsEmbedCheckArmed());
+
+		// Another chunk, well away.
+		Fill({ PawnLocation + FVector(5.0 * ChunkWorldSize, -3.0 * ChunkWorldSize, ChunkWorldSize), PawnLocation + FVector(5.0 * ChunkWorldSize + VS, -3.0 * ChunkWorldSize, ChunkWorldSize) });
+		TestFalse(FString::Printf(TEXT("%s: a fill in a chunk far off does not arm"), Mode), Move->IsEmbedCheckArmed());
+		TestEqual(FString::Printf(TEXT("%s: the system edits broadcast no radius"), Mode), MaxRadius, 0.0f);
+		TestTrue(FString::Printf(TEXT("%s: the system edits broadcast"), Mode), Broadcasts >= 2);
+
+		// A brush far off (the sphere path, unchanged).
+		Edits->SetEditSource(EEditSource::Player);
+		FVoxelBrushParams Brush;
+		Brush.Radius = 100.0f;
+		Brush.DensityDelta = 255;
+		Edits->ApplyBrushEdit(PawnLocation + FVector(0.0, 4.0 * ChunkWorldSize, 0.0), Brush, EEditMode::Add);
+		TestFalse(FString::Printf(TEXT("%s: a brush far off does not arm"), Mode), Move->IsEmbedCheckArmed());
+
+		// A system fill at the pawn: a block of voxels through the capsule.
+		Edits->OnChunkEdited.Remove(Handle);
+		MaxRadius = 0.0f;
+		const FDelegateHandle AtPawn = Edits->OnChunkEdited.AddLambda([&MaxRadius](const FIntVector&, EEditSource, const FVector&, float Radius)
+		{
+			MaxRadius = FMath::Max(MaxRadius, Radius);
+		});
+		TArray<FVector> Block;
+		for (int32 X = -1; X <= 1; ++X)
+		{
+			for (int32 Y = -1; Y <= 1; ++Y)
+			{
+				for (int32 Z = -2; Z <= 2; ++Z)
+				{
+					Block.Add(PawnLocation + FVector(X, Y, Z) * VS);
+				}
+			}
+		}
+		Fill(Block);
+		TestEqual(FString::Printf(TEXT("%s: the fill at the pawn broadcast no radius"), Mode), MaxRadius, 0.0f);
+		TestTrue(FString::Printf(TEXT("%s: a system fill at the pawn arms the check"), Mode), Move->IsEmbedCheckArmed());
+		Edits->OnChunkEdited.Remove(AtPawn);
+	}
 	return true;
 }
 

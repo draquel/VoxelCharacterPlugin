@@ -223,6 +223,28 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Movement|Voxel")
 	bool ResolveTerrainEmbedding();
 
+	/**
+	 * True while an edit near the pawn keeps the embed check armed: new collision landing near the pawn then runs
+	 * ResolveTerrainEmbedding. A brush arms it when its sphere comes near the capsule, an edit with no centre (a POI's
+	 * terraform, a dungeon stamp, undo, a clear, a load) when the voxels it changed do. Authority only.
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Voxel")
+	bool IsEmbedCheckArmed() const;
+
+	/**
+	 * Pure: the world box of chunk-local voxels (the bounds UVoxelEditManager::GetBroadcastEditBounds gives). Chunks are
+	 * world-aligned boxes on every world mode, so a planet's is the same box.
+	 * @param ChunkCoord  The chunk
+	 * @param LocalMin    Lowest chunk-local voxel on each axis (inclusive)
+	 * @param LocalMax    Highest chunk-local voxel on each axis (inclusive)
+	 * @param WorldOrigin The voxel world's origin
+	 * @param ChunkSize   Voxels per chunk edge
+	 * @param VoxelSize   World units per voxel
+	 * @return The box from LocalMin's lower corner to LocalMax's upper corner
+	 */
+	static FBox GetEditedVoxelWorldBox(const FIntVector& ChunkCoord, const FIntVector& LocalMin, const FIntVector& LocalMax,
+		const FVector& WorldOrigin, int32 ChunkSize, float VoxelSize);
+
 	/** Max voxels scanned upward for headroom when lifting an embedded pawn. */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Movement|Voxel", meta = (ClampMin = "1"))
 	int32 EmbedResolveMaxScanVoxels = 64;

@@ -917,15 +917,56 @@ void UVCMovementComponent::OnVoxelChunkModified(const FIntVector& ChunkCoord, EE
 	// collision until the chunk re-cooks, so arm a check that runs when the new collision lands.
 	const ACharacter* Character = GetCharacterOwner();
 	const UWorld* World = GetWorld();
-	if (Character && World && Character->HasAuthority())
+	if (!Character || !World || !Character->HasAuthority())
 	{
-		const UCapsuleComponent* Capsule = Character->GetCapsuleComponent();
-		const float Reach = EditRadius + (Capsule ? Capsule->GetScaledCapsuleHalfHeight() : 100.f) + 200.f;
-		if (FVector::DistSquared(EditCenter, Character->GetActorLocation()) <= FMath::Square(Reach))
+		return;
+	}
+	const UCapsuleComponent* Capsule = Character->GetCapsuleComponent();
+	const float Reach = (Capsule ? Capsule->GetScaledCapsuleHalfHeight() : 100.f) + 200.f;
+	const FVector PawnLocation = Character->GetActorLocation();
+	bool bReachesPawn = false;
+	if (EditRadius > 0.f)
+	{
+		// A brush: its sphere.
+		bReachesPawn = FVector::DistSquared(EditCenter, PawnLocation) <= FMath::Square(EditRadius + Reach);
+	}
+	else
+	{
+		// No centre: a batch of single-voxel edits (a POI's terraform, a campsite pad, a dungeon stamp), undo, a clear or
+		// a load. The box of the voxels the edit changed in this chunk, which the edit manager gives while it broadcasts;
+		// without it, the whole chunk. Chunks are world-aligned boxes on every world mode, a planet's too.
+		const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(World);
+		const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
+		if (Config)
 		{
-			EmbedCheckArmedUntil = World->GetTimeSeconds() + 10.0;
+			FIntVector LocalMin(0), LocalMax(Config->ChunkSize - 1);
+			if (const UVoxelEditManager* EditMgr = ChunkMgr->GetEditManager())
+			{
+				EditMgr->GetBroadcastEditBounds(LocalMin, LocalMax);
+			}
+			const FBox Edited = GetEditedVoxelWorldBox(ChunkCoord, LocalMin, LocalMax, Config->WorldOrigin, Config->ChunkSize,
+				Config->VoxelSize);
+			bReachesPawn = Edited.ComputeSquaredDistanceToPoint(PawnLocation) <= FMath::Square(Reach);
 		}
 	}
+	if (bReachesPawn)
+	{
+		EmbedCheckArmedUntil = World->GetTimeSeconds() + 10.0;
+	}
+}
+
+FBox UVCMovementComponent::GetEditedVoxelWorldBox(const FIntVector& ChunkCoord, const FIntVector& LocalMin,
+	const FIntVector& LocalMax, const FVector& WorldOrigin, int32 ChunkSize, float VoxelSize)
+{
+	// Voxel i of a chunk covers [i, i + 1) voxels from the chunk's minimum corner (UVoxelEditManager::WorldToLocalPos).
+	const FVector ChunkMin = WorldOrigin + FVector(ChunkCoord) * (double(ChunkSize) * VoxelSize);
+	return FBox(ChunkMin + FVector(LocalMin) * VoxelSize, ChunkMin + FVector(LocalMax + FIntVector(1)) * VoxelSize);
+}
+
+bool UVCMovementComponent::IsEmbedCheckArmed() const
+{
+	const UWorld* World = GetWorld();
+	return World && EmbedCheckArmedUntil >= 0.0 && World->GetTimeSeconds() <= EmbedCheckArmedUntil;
 }
 
 void UVCMovementComponent::SetSprinting(bool bWantsSprint)
