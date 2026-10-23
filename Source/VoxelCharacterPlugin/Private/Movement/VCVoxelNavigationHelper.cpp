@@ -100,15 +100,15 @@ FVoxelTerrainContext FVCVoxelNavigationHelper::QueryTerrainContext(const UWorld*
 		break;
 	}
 
-	// Water state — check the voxel water flag at character position; the depth is the sea's (SP-E1: the plane at
-	// WaterLevel + WorldOrigin.Z, or along the radius under WaterRadius on a planet)
+	// Water state — check the voxel water flag at character position; the depth is the sea's (SP-E1: under the WaterLevel
+	// plane generation floods, G19, or along the radius under WaterRadius on a planet)
 	if (Config->bEnableWaterLevel)
 	{
 		const FVoxelData VoxelAtLocation = ChunkMgr->GetVoxelAtWorldPosition(Location);
 		if (VoxelAtLocation.HasWaterFlag())
 		{
 			Context.bIsUnderwater = true;
-			Context.WaterDepth = FMath::Max(0.0, ChunkMgr->GetSeaSurface(/*bOriginRelativePlane=*/true).GetDepth(Location));
+			Context.WaterDepth = FMath::Max(0.0, ChunkMgr->GetSeaSurface().GetDepth(Location));
 		}
 	}
 
@@ -158,7 +158,7 @@ bool FVCVoxelNavigationHelper::IsPositionUnderwater(const UWorld* World, const F
 	const FVoxelData VoxelAtLocation = ChunkMgr->GetVoxelAtWorldPosition(Location);
 	if (VoxelAtLocation.HasWaterFlag())
 	{
-		OutWaterDepth = FMath::Max(0.0, ChunkMgr->GetSeaSurface(/*bOriginRelativePlane=*/true).GetDepth(Location));
+		OutWaterDepth = FMath::Max(0.0, ChunkMgr->GetSeaSurface().GetDepth(Location));
 		return true;
 	}
 
@@ -189,9 +189,9 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 	}
 
 	const float ChunkWorldSize = Config->ChunkSize * Config->VoxelSize;
-	// Terrain heights are world Z, so the water surface is too (the nav, swim and NPC code use the same plane: the sea at
-	// WaterLevel + WorldOrigin.Z; the sphere of WaterRadius on a planet, SP-E1).
-	const FVoxelSeaSurface Sea = ChunkMgr->GetSeaSurface(/*bOriginRelativePlane=*/true);
+	// Terrain heights are world Z, so the water surface is too: the sea at WaterLevel, where generation floods, wherever
+	// WorldOrigin is (G19; the nav, swim and NPC code read the same sea); the sphere of WaterRadius on a planet, SP-E1.
+	const FVoxelSeaSurface Sea = ChunkMgr->GetSeaSurface();
 	const float WaterLevel = static_cast<float>(Sea.PlaneZ);
 	const bool bHasWater = Sea.bEnabled;
 

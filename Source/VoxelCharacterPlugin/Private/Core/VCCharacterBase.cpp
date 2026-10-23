@@ -859,7 +859,7 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 	}
 	else if (!bResumeAtExactLocation && ChunkMgr->GetWorldBounds().Shape == EVoxelWorldBoundsShape::Shell)
 	{
-		const FVoxelSeaSurface Sea = ChunkMgr->GetSeaSurface(/*bOriginRelativePlane=*/true);
+		const FVoxelSeaSurface Sea = ChunkMgr->GetSeaSurface();
 		const FVector Direction = (GetActorLocation() - Sea.Center).GetSafeNormal();
 		if (Sea.bEnabled && Sea.bRadial && !Direction.IsNearlyZero())
 		{
