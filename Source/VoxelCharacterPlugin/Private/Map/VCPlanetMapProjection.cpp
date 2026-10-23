@@ -106,6 +106,7 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 	}
 	const int32 N = Grid.GetCellsPerEdge();
 	const double CellUV = Grid.GetCellUV();
+	const double InvCellUV = 1.0 / CellUV;
 	Step = FMath::Clamp(Step, 1, TexSize);
 	const int32 Points = (TexSize + Step - 1) / Step + 1;
 
@@ -164,15 +165,21 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 			++Drawn;
 			return;
 		}
-		const double FU = (UV.X + 1.0) / CellUV;
-		const double FV = (UV.Y + 1.0) / CellUV;
-		const int32 IU = FMath::Clamp(FMath::FloorToInt32(FU), 0, N - 1);
-		const int32 IV = FMath::Clamp(FMath::FloorToInt32(FV), 0, N - 1);
+		// UV >= -1, so FU and FV are not negative (but by rounding, which the clamps take): truncation is the floor, without
+		// the library call (G64: this runs for every texel of the minimap).
+		const double FU = (UV.X + 1.0) * InvCellUV;
+		const double FV = (UV.Y + 1.0) * InvCellUV;
+		const int32 IU = FMath::Clamp(static_cast<int32>(FU), 0, N - 1);
+		const int32 IV = FMath::Clamp(static_cast<int32>(FV), 0, N - 1);
 		const FIntPoint Tile = Grid.ToAtlas(Face, IU, IV);
 		const uint64 Key = (static_cast<uint64>(static_cast<uint32>(Tile.X)) << 32) | static_cast<uint32>(Tile.Y);
 		if (Key != CachedKey)
 		{
 			CachedKey = Key;
+			if (VisitedTiles)
+			{
+				VisitedTiles->Add(Tile);
+			}
 			bCachedExplored = !bRequireExplored || Map.IsTileExplored(Tile);
 			CachedTile = bCachedExplored ? Map.GetTile(Tile) : nullptr;
 			const bool bNeedsImage = bCachedExplored && (!CachedTile || (bWantDetail && CachedTile->Resolution < Res));
@@ -193,8 +200,8 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 			return;
 		}
 		const int32 TileRes = CachedTile->Resolution;
-		const int32 PX = FMath::Clamp(FMath::FloorToInt32((FU - IU) * TileRes), 0, TileRes - 1);
-		const int32 PY = FMath::Clamp(FMath::FloorToInt32((FV - IV) * TileRes), 0, TileRes - 1);
+		const int32 PX = FMath::Clamp(static_cast<int32>((FU - IU) * TileRes), 0, TileRes - 1);
+		const int32 PY = FMath::Clamp(static_cast<int32>((FV - IV) * TileRes), 0, TileRes - 1);
 		Write(X, Y, CachedTile->PixelData[PY * TileRes + PX]);
 		++Drawn;
 	};
@@ -212,18 +219,29 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 			const int32 Y0 = CY * Step;
 			const int32 X1 = FMath::Min(X0 + Step, TexSize);
 			const int32 Y1 = FMath::Min(Y0 + Step, TexSize);
+			if (bOneFace)
+			{
+				// One face (G64): UV is bilinear over the block, so along a row it steps by a constant from the row's left
+				// edge (the same interpolation as below, taken across the row last).
+				const double InvStep = 1.0 / Step;
+				for (int32 Y = Y0; Y < Y1; ++Y)
+				{
+					const double TY = (Y + 0.5 - Y0) * InvStep;
+					const FVector2D Left = FMath::Lerp(C00.UV, C01.UV, TY);
+					const FVector2D Delta = (FMath::Lerp(C10.UV, C11.UV, TY) - Left) * InvStep;
+					FVector2D UV = Left + Delta * 0.5;
+					for (int32 X = X0; X < X1; ++X, UV += Delta)
+					{
+						Shade(X, Y, C00.Face, UV);
+					}
+				}
+				continue;
+			}
 			for (int32 Y = Y0; Y < Y1; ++Y)
 			{
 				for (int32 X = X0; X < X1; ++X)
 				{
-					if (bOneFace)
-					{
-						const double TX = (X + 0.5 - X0) / Step;
-						const double TY = (Y + 0.5 - Y0) / Step;
-						const FVector2D UV = FMath::Lerp(FMath::Lerp(C00.UV, C10.UV, TX), FMath::Lerp(C01.UV, C11.UV, TX), TY);
-						Shade(X, Y, C00.Face, UV);
-						continue;
-					}
+					// The block spans faces (or leaves the ground): each texel's own direction.
 					FVector Direction;
 					if (!TexelDirection(X + 0.5, Y + 0.5, Direction))
 					{
@@ -234,6 +252,127 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 					Shade(X, Y, Coord.Face, Coord.UV);
 				}
 			}
+		}
+	}
+	return Drawn;
+}
+
+// ==================== FVCPlaneMapSampler ====================
+
+int32 FVCPlaneMapSampler::Fill(const UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 TexSize, const FVector& Center, double WorldPerPixel) const
+{
+	const double TileSize = Map.GetTileWorldSize();
+	if (!OutBGRA || TexSize <= 0 || TileSize <= 0.0 || WorldPerPixel <= 0.0)
+	{
+		return 0;
+	}
+	const double Extent = 0.5 * TexSize * WorldPerPixel;
+	const double WorldMinX = Center.X - Extent;
+	const double WorldMinY = Center.Y - Extent;
+	auto Write = [](uint8* Texel, const FColor& Color)
+	{
+		Texel[0] = Color.B;
+		Texel[1] = Color.G;
+		Texel[2] = Color.R;
+		Texel[3] = Color.A;
+	};
+	int32 Drawn = 0;
+
+	if (!bTexelFill)
+	{
+		// As before G64: clear to the background, then blit every pixel of every tile in view at its near corner.
+		for (int32 I = 0; I < TexSize * TexSize; ++I)
+		{
+			Write(OutBGRA + static_cast<int64>(I) * 4, Background);
+		}
+		const FIntPoint CenterTile = Map.WorldToTileCoord(Center);
+		const int32 TileRadius = FMath::CeilToInt(Extent / TileSize);
+		for (int32 TY = -TileRadius; TY <= TileRadius; ++TY)
+		{
+			for (int32 TX = -TileRadius; TX <= TileRadius; ++TX)
+			{
+				const FIntPoint TileCoord(CenterTile.X + TX, CenterTile.Y + TY);
+				if (VisitedTiles)
+				{
+					VisitedTiles->Add(TileCoord);
+				}
+				const FVoxelMapTile* Tile = Map.GetTile(TileCoord);
+				if (!Tile || Tile->Resolution <= 0 || Tile->PixelData.Num() < Tile->Resolution * Tile->Resolution)
+				{
+					continue;
+				}
+				const FVector TileWorldOrigin = Map.TileCoordToWorld(TileCoord);
+				const int32 SrcRes = Tile->Resolution;
+				const double SrcPixelWorldSize = TileSize / SrcRes;
+				for (int32 PY = 0; PY < SrcRes; ++PY)
+				{
+					for (int32 PX = 0; PX < SrcRes; ++PX)
+					{
+						const int32 DstX = FMath::FloorToInt32((TileWorldOrigin.X + PX * SrcPixelWorldSize - WorldMinX) / WorldPerPixel);
+						const int32 DstY = FMath::FloorToInt32((TileWorldOrigin.Y + PY * SrcPixelWorldSize - WorldMinY) / WorldPerPixel);
+						if (DstX < 0 || DstX >= TexSize || DstY < 0 || DstY >= TexSize)
+						{
+							continue;
+						}
+						Write(OutBGRA + (static_cast<int64>(DstY) * TexSize + DstX) * 4, Tile->PixelData[PY * SrcRes + PX]);
+						++Drawn;
+					}
+				}
+			}
+		}
+		return Drawn;
+	}
+
+	// Texel by texel: the column's and the row's tile and position in it, worked out once each. The sample point is just
+	// inside the texel's far corner.
+	const FVector GridOrigin = Map.TileCoordToWorld(FIntPoint(0, 0));
+	const double Inside = WorldPerPixel * 1.0e-4;
+	TArray<int32> ColumnTile, RowTile;
+	TArray<double> ColumnFraction, RowFraction;
+	ColumnTile.SetNumUninitialized(TexSize);
+	RowTile.SetNumUninitialized(TexSize);
+	ColumnFraction.SetNumUninitialized(TexSize);
+	RowFraction.SetNumUninitialized(TexSize);
+	for (int32 I = 0; I < TexSize; ++I)
+	{
+		const double TX = (WorldMinX + (I + 1) * WorldPerPixel - Inside - GridOrigin.X) / TileSize;
+		const double TY = (WorldMinY + (I + 1) * WorldPerPixel - Inside - GridOrigin.Y) / TileSize;
+		ColumnTile[I] = FMath::FloorToInt32(TX);
+		RowTile[I] = FMath::FloorToInt32(TY);
+		ColumnFraction[I] = TX - ColumnTile[I];
+		RowFraction[I] = TY - RowTile[I];
+	}
+	FIntPoint CachedCoord(MAX_int32, MAX_int32);
+	const FVoxelMapTile* Tile = nullptr;
+	for (int32 Y = 0; Y < TexSize; ++Y)
+	{
+		uint8* Row = OutBGRA + static_cast<int64>(Y) * TexSize * 4;
+		for (int32 X = 0; X < TexSize; ++X)
+		{
+			const FIntPoint Coord(ColumnTile[X], RowTile[Y]);
+			if (Coord != CachedCoord)
+			{
+				CachedCoord = Coord;
+				Tile = Map.GetTile(Coord);
+				if (VisitedTiles)
+				{
+					VisitedTiles->Add(Coord);
+				}
+				if (Tile && (Tile->Resolution <= 0 || Tile->PixelData.Num() < Tile->Resolution * Tile->Resolution))
+				{
+					Tile = nullptr;
+				}
+			}
+			if (!Tile)
+			{
+				Write(Row + X * 4, Background);
+				continue;
+			}
+			const int32 Res = Tile->Resolution;
+			const int32 PX = FMath::Min(static_cast<int32>(ColumnFraction[X] * Res), Res - 1);
+			const int32 PY = FMath::Min(static_cast<int32>(RowFraction[Y] * Res), Res - 1);
+			Write(Row + X * 4, Tile->PixelData[PY * Res + PX]);
+			++Drawn;
 		}
 	}
 	return Drawn;
