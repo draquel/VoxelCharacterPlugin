@@ -85,7 +85,7 @@ namespace VCPlanetWalkableTestHelpers
 		UVoxelChunkManager* Manager = nullptr;
 		FNullMeshRenderer Renderer;
 
-		explicit FVoxelWorldHarness(bool bPlanet)
+		explicit FVoxelWorldHarness(bool bPlanet, const FVector& WorldOrigin = FVector::ZeroVector)
 		{
 			World = UWorld::CreateWorld(EWorldType::Game, false, bPlanet ? TEXT("VCPlanetWalkableWorld") : TEXT("VCPlaneWalkableWorld"));
 			FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
@@ -98,7 +98,7 @@ namespace VCPlanetWalkableTestHelpers
 			Config = NewObject<UVoxelWorldConfiguration>();
 			Config->AddToRoot();
 			Config->WorldMode = bPlanet ? EWorldMode::SphericalPlanet : EWorldMode::InfinitePlane;
-			Config->WorldOrigin = FVector::ZeroVector;
+			Config->WorldOrigin = WorldOrigin;
 			Config->WorldRadius = PlanetRadius;
 			Config->PlanetHeightScale = 1600.0f; // terrain about +-800
 			Config->HeightScale = 1600.0f;
@@ -1003,6 +1003,60 @@ bool FVCEdit_SystemEditArmsEmbedCheck::RunTest(const FString& Parameters)
 		TestEqual(FString::Printf(TEXT("%s: the fill at the pawn broadcast no radius"), Mode), MaxRadius, 0.0f);
 		TestTrue(FString::Printf(TEXT("%s: a system fill at the pawn arms the check"), Mode), Move->IsEmbedCheckArmed());
 		Edits->OnChunkEdited.Remove(AtPawn);
+	}
+	return true;
+}
+
+/**
+ * G19 (VoxelWorlds WORLD_MODES_REVIEW_PLAN.md §14.1): on a heightmap world the spawn search's sea is the plane generation
+ * floods, WaterLevel itself, wherever WorldOrigin puts the chunk grid. From a point on the seabed it finds dry land; from
+ * a point on land it stays there.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlane_SpawnAboveSeaWithOrigin, "VoxelCharacter.Plane.SpawnAboveSeaWithOrigin", VC_PLANET_FLAGS)
+
+bool FVCPlane_SpawnAboveSeaWithOrigin::RunTest(const FString& Parameters)
+{
+	using namespace VCPlanetWalkableTestHelpers;
+	for (const double OriginZ : { -3000.0, 2600.0 })
+	{
+		FVoxelWorldHarness Plane(/*bPlanet=*/false, FVector(12345.0, 54321.0, OriginZ));
+		const float WaterLevel = Plane.Config->WaterLevel;
+		const FString Name = FString::Printf(TEXT("WorldOrigin.Z %.0f"), OriginZ);
+
+		// A point on the seabed and one on land, near the origin, on a 400 uu grid.
+		FVector Seabed = FVector::ZeroVector, Land = FVector::ZeroVector;
+		bool bSeabed = false, bLand = false;
+		for (int32 I = 0; I < 40 * 40 && !(bSeabed && bLand); ++I)
+		{
+			const double X = Plane.Config->WorldOrigin.X + (I % 40 - 20) * 400.0;
+			const double Y = Plane.Config->WorldOrigin.Y + (I / 40 - 20) * 400.0;
+			const float Ground = Plane.Manager->GetGeneratedSurfaceHeight(X, Y);
+			if (!bSeabed && Ground < WaterLevel - 100.0f)
+			{
+				Seabed = FVector(X, Y, Ground);
+				bSeabed = true;
+			}
+			if (!bLand && Ground > WaterLevel + 100.0f)
+			{
+				Land = FVector(X, Y, Ground);
+				bLand = true;
+			}
+		}
+		if (!TestTrue(*FString::Printf(TEXT("%s: a seabed and a land start near the origin"), *Name), bSeabed && bLand))
+		{
+			continue;
+		}
+
+		FVector FromSeabed, FromLand;
+		const bool bFromSeabed = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, Seabed, FromSeabed, 20000.0f);
+		const bool bFromLand = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, Land, FromLand, 20000.0f);
+		AddInfo(FString::Printf(TEXT("%s: from the seabed at %.0f -> %s (ground %.0f); from land at %.0f -> %s"), *Name, Seabed.Z,
+			bFromSeabed ? *FromSeabed.ToString() : TEXT("none"), bFromSeabed ? FromSeabed.Z : 0.0, Land.Z,
+			bFromLand ? *FromLand.ToString() : TEXT("none")));
+		TestTrue(*FString::Printf(TEXT("%s: from the seabed, a spawn"), *Name), bFromSeabed);
+		TestTrue(*FString::Printf(TEXT("%s: on dry land, above WaterLevel"), *Name), bFromSeabed && FromSeabed.Z > WaterLevel);
+		TestTrue(*FString::Printf(TEXT("%s: from land, a spawn"), *Name), bFromLand);
+		TestTrue(*FString::Printf(TEXT("%s: where it started"), *Name), bFromLand && FVector2D(FromLand) == FVector2D(Land));
 	}
 	return true;
 }
