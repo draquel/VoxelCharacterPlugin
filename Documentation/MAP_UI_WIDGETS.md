@@ -32,11 +32,12 @@ USizeBox (MinimapSize x MinimapSize, ClipToBounds)
 
 ### Rotation and Clipping
 
-The map image rotates with the player's camera heading so "forward" always points up on the minimap. To prevent gaps at the corners during rotation, the texture is oversized by a factor of sqrt(2) (~1.42):
+The map image rotates with the player's camera heading so "forward" always points up on the minimap. To prevent gaps at the corners during rotation, the texture is the visible square's diagonal, plus a margin for the shift between fills (see Texture Rendering):
 
 ```
 Visible square:    200 x 200 pixels (MinimapSize)
-Texture size:      284 x 284 pixels (MinimapSize * 1.42)
+Texture size:      289 x 289 pixels (ceil(MinimapSize * sqrt(2)) + 2 * (ceil(RefillShiftTexels) + 1))
+World per texel:   160 uu (2 * MinimapWorldRadius / MinimapSize), so the texture shows 1:1 on screen
 ```
 
 The `USizeBox` has `ClipToBounds` enabled, which clips the oversized rotated image to the visible square. `UCanvasPanel` is used instead of `UOverlay` because canvas slots with `SetAutoSize(true)` respect `SetDesiredSizeOverride`, allowing children to extend beyond the parent bounds.
@@ -62,16 +63,35 @@ When the camera faces north (yaw=0), "N" appears at the top. As the camera rotat
 
 ### Texture Rendering
 
-`RefreshMapTexture()` runs on a throttled tick (default 10 Hz via `UpdateInterval = 0.1`):
+The tick is throttled (default 10 Hz via `UpdateInterval = 0.1`). Each refresh requests the tiles in view
+(`RequestTilesInRadius`), rotates the image and places the markers, but fills the texture again only when what it shows
+changed (VoxelWorlds world modes review G64; `vc.Minimap.SkipUnchanged`, 0 = every refresh as before). A fill cost 2-3 ms
+of game thread at the old rate of ten a second, one frame in six. `NeedsRefill` fills when:
 
-1. Get player world position from `GetOwningPlayer()->GetPawn()`
-2. Call `MapSubsystem->RequestTilesInRadius()` for predictive tile generation
-3. Calculate visible world area: `ViewWorldExtent = MinimapWorldRadius * 1.42`
-4. Lock the transient `UTexture2D` mip 0 bulk data
-5. Clear to dark background
-6. Iterate tiles in radius, blit each tile's `PixelData` at the correct world-to-pixel offset
-7. Unlock and `UpdateResource()`
-8. Apply via `SetBrushFromTexture()` + `SetDesiredSizeOverride()`
+- there is no texture yet, or its size changed;
+- the player moved `RefillShiftTexels` (2) from the last fill's centre;
+- an image of a tile the last fill read changed (`ComputeTileSignature`: each tile's entry, pixel buffer and resolution;
+  a redrawn tile replaces its buffer, a dropped one is gone);
+- `MaxRefillSeconds` (2) passed.
+
+Between fills the image is shifted back by the player's movement since the last fill (`GetFillOffsetTexels`, rotated with
+the map: `SetRenderTranslation(-Offset.GetRotated(Angle))`), so the terrain stays glued under the player. On a planet the
+heading and the markers are taken on the plane the texture was drawn in (`GetDisplayFrame`, the last fill's tangent
+plane): neighbouring tangent planes turn against each other near a pole, and the player's own plane would be off by a
+texel at the rim at 80 degrees and by dozens near the pole (`VoxelCharacter.Planet.MinimapShift`).
+
+A fill (`RefreshMapTexture(Center)`):
+
+1. Lock the transient `UTexture2D` mip 0 bulk data
+2. A planet: `FVCPlanetMapSampler::Fill` over the tangent plane at `Center`. A plane: `FVCPlaneMapSampler::Fill`, texel
+   by texel (each texel the tile pixel just inside its far corner, the pixel the old per-tile-pixel blit wrote last; the
+   columns' and rows' tiles and positions worked out once; `vc.Minimap.TexelFill 0` = the blit as before, which left
+   gaps where tile pixels are coarser than texels). Both report the tiles they read (`VisitedTiles`).
+3. Unlock and `UpdateResource()`
+4. Apply via `SetBrushFromTexture()` + `SetDesiredSizeOverride()`
+
+`vc.Minimap.Stats [reset]` logs refreshes, fills, those skipped, refreshes over 2 ms and each phase's mean and maximum
+(tile requests, texture fill, texture upload, markers, the refresh).
 
 ### Configuration
 
@@ -79,7 +99,9 @@ When the camera faces north (yaw=0), "N" appears at the top. As the camera rotat
 |----------|---------|-------------|
 | `MinimapSize` | 200.0 | Widget pixel size on screen (square) |
 | `MinimapWorldRadius` | 16000.0 | World units visible from center to edge |
-| `UpdateInterval` | 0.1 | Seconds between texture refreshes |
+| `UpdateInterval` | 0.1 | Seconds between refreshes (rotation, markers; a fill only when needed) |
+| `RefillShiftTexels` | 2.0 | Texels the player may move before the texture is filled again (G64) |
+| `MaxRefillSeconds` | 2.0 | The texture is filled again at least this often (G64) |
 
 ### Coordinate Display
 

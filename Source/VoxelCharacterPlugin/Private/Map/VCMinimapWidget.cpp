@@ -14,10 +14,90 @@
 #include "Engine/Texture2D.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/Pawn.h"
+#include "HAL/IConsoleManager.h"
+#include "Misc/ScopeExit.h"
+#include "HAL/PlatformTime.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
-// sqrt(2) — the map texture is this much larger than the visible square
-// so that when rotated 45 degrees the corners still fill the entire area.
+// About sqrt(2): the rotating map reaches this far beyond the visible square's half-width at 45 degrees, so markers are
+// gathered that far (the texture's own size is GetTextureSize: the diagonal plus the shift margin).
 static constexpr float RotationOversize = 1.42f;
+
+// ---------------------------------------------------------------------------
+// Refresh timing (world modes review G64): what each refresh of the minimap costs the game thread, by phase.
+// ---------------------------------------------------------------------------
+
+namespace VCMinimapStats
+{
+	enum EPhase : int32 { Tiles = 0, Fill, Upload, Markers, Total, Lock, Num };
+	static int64 Fills = 0;
+	static const TCHAR* PhaseNames[Num] = { TEXT("tile requests"), TEXT("texture fill"), TEXT("texture upload"), TEXT("markers"), TEXT("refresh"), TEXT("texture lock (in the fill)") };
+	static double SumMs[Num] = {};
+	static double MaxMs[Num] = {};
+	static int64 Refreshes = 0;
+	static int64 Skipped = 0;
+	static int64 Over2Ms = 0;
+
+	static void Add(EPhase Phase, double Ms)
+	{
+		SumMs[Phase] += Ms;
+		MaxMs[Phase] = FMath::Max(MaxMs[Phase], Ms);
+	}
+
+	static void Reset()
+	{
+		FMemory::Memzero(SumMs, sizeof(SumMs));
+		FMemory::Memzero(MaxMs, sizeof(MaxMs));
+		Refreshes = Skipped = Over2Ms = Fills = 0;
+	}
+
+	/** Times a scope into a phase. */
+	struct FScope
+	{
+		EPhase Phase;
+		uint64 Start;
+		explicit FScope(EPhase InPhase) : Phase(InPhase), Start(FPlatformTime::Cycles64()) {}
+		~FScope() { Add(Phase, FPlatformTime::ToMilliseconds64(FPlatformTime::Cycles64() - Start)); }
+	};
+}
+
+static TAutoConsoleVariable<int32> CVarMinimapSkipUnchanged(
+	TEXT("vc.Minimap.SkipUnchanged"),
+	1,
+	TEXT("Minimap (world modes review G64): 1 = fill the texture again only when the player moved RefillShiftTexels, a tile it "
+	     "shows changed or MaxRefillSeconds passed, shifting the image in between; 0 = fill it every refresh, as before."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarMinimapTexelFill(
+	TEXT("vc.Minimap.TexelFill"),
+	1,
+	TEXT("Minimap on a plane (G64): 1 = fill texel by texel (columns and rows worked out once); 0 = blit every pixel of every "
+	     "tile in view, as before."),
+	ECVF_Default);
+
+// Console: vc.Minimap.Stats [reset]
+static FAutoConsoleCommand GVCMinimapStatsCmd(
+	TEXT("vc.Minimap.Stats"),
+	TEXT("Log the minimap's refresh cost per phase since the last reset (G64). 'reset' clears it."),
+	FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+	{
+		using namespace VCMinimapStats;
+		if (Args.Num() > 0 && Args[0].Equals(TEXT("reset"), ESearchCase::IgnoreCase))
+		{
+			Reset();
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("vc.Minimap.Stats: reset"));
+			return;
+		}
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("vc.Minimap.Stats: %lld refreshes, %lld fills (%lld skipped: nothing changed), %lld over 2 ms"),
+			Refreshes, Fills, Skipped, Over2Ms);
+		for (int32 Phase = 0; Phase < Num; ++Phase)
+		{
+			// The fill and the upload per fill, the others per refresh.
+			const double N = FMath::Max<int64>(1, (Phase == Fill || Phase == Upload || Phase == Lock) ? Fills : Refreshes);
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("vc.Minimap.Stats: %s: mean %.3f ms, max %.3f ms, total %.1f ms"), PhaseNames[Phase],
+				SumMs[Phase] / N, MaxMs[Phase], SumMs[Phase]);
+		}
+	}));
 
 // ---------------------------------------------------------------------------
 // Widget Tree Construction
@@ -132,6 +212,15 @@ void UVCMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 		return;
 	}
 	TimeSinceLastUpdate = 0.0f;
+	TRACE_CPUPROFILER_EVENT_SCOPE(VCMinimap_Refresh);
+	const uint64 RefreshStart = FPlatformTime::Cycles64();
+	ON_SCOPE_EXIT
+	{
+		const double Ms = FPlatformTime::ToMilliseconds64(FPlatformTime::Cycles64() - RefreshStart);
+		VCMinimapStats::Add(VCMinimapStats::Total, Ms);
+		++VCMinimapStats::Refreshes;
+		VCMinimapStats::Over2Ms += Ms > 2.0 ? 1 : 0;
+	};
 
 	// Resolve subsystem lazily
 	if (!MapSubsystem.IsValid())
@@ -161,8 +250,12 @@ void UVCMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 
 	const FVector PlayerPos = PlayerPawn->GetActorLocation();
 
-	// Request tiles for the minimap's visible area (oversized for rotation)
-	MapSubsystem->RequestTilesInRadius(PlayerPos, MinimapWorldRadius * RotationOversize);
+	// Request tiles for the minimap's visible area (oversized for rotation and the shift margin)
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(VCMinimap_RequestTiles);
+		const VCMinimapStats::FScope Timed(VCMinimapStats::Tiles);
+		MapSubsystem->RequestTilesInRadius(PlayerPos, static_cast<float>(0.5 * GetTextureSize() * GetWorldPerPixel()));
+	}
 
 	// A planet's minimap is the tangent plane under the player, north toward the +Z pole (spherical Phase 4, WM-SY9).
 	const bool bPlanet = MapSubsystem->IsPlanetMap();
@@ -185,8 +278,15 @@ void UVCMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 		));
 	}
 
-	// Refresh the map texture
-	RefreshMapTexture();
+	// Fill the map texture again only when what it shows changed (G64); in between it is shifted below.
+	if (NeedsRefill(PlayerPos, FPlatformTime::Seconds()))
+	{
+		RefreshMapTexture(PlayerPos);
+	}
+	else
+	{
+		++VCMinimapStats::Skipped;
+	}
 
 	// Rotate map so the player's forward direction points up on the minimap.
 	// UE yaw=0 is +X. The texture maps +X to the right, so a -90 offset
@@ -195,17 +295,25 @@ void UVCMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 	FVector CameraLoc;
 	PC->GetPlayerViewPoint(CameraLoc, CameraRot);
 
-	// On a planet the heading is measured from north on the tangent plane, as yaw is from +X on a plane.
-	const float Yaw = bPlanet ? static_cast<float>(PlanetFrame.HeadingDegrees(CameraRot.Vector())) : CameraRot.Yaw;
+	// On a planet the heading is measured from north on the tangent plane, as yaw is from +X on a plane: the plane the shown
+	// texture was drawn in (G64).
+	const float Yaw = bPlanet ? static_cast<float>(GetDisplayFrame(PlayerPos).HeadingDegrees(CameraRot.Vector())) : CameraRot.Yaw;
 	const float MapAngleDeg = -Yaw - 90.0f;
 	if (MapImage)
 	{
 		MapImage->SetRenderTransformAngle(MapAngleDeg);
+		// The texture is centred where it was last filled: shift it back by the player's movement since, rotated with the
+		// map (the render transform translates after rotating), so the terrain stays under the player.
+		MapImage->SetRenderTranslation((-GetFillOffsetTexels(PlayerPos)).GetRotated(MapAngleDeg));
 	}
 
 	// Marker dots from the registry (POIs, quests, ... — the map is source-agnostic),
 	// rotated with the map so they stay glued to the terrain.
-	UpdateMarkers(PlayerPos, MapAngleDeg);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(VCMinimap_Markers);
+		const VCMinimapStats::FScope Timed(VCMinimapStats::Markers);
+		UpdateMarkers(PlayerPos, MapAngleDeg);
+	}
 
 	// Position the north indicator on the minimap edge.
 	// North = +X axis (yaw=0 direction). As the camera rotates, north's
@@ -262,7 +370,9 @@ void UVCMinimapWidget::UpdateMarkers(const FVector& PlayerPos, float MapAngleDeg
 			Registry->GatherMarkers(Area, Markers);
 		}
 	}
-	const FVCPlanetMapFrame PlanetFrame = bPlanet ? FVCPlanetMapFrame::At(Map->GetPlanetCenter(), Map->GetPlanetRadius(), PlayerPos) : FVCPlanetMapFrame();
+	// Offsets on the plane the shown texture was drawn in, from the player (G64).
+	const FVCPlanetMapFrame PlanetFrame = bPlanet ? GetDisplayFrame(PlayerPos) : FVCPlanetMapFrame();
+	const FVector2D PlayerOnFrame = bPlanet ? PlanetFrame.OffsetOf(PlayerPos) : FVector2D::ZeroVector;
 
 	// Highest priority first — they win the marker budget and draw on top (added last below).
 	Markers.Sort([](const FVCMapMarker& A, const FVCMapMarker& B) { return A.Priority > B.Priority; });
@@ -282,7 +392,7 @@ void UVCMinimapWidget::UpdateMarkers(const FVector& PlayerPos, float MapAngleDeg
 		// World offset -> pixel offset -> rotate with the map image (same angle, same pivot). On a planet the offset on the
 		// tangent plane, (north, east) as (X, Y) are on a plane.
 		const FVector2D PixelOffset = bPlanet
-			? PlanetFrame.OffsetOf(Marker.WorldLocation) * PixelsPerWorldUnit
+			? (PlanetFrame.OffsetOf(Marker.WorldLocation) - PlayerOnFrame) * PixelsPerWorldUnit
 			: (Marker.WorldPosition - Player2D) * PixelsPerWorldUnit;
 		const FVector2D Rotated = PixelOffset.GetRotated(MapAngleDeg);
 		if (Rotated.SizeSquared() > VisibleRadiusPx * VisibleRadiusPx)
@@ -347,7 +457,84 @@ void UVCMinimapWidget::EnsureTexture(int32 TexSize)
 	CurrentTextureSize = TexSize;
 }
 
-void UVCMinimapWidget::RefreshMapTexture()
+double UVCMinimapWidget::GetWorldPerPixel() const
+{
+	return 2.0 * FMath::Max(MinimapWorldRadius, 1.0f) / FMath::Max(MinimapSize, 1.0f);
+}
+
+int32 UVCMinimapWidget::GetTextureSize() const
+{
+	return FMath::CeilToInt(MinimapSize * UE_SQRT_2) + 2 * (FMath::CeilToInt(RefillShiftTexels) + 1);
+}
+
+FVCPlanetMapFrame UVCMinimapWidget::GetDisplayFrame(const FVector& PlayerPos) const
+{
+	const UVoxelMapSubsystem* Subsystem = MapSubsystem.Get();
+	if (!Subsystem)
+	{
+		return FVCPlanetMapFrame();
+	}
+	return FVCPlanetMapFrame::At(Subsystem->GetPlanetCenter(), Subsystem->GetPlanetRadius(), bHasFill ? FillCenter : PlayerPos);
+}
+
+FVector2D UVCMinimapWidget::GetFillOffsetTexels(const FVector& PlayerPos) const
+{
+	if (!bHasFill)
+	{
+		return FVector2D::ZeroVector;
+	}
+	const double WorldPerPixel = GetWorldPerPixel();
+	const UVoxelMapSubsystem* Subsystem = MapSubsystem.Get();
+	if (Subsystem && Subsystem->IsPlanetMap())
+	{
+		const FVCPlanetMapFrame Frame = FVCPlanetMapFrame::At(Subsystem->GetPlanetCenter(), Subsystem->GetPlanetRadius(), FillCenter);
+		return Frame.OffsetOf(PlayerPos) / WorldPerPixel;
+	}
+	return FVector2D(PlayerPos.X - FillCenter.X, PlayerPos.Y - FillCenter.Y) / WorldPerPixel;
+}
+
+uint64 UVCMinimapWidget::ComputeTileSignature() const
+{
+	const UVoxelMapSubsystem* Subsystem = MapSubsystem.Get();
+	uint64 Signature = 1469598103934665603ull;
+	auto Mix = [&Signature](uint64 Value) { Signature = (Signature ^ Value) * 1099511628211ull; };
+	if (!Subsystem)
+	{
+		return Signature;
+	}
+	for (const FIntPoint& Coord : FillTiles)
+	{
+		// A tile drawn again replaces its pixel buffer; one dropped from the store is gone.
+		const FVoxelMapTile* Tile = Subsystem->GetTile(Coord);
+		Mix(static_cast<uint64>(reinterpret_cast<UPTRINT>(Tile)));
+		Mix(Tile ? static_cast<uint64>(reinterpret_cast<UPTRINT>(Tile->PixelData.GetData())) : 0);
+		Mix(Tile ? static_cast<uint64>(Tile->Resolution) : 0);
+	}
+	return Signature;
+}
+
+bool UVCMinimapWidget::NeedsRefill(const FVector& PlayerPos, double Now) const
+{
+	if (CVarMinimapSkipUnchanged.GetValueOnGameThread() == 0)
+	{
+		return true;
+	}
+	if (!bHasFill || !MapTexture || CurrentTextureSize != GetTextureSize())
+	{
+		return true;
+	}
+	if (Now - LastFillTime >= MaxRefillSeconds)
+	{
+		return true;
+	}
+	if (GetFillOffsetTexels(PlayerPos).Size() >= RefillShiftTexels)
+	{
+		return true;
+	}
+	return ComputeTileSignature() != FillTileSignature;
+}
+
+void UVCMinimapWidget::RefreshMapTexture(const FVector& Center)
 {
 	UVoxelMapSubsystem* Subsystem = MapSubsystem.Get();
 	if (!Subsystem || !MapImage)
@@ -355,13 +542,6 @@ void UVCMinimapWidget::RefreshMapTexture()
 		return;
 	}
 
-	const APlayerController* PC = GetOwningPlayer();
-	if (!PC || !PC->GetPawn())
-	{
-		return;
-	}
-
-	const FVector PlayerPos = PC->GetPawn()->GetActorLocation();
 	const float TileWorldSize = Subsystem->GetTileWorldSize();
 	const int32 TileResolution = Subsystem->GetTileResolution();
 	if (TileWorldSize <= 0.f || TileResolution <= 0)
@@ -369,12 +549,11 @@ void UVCMinimapWidget::RefreshMapTexture()
 		return;
 	}
 
-	// Texture size matches the oversized display size exactly — no scaling.
-	// The image is sqrt(2) larger than the visible square so it fills the
-	// corners at any rotation angle. The SizeBox clips it to MinimapSize.
-	const int32 TexSize = FMath::CeilToInt(MinimapSize * RotationOversize);
-	const float ViewWorldExtent = MinimapWorldRadius * RotationOversize;
-	const float WorldPerPixel = (ViewWorldExtent * 2.0f) / static_cast<float>(TexSize);
+	// Texture size matches the oversized display size exactly — no scaling. The image is sqrt(2) larger than the visible
+	// square (plus the shift margin) so it fills the corners at any rotation angle. The SizeBox clips it to MinimapSize.
+	const int32 TexSize = GetTextureSize();
+	const double WorldPerPixel = GetWorldPerPixel();
+	const double ViewWorldExtent = 0.5 * TexSize * WorldPerPixel;
 
 	EnsureTexture(TexSize);
 	if (!MapTexture)
@@ -383,101 +562,59 @@ void UVCMinimapWidget::RefreshMapTexture()
 	}
 
 	// Lock texture for writing
+	const uint64 FillStart = FPlatformTime::Cycles64();
+	TRACE_CPUPROFILER_EVENT_SCOPE(VCMinimap_Fill);
 	FTexture2DMipMap& Mip = MapTexture->GetPlatformData()->Mips[0];
 	void* TextureData = Mip.BulkData.Lock(LOCK_READ_WRITE);
+	VCMinimapStats::Add(VCMinimapStats::Lock, FPlatformTime::ToMilliseconds64(FPlatformTime::Cycles64() - FillStart));
 	if (!TextureData)
 	{
 		return;
 	}
-
 	uint8* PixelData = static_cast<uint8*>(TextureData);
-	const int32 TotalPixels = TexSize * TexSize;
+	TSet<FIntPoint> Visited;
 
 	if (Subsystem->IsPlanetMap())
 	{
 		// A planet (spherical Phase 4, WM-SY9): texel (X, Y) is the tangent plane's point (north, east) = (X, Y) world
-		// units per pixel from the corner, as world (X, Y) on a plane, so the rotation below carries over.
-		const FVCPlanetMapFrame Frame = FVCPlanetMapFrame::At(Subsystem->GetPlanetCenter(), Subsystem->GetPlanetRadius(), PlayerPos);
+		// units per pixel from the corner, as world (X, Y) on a plane, so the rotation carries over.
+		const FVCPlanetMapFrame Frame = FVCPlanetMapFrame::At(Subsystem->GetPlanetCenter(), Subsystem->GetPlanetRadius(), Center);
 		FVCPlanetMapSampler Sampler;
 		Sampler.bRequireExplored = false; // the minimap's area is requested (explored) every refresh
 		Sampler.Unexplored = Sampler.Undrawn = Sampler.Background = FColor(5, 5, 5, 255);
+		Sampler.VisitedTiles = &Visited;
 		Sampler.Fill(*Subsystem, PixelData, TexSize, 16, [&Frame, WorldPerPixel, ViewWorldExtent](double X, double Y, FVector& OutDirection)
 		{
 			OutDirection = Frame.DirectionAtOffset(X * WorldPerPixel - ViewWorldExtent, Y * WorldPerPixel - ViewWorldExtent);
 			return true;
 		});
+	}
+	else
+	{
+		// A plane: texel by texel (FVCPlaneMapSampler, G64), or the blit of every tile pixel as before.
+		FVCPlaneMapSampler Sampler;
+		Sampler.bTexelFill = CVarMinimapTexelFill.GetValueOnGameThread() != 0;
+		Sampler.VisitedTiles = &Visited;
+		Sampler.Fill(*Subsystem, PixelData, TexSize, Center, WorldPerPixel);
+	}
+	VCMinimapStats::Add(VCMinimapStats::Fill, FPlatformTime::ToMilliseconds64(FPlatformTime::Cycles64() - FillStart));
+	++VCMinimapStats::Fills;
+
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(VCMinimap_Upload);
+		const VCMinimapStats::FScope Timed(VCMinimapStats::Upload);
 		Mip.BulkData.Unlock();
 		MapTexture->UpdateResource();
+
+		// Display at 1:1 pixel ratio — texture size matches display size exactly. The canvas slot with AutoSize respects
+		// this, and the SizeBox clips the overflow to the visible MinimapSize square.
 		MapImage->SetBrushFromTexture(MapTexture);
 		MapImage->SetDesiredSizeOverride(FVector2D(static_cast<float>(TexSize), static_cast<float>(TexSize)));
-		return;
 	}
 
-	// Clear to dark background (matches border color)
-	for (int32 i = 0; i < TotalPixels; ++i)
-	{
-		PixelData[i * 4 + 0] = 5;   // B
-		PixelData[i * 4 + 1] = 5;   // G
-		PixelData[i * 4 + 2] = 5;   // R
-		PixelData[i * 4 + 3] = 255; // A
-	}
-
-	// World bounds of the texture, centered on player
-	const float WorldMinX = PlayerPos.X - ViewWorldExtent;
-	const float WorldMinY = PlayerPos.Y - ViewWorldExtent;
-
-	// How many tiles from center to edge we need to iterate
-	const FIntPoint CenterTile = Subsystem->WorldToTileCoord(PlayerPos);
-	const int32 TileRadius = FMath::CeilToInt(ViewWorldExtent / TileWorldSize);
-
-	// Blit tile data — map each tile's source pixels to destination via world coords
-	for (int32 TY = -TileRadius; TY <= TileRadius; ++TY)
-	{
-		for (int32 TX = -TileRadius; TX <= TileRadius; ++TX)
-		{
-			const FIntPoint TileCoord(CenterTile.X + TX, CenterTile.Y + TY);
-			const FVoxelMapTile* Tile = Subsystem->GetTile(TileCoord);
-			if (!Tile)
-			{
-				continue;
-			}
-
-			const FVector TileWorldOrigin = Subsystem->TileCoordToWorld(TileCoord);
-			const int32 SrcRes = Tile->Resolution;
-			const float SrcPixelWorldSize = TileWorldSize / SrcRes;
-
-			for (int32 PY = 0; PY < SrcRes; ++PY)
-			{
-				for (int32 PX = 0; PX < SrcRes; ++PX)
-				{
-					const float PixWorldX = TileWorldOrigin.X + PX * SrcPixelWorldSize;
-					const float PixWorldY = TileWorldOrigin.Y + PY * SrcPixelWorldSize;
-
-					const int32 DstX = FMath::FloorToInt((PixWorldX - WorldMinX) / WorldPerPixel);
-					const int32 DstY = FMath::FloorToInt((PixWorldY - WorldMinY) / WorldPerPixel);
-
-					if (DstX < 0 || DstX >= TexSize || DstY < 0 || DstY >= TexSize)
-					{
-						continue;
-					}
-
-					const FColor& SrcColor = Tile->PixelData[PY * SrcRes + PX];
-					const int32 DstIdx = (DstY * TexSize + DstX) * 4;
-					PixelData[DstIdx + 0] = SrcColor.B;
-					PixelData[DstIdx + 1] = SrcColor.G;
-					PixelData[DstIdx + 2] = SrcColor.R;
-					PixelData[DstIdx + 3] = SrcColor.A;
-				}
-			}
-		}
-	}
-
-	Mip.BulkData.Unlock();
-	MapTexture->UpdateResource();
-
-	// Display at 1:1 pixel ratio — texture size matches display size exactly.
-	// The canvas slot with AutoSize respects this, and the SizeBox clips
-	// the overflow to the visible MinimapSize square.
-	MapImage->SetBrushFromTexture(MapTexture);
-	MapImage->SetDesiredSizeOverride(FVector2D(static_cast<float>(TexSize), static_cast<float>(TexSize)));
+	FillCenter = Center;
+	bHasFill = true;
+	LastFillTime = FPlatformTime::Seconds();
+	FillTiles = Visited.Array();
+	FillTileSignature = ComputeTileSignature();
 }

@@ -140,6 +140,9 @@ struct VOXELCHARACTERPLUGIN_API FVCPlanetMapSampler
 	 */
 	bool bUseGlobeAlbedo = false;
 
+	/** If set, receives every tile the fill read (G64: the minimap fills again when one of their images changes). */
+	TSet<FIntPoint>* VisitedTiles = nullptr;
+
 	/**
 	 * Fill the texture.
 	 * @param Map The planet's map subsystem
@@ -152,4 +155,34 @@ struct VOXELCHARACTERPLUGIN_API FVCPlanetMapSampler
 	 */
 	int32 Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 TexSize, int32 Step,
 		TFunctionRef<bool(double X, double Y, FVector& OutDirection)> TexelDirection) const;
+};
+
+/**
+ * The minimap's texture on a plane (heightmap worlds; world modes review G64): texel (X, Y) is world (X, Y) WorldPerPixel
+ * units per texel from the texture's corner, the texture centred on a position. Each texel shows the tile pixel just inside
+ * its far corner, the pixel a blit of every tile pixel at its near corner wrote last, so the image is the same where tiles
+ * are finer than texels and every texel is drawn where they are coarser (an overview image). Columns and rows are worked
+ * out once, so a fill costs a few operations a texel.
+ */
+struct VOXELCHARACTERPLUGIN_API FVCPlaneMapSampler
+{
+	/** Texel colour with no tile image. */
+	FColor Background = FColor(5, 5, 5, 255);
+
+	/** True: texel by texel; false: clear, then blit every pixel of every tile in view at its near corner (before G64). */
+	bool bTexelFill = true;
+
+	/** If set, receives every tile the fill read. */
+	TSet<FIntPoint>* VisitedTiles = nullptr;
+
+	/**
+	 * Fill the texture.
+	 * @param Map The plane's map subsystem
+	 * @param OutBGRA TexSize^2 BGRA texels
+	 * @param TexSize Texture size (square)
+	 * @param Center World position the texture is centred on
+	 * @param WorldPerPixel World units per texel
+	 * @return Texels drawn from a tile image (the blit: tile pixels written)
+	 */
+	int32 Fill(const UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 TexSize, const FVector& Center, double WorldPerPixel) const;
 };
