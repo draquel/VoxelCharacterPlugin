@@ -5,6 +5,7 @@
 #include "Core/VCCharacterBase.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Movement/VCGravityFrame.h"
+#include "Movement/VCMovementComponent.h"
 #include "VoxelCharacterPlugin.h"
 
 UVCCameraManager::UVCCameraManager()
@@ -127,6 +128,22 @@ void UVCCameraManager::UpdateCamera(float DeltaTime)
 		BlendedLocation /= TotalWeight;
 	}
 
+	// --- Ease a block step (cubic worlds, WM-C7, D29): the pawn rises or drops a block in one frame, the view eases ---
+	const UVCMovementComponent* VCMovement = Cast<UVCMovementComponent>(Character->GetCharacterMovement());
+	if (bEaseBlockSteps && VCMovement && VCMovement->IsSteppingBlocks())
+	{
+		const FVector Up = FVCGravityFrame::GetUp(VCMovement);
+		const FVector Here = Character->GetActorLocation();
+		const bool bGrounded = VCMovement->IsMovingOnGround();
+		const float HeightDelta = bHasLastPawnLocation ? static_cast<float>(FVector::DotProduct(Here - LastPawnLocation, Up)) : 0.f;
+		StepEaseOffset = ComputeStepEaseOffset(StepEaseOffset, HeightDelta, bGrounded && bLastPawnGrounded, 20.f,
+			VCMovement->MaxStepHeight + 10.f, DeltaTime, BlockStepEaseSpeed);
+		LastPawnLocation = Here;
+		bLastPawnGrounded = bGrounded;
+		bHasLastPawnLocation = true;
+		BlendedLocation += Up * StepEaseOffset;
+	}
+
 	// --- Voxel camera collision (third-person only) ---
 	if (bUseVoxelCameraCollision && CameraModeStack.Num() > 0)
 	{
@@ -148,6 +165,23 @@ void UVCCameraManager::UpdateCamera(float DeltaTime)
 		CameraComponent->SetWorldLocationAndRotation(CurrentCameraLocation, CurrentCameraRotation);
 		CameraComponent->SetFieldOfView(CurrentFOV);
 	}
+}
+
+float UVCCameraManager::ComputeStepEaseOffset(float Offset, float HeightDelta, bool bGroundedBoth, float MinStep, float MaxStep,
+	float DeltaTime, float EaseSpeed)
+{
+	// More than a step in one frame is a teleport or a respawn: nothing to ease.
+	if (FMath::Abs(HeightDelta) > MaxStep)
+	{
+		return 0.f;
+	}
+	// A step taken on the ground: the view stays where it was and eases after the pawn.
+	if (bGroundedBoth && FMath::Abs(HeightDelta) > MinStep)
+	{
+		Offset -= HeightDelta;
+	}
+	Offset = FMath::Clamp(Offset, -MaxStep, MaxStep);
+	return FMath::FInterpTo(Offset, 0.f, DeltaTime, EaseSpeed);
 }
 
 // ---------------------------------------------------------------------------

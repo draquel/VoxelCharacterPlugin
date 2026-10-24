@@ -65,6 +65,33 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
 	float VoxelSurfaceGripMultiplier = 1.0f;
 
+	// --- Block steps (world modes review WM-C7, decision D29) ---
+
+	/**
+	 * In a cubic world, walk up a one-block rise without a jump: the step height becomes one block (voxel size plus
+	 * BlockStepMargin), for players and NPCs alike, so two blocks stay a wall (the jump's apex is about 113 uu). The
+	 * surface navigation uses the same rule (voxel.Nav.BlockSteps). Smooth worlds keep MaxStepHeight as set.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
+	bool bStepUpOneBlock = true;
+
+	/** Added to the voxel size for the one-block step, so a block's top is reached whatever the trimesh's rounding. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel", meta = (ClampMin = "0.0"))
+	float BlockStepMargin = 5.f;
+
+	/**
+	 * The step height for one block of a voxel size (VoxelSize + Margin).
+	 *
+	 * @param VoxelSize World units per voxel
+	 * @param Margin BlockStepMargin
+	 * @return MaxStepHeight for a cubic world
+	 */
+	static float GetBlockStepHeight(float VoxelSize, float Margin) { return VoxelSize + Margin; }
+
+	/** Whether this walker steps whole blocks (a cubic world, once its voxel world is known). The camera eases those steps. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement")
+	bool IsSteppingBlocks() const { return bSteppingBlocks; }
+
 	// --- Swimming Tuning ---
 
 	/** Buoyancy while swimming. 1.0 = float at surface, <1.0 = sink slowly, >1.0 = rise faster. */
@@ -391,6 +418,18 @@ protected:
 
 	/** Cache the world's bounds from the chunk manager if not done yet (and whether it is a planet). */
 	void RefreshWorldBounds();
+
+	/**
+	 * Once the voxel world is initialized, set the step height for its surface: one block in a cubic world when
+	 * bStepUpOneBlock and vc.Move.StepUpBlocks are on (world modes review WM-C7, D29), else the smooth step left as it is.
+	 */
+	void RefreshBlockStepHeight();
+
+	/** RefreshBlockStepHeight has seen an initialized voxel world. */
+	bool bBlockStepResolved = false;
+
+	/** The step height is one block (a cubic world). */
+	bool bSteppingBlocks = false;
 
 	/** The voxel world is a planet (its bounds are a shell): gravity points at CachedWorldBounds.Center (WM-W1). */
 	bool bPlanetGravity = false;
