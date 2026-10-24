@@ -24,6 +24,7 @@ class UVCInputConfig;
 class UVoxelCollisionManager;
 class UVoxelWorldConfiguration;
 class UVCCombatComponent;
+class UVCBlockInteractionComponent;
 struct FInputActionValue;
 
 #if WITH_INTERACTION_PLUGIN
@@ -177,6 +178,13 @@ public:
 	/** Faction, damage intake and death/downed state. Bound to the player state's ASC on possession. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Combat")
 	TObjectPtr<UVCCombatComponent> CombatComponent;
+
+	/**
+	 * Cubic worlds (world modes review §22): the block highlight, the placement preview and timed block breaking (the
+	 * primary action held on a block breaks it after its material's hardness / MiningSpeed, decided on the server).
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Voxel")
+	TObjectPtr<UVCBlockInteractionComponent> BlockInteraction;
 
 	/**
 	 * How far the primary-action trace looks for a hostile target before falling through to the
@@ -382,6 +390,20 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Voxel")
 	static FIntVector GetEditVoxelCoord(const FVector& ImpactPoint, const FVector& ImpactNormal, const UVoxelWorldConfiguration* Config, bool bPlace);
+
+	/**
+	 * What the edit actions aim at (world modes review WM-C12): the terrain under the crosshair (TraceForVoxel) and the
+	 * voxels a dig and a place would edit there (GetEditVoxelCoord). The primary and secondary actions, the block
+	 * feedback (UVCBlockInteractionComponent) and vox.Dig all take their voxels from here, so what is outlined is what is
+	 * dug. The server still checks reach (AVCPlayerController::IsVoxelInEditReach) and the voxel itself.
+	 *
+	 * @param OutHit        The trace's hit
+	 * @param OutDigVoxel   Global voxel coordinate a dig would empty
+	 * @param OutPlaceVoxel Global voxel coordinate a place would fill
+	 * @return False when the trace hits nothing or there is no voxel world
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Voxel")
+	bool FindEditTarget(FHitResult& OutHit, FIntVector& OutDigVoxel, FIntVector& OutPlaceVoxel) const;
 
 	/**
 	 * Whether the primary / secondary actions may dig and place voxels. Off by default so attacking and
@@ -714,6 +736,8 @@ protected:
 	void Input_Interact(const FInputActionValue& Value);
 	void Input_ToggleView(const FInputActionValue& Value);
 	void Input_PrimaryAction(const FInputActionValue& Value);
+	/** The primary action is released (or cancelled): a timed block break stops (WM-C15). */
+	void Input_StopPrimaryAction(const FInputActionValue& Value);
 	void Input_SecondaryAction(const FInputActionValue& Value);
 	void Input_OpenInventory(const FInputActionValue& Value);
 	void Input_OpenMap(const FInputActionValue& Value);

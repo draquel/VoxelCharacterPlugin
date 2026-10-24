@@ -59,6 +59,7 @@ Source/VoxelCharacterPlugin/
 │   ├── UI/             # VitalsWidget (health/stamina bars, programmatic)
 │   ├── Camera/         # CameraManager, CameraModeBase, FP/TP modes
 │   ├── Movement/       # MovementComponent, VoxelNavigationHelper, custom modes
+│   ├── Editing/        # BlockInteractionComponent (cubic block highlight, placement preview, timed breaking)
 │   ├── Integration/    # Interface bridges to other plugins
 │   └── Input/          # InputConfig DataAsset, input action references
 ├── Private/
@@ -357,9 +358,10 @@ Dead or downed characters ignore primary/secondary actions entirely.
 never replicated; the server still validates every `Server_RequestVoxelModification`. `OnEditModeChanged(bool)`
 drives the `EDIT` cue on `UVCVitalsWidget`. The toggle also mirrors into the VoxelWorlds console variable
 `voxel.Edit.PlayerInputs` (looked up by name, no dependency) so a map whose `AVoxelWorldTestActor` has
-`bEnableEditInputs` set (the demo's brush sphere) obeys the same key instead of polling the raw mouse. This is a
-stop-gap so attacking/interacting never digs; the plan is to bind edit to an item / mechanic later, which should
-replace the key, not the gate.
+`bEnableEditInputs` set (the demo's brush sphere) obeys the same key instead of polling the raw mouse; in a cubic world
+the mirror sets 2 (the test actor keeps its keys, no mouse edits or target boxes: the character edits blocks itself, with
+break times; world modes review WM-C16). This is a stop-gap so attacking/interacting never digs; the plan is to bind edit
+to an item / mechanic later, which should replace the key, not the gate.
 
 **Block-accurate editing in cubic worlds (world modes review WM-C2):** the dig / place target comes from
 `AVCCharacterBase::GetEditVoxelCoord(ImpactPoint, ImpactNormal, Config, bPlace)`: a place fills the voxel half a voxel in
@@ -367,7 +369,28 @@ front of the hit face; in a cubic world a dig takes the block half a voxel behin
 so `floor(ImpactPoint)` was the air voxel on +X/+Y/+Z faces, KC5), while smooth worlds still dig at the voxel containing
 the impact point. On the server a cubic world edits whole blocks: one full-strength cube brush around that one voxel
 (density to 0 / 255), so one click removes or places exactly one block; smooth worlds keep the density brushes. The game
-module's `vox.Dig` (crosshair form) uses the same helper.
+module's `vox.Dig` (crosshair form) uses the same helper. Every edit action takes its voxels from
+`AVCCharacterBase::FindEditTarget` (the crosshair trace and `GetEditVoxelCoord` for the dig and the place voxel; WM-C12),
+and the server's reach is `AVCPlayerController::IsVoxelInEditReach` (800 uu, `EditReach`, to the voxel's corner).
+
+**Block feedback and timed breaking (cubic worlds; world modes review §22, decisions D31-D34):**
+`UVCBlockInteractionComponent` (Editing/, `AVCCharacterBase::BlockInteraction`) on the locally controlled player in a cubic
+world outlines the block the primary action would dig (edit mode, or a digging tool) and draws a translucent ghost of the
+block the secondary action would place (edit mode), red where the server would refuse it
+(`AVCPlayerController::WouldPlaceTrapPawn`); both from `FindEditTarget`, within the reach, only on a solid / air voxel,
+hidden in a UI mode and in smooth worlds; drawn by its own `ULineBatchComponent` (no assets; `vc.Dig.Highlight`). A dig in a
+cubic world is a hold: `IA_PrimaryAction` binds `Completed` / `Canceled` too, the press starts `StartHold`, the release
+`StopHold`. While held the owning client sends `Server_BeginBlockBreak(voxel)` for the target (again on every retarget)
+and `Server_StopBlockBreak` on release, and draws cracks over the block's exposed faces from its own prediction
+(`BuildCrackLines`, pure); the server keeps one break per player, checks it as a dig (reach, a solid voxel,
+`UVoxelEditManager::CanEditAt`), advances it by Δt ÷ (`FVoxelMaterialRegistry::GetHardness` ÷ `MiningSpeed`) each tick
+(`GetBreakSeconds`), and when it completes checks again and digs through `AVCPlayerController::DigVoxelAt` (the instant
+dig's path: one block, the gather table once per voxel), then `Client_BlockBreakFinished`; `OnBlockBroken` fires on the
+server, `AVCPlayerController::OnVoxelGathered` when a dig pays. Holding on breaks the next block under the crosshair.
+`Server_RequestVoxelModification(Destroy)` refuses in a timed world (a client cannot skip the time). Smooth worlds dig at
+once (D32). Cvars `vc.Dig.BreakTimes` (0 = instant breaks, as before), `vc.Dig.BreakTimeScale` (QA), `vc.Dig.Highlight`;
+`vox.Mine [seconds]` holds the break through the client path, `vox.Dig` digs at once (QA). Voxel edits are not replicated
+to clients (VoxelWorlds' edit layer, a known gap), so a remote client sees its predicted cracks but not the dug block.
 
 Do not bypass this chain. New action types insert into the chain, they don't replace it.
 
@@ -414,7 +437,7 @@ The check uses an AABB-vs-AABB test (voxel box against capsule bounding box) —
 ### Client Prediction
 
 - Movement: standard CharacterMovementComponent prediction
-- Voxel block breaking: client can show visual feedback (cracks, particles) but actual removal waits for server confirmation
+- Voxel block breaking: the client draws its predicted cracks (`UVCBlockInteractionComponent`), the server times the break and removes the block
 - GAS: use prediction keys for ability activation, server reconciles
 
 ### Replication Checklist

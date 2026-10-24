@@ -5,6 +5,7 @@
 #include "UI/VCVitalsWidget.h"
 #include "Core/VCCharacterBase.h"
 #include "Gathering/VCGatherTable.h"
+#include "Editing/VCBlockInteractionComponent.h"
 #include "VoxelScatterManager.h"
 #include "UI/VCCampsiteWidget.h"
 #include "UI/VCCraftingPanelWidget.h"
@@ -1370,14 +1371,26 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 
 	// Convert voxel coordinate back to world position for distance validation
 	const FVector VoxelWorldPos = FVector(VoxelCoord) * Config->VoxelSize + Config->WorldOrigin;
-	const float DistToVoxel = FVector::Dist(ControlledPawn->GetActorLocation(), VoxelWorldPos);
 
-	// Distance check: reject modifications beyond max interaction range
-	constexpr float MaxModificationRange = 800.f;
-	if (DistToVoxel > MaxModificationRange)
+	// Distance check: reject modifications beyond the edit reach (the block feedback shows nothing beyond it either)
+	if (!IsVoxelInEditReach(ControlledPawn->GetActorLocation(), VoxelCoord, Config))
 	{
 		UE_LOG(LogVoxelCharacter, Warning, TEXT("Server_RequestVoxelModification: Out of range (%.0f > %.0f)"),
-			DistToVoxel, MaxModificationRange);
+			FVector::Dist(ControlledPawn->GetActorLocation(), VoxelWorldPos), EditReach);
+		return;
+	}
+
+	if (ModType == EVoxelModificationType::Destroy)
+	{
+		// A cubic world with break times breaks a block only through the timed path (UVCBlockInteractionComponent,
+		// WM-C15), which waits the material's time on this server; an instant request would skip it.
+		if (UVCBlockInteractionComponent::UsesTimedBreaks(Config))
+		{
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("Server_RequestVoxelModification: refused a dig at [%d,%d,%d]: blocks here break by holding ")
+				TEXT("the primary action (Server_BeginBlockBreak; vc.Dig.BreakTimes 0 digs at once)"), VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z);
+			return;
+		}
+		DigVoxelAt(VoxelCoord);
 		return;
 	}
 
@@ -1394,9 +1407,9 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 	FVoxelBrushParams Brush;
 	Brush.Shape = EVoxelBrushShape::Sphere;
 
-	// Cubic worlds edit whole blocks (world modes review WM-C2, KC5): a dig empties exactly the aimed voxel and a
-	// place fills exactly one, each a full-strength cube brush around that one voxel (density to 0 / 255), so one
-	// click is one block. Smooth worlds keep the density brushes that dent and build the surface gradually.
+	// Cubic worlds edit whole blocks (world modes review WM-C2, KC5): a place fills exactly the aimed voxel, a
+	// full-strength cube brush around that one voxel (density to 255), so one click is one block (a dig: DigVoxelAt).
+	// Smooth worlds keep the density brushes that build the surface gradually.
 	const bool bBlockEdit = Config->MeshingMode == EMeshingMode::Cubic;
 	// A cubic voxel's block spans [VoxelWorldPos, VoxelWorldPos + VoxelSize]; the single-voxel brush aims at its centre.
 	const FVector BlockCentre = VoxelWorldPos + FVector(Config->VoxelSize * 0.5f);
@@ -1412,89 +1425,19 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 	switch (ModType)
 	{
 	case EVoxelModificationType::Destroy:
-	{
-		if (bBlockEdit)
-		{
-			MakeBlockBrush(Brush);
-		}
-		else
-		{
-			Brush.Radius = Config->VoxelSize * 1.5f;
-			Brush.Strength = 1.f;
-			Brush.FalloffType = EVoxelBrushFalloff::Smooth;
-			Brush.DensityDelta = 80;
-		}
-
-		// Gathering (feature 8) pays for a voxel dug out, not for a swing: read every voxel the brush can
-		// reach before and after it runs, and pay once when the dig turned a solid voxel to air. A dug voxel
-		// keeps its material id, so paying whenever the brush changed anything let one voxel yield forever (G3).
-		// Sampled at voxel centres, so the position-to-index floor lands on the voxel the brush edits.
-		TArray<FVector> Reachable;
-		TArray<FVoxelData> Before;
-		TArray<float> DistSq;
-		const int32 Reach = FMath::CeilToInt(Brush.Radius / Config->VoxelSize);
-		for (int32 DZ = -Reach; DZ <= Reach; ++DZ)
-		{
-			for (int32 DY = -Reach; DY <= Reach; ++DY)
-			{
-				for (int32 DX = -Reach; DX <= Reach; ++DX)
-				{
-					const FVector Offset = FVector(DX, DY, DZ) * Config->VoxelSize;
-					if (Offset.SizeSquared() > FMath::Square(Brush.Radius))
-					{
-						continue;
-					}
-					Reachable.Add(VoxelWorldPos + Offset + FVector(Config->VoxelSize * 0.5f));
-					Before.Add(ChunkMgr->GetEditMergedVoxelAtWorldPosition(Reachable.Last()));
-					DistSq.Add(static_cast<float>(Offset.SizeSquared()));
-				}
-			}
-		}
-
-		EditMgr->BeginEditOperation(TEXT("Player dig"));
-		const int32 Modified = EditMgr->ApplyBrushEdit(bBlockEdit ? BlockCentre : VoxelWorldPos, Brush, EEditMode::Subtract);
-		EditMgr->EndEditOperation();
-		if (Modified > 0)
-		{
-			TArray<FVoxelData> After;
-			After.Reserve(Reachable.Num());
-			for (const FVector& Sample : Reachable)
-			{
-				After.Add(ChunkMgr->GetEditMergedVoxelAtWorldPosition(Sample));
-			}
-			const int32 Dug = UVCGatherTable::FindDugVoxel(Before, After, DistSq);
-			if (Dug != INDEX_NONE)
-			{
-				GatherFromVoxel(Before[Dug].MaterialID);
-			}
-		}
-
-		UE_LOG(LogVoxelCharacter, Verbose, TEXT("Voxel destroyed at [%d,%d,%d]"),
-			VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z);
-		break;
-	}
+		break; // DigVoxelAt, above
 
 	case EVoxelModificationType::Place:
 	{
-		// Reject a placement that would close terrain around any pawn (this player, other players, NPCs).
-		// Smooth: the brush below fills the single voxel SAMPLE at VoxelWorldPos, and the smooth mesher puts the
-		// new surface about half a voxel around that sample -- so the solid cube is centred on the sample, not
-		// spanning [sample, sample + VoxelSize] (the old test was shifted half a voxel and ignored NPCs).
-		// Cubic: the new block is exactly the voxel's cell, [sample, sample + VoxelSize]; a pawn only touching
-		// one of its faces is not inside it.
+		// Reject a placement that would close terrain around any pawn (this player, other players, NPCs); the
+		// placement preview shows the same test in red.
+		if (WouldPlaceTrapPawn(GetWorld(), Config, VoxelCoord))
 		{
-			const FVector BoxCentre = bBlockEdit ? BlockCentre : VoxelWorldPos;
-			const float HalfExtent = bBlockEdit ? Config->VoxelSize * 0.5f - 2.f : Config->VoxelSize * 0.5f + 10.f;
-			const FCollisionObjectQueryParams PawnObjects(ECC_Pawn);
-			if (GetWorld() && GetWorld()->OverlapAnyTestByObjectType(BoxCentre, FQuat::Identity, PawnObjects,
-				FCollisionShape::MakeBox(FVector(HalfExtent))))
-			{
-				UE_LOG(LogVoxelCharacter, Verbose,
-					TEXT("Server_RequestVoxelModification: Rejected place at [%d,%d,%d] — overlaps a pawn"),
-					VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z);
-				Client_ShowToast(NSLOCTEXT("VoxelCharacter", "PlaceTooClose", "Too close to place a block"), 1.5f);
-				return;
-			}
+			UE_LOG(LogVoxelCharacter, Verbose,
+				TEXT("Server_RequestVoxelModification: Rejected place at [%d,%d,%d] — overlaps a pawn"),
+				VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z);
+			Client_ShowToast(NSLOCTEXT("VoxelCharacter", "PlaceTooClose", "Too close to place a block"), 1.5f);
+			return;
 		}
 
 		if (bBlockEdit)
@@ -1544,6 +1487,137 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 	}
 }
 
+bool AVCPlayerController::IsVoxelInEditReach(const FVector& PawnLocation, const FIntVector& VoxelCoord, const UVoxelWorldConfiguration* Config)
+{
+	if (!Config)
+	{
+		return false;
+	}
+	const FVector VoxelWorldPos = FVector(VoxelCoord) * Config->VoxelSize + Config->WorldOrigin;
+	return FVector::Dist(PawnLocation, VoxelWorldPos) <= EditReach;
+}
+
+bool AVCPlayerController::WouldPlaceTrapPawn(const UWorld* World, const UVoxelWorldConfiguration* Config, const FIntVector& VoxelCoord)
+{
+	if (!World || !Config)
+	{
+		return false;
+	}
+	// Smooth: the place brush fills the single voxel SAMPLE at VoxelWorldPos, and the smooth mesher puts the new surface
+	// about half a voxel around that sample -- so the solid cube is centred on the sample, not spanning
+	// [sample, sample + VoxelSize] (an older test was shifted half a voxel and ignored NPCs).
+	// Cubic: the new block is exactly the voxel's cell, [sample, sample + VoxelSize]; a pawn only touching one of its
+	// faces is not inside it.
+	const bool bBlockEdit = Config->MeshingMode == EMeshingMode::Cubic;
+	const FVector VoxelWorldPos = FVector(VoxelCoord) * Config->VoxelSize + Config->WorldOrigin;
+	const FVector BoxCentre = bBlockEdit ? VoxelWorldPos + FVector(Config->VoxelSize * 0.5f) : VoxelWorldPos;
+	const float HalfExtent = bBlockEdit ? Config->VoxelSize * 0.5f - 2.f : Config->VoxelSize * 0.5f + 10.f;
+	const FCollisionObjectQueryParams PawnObjects(ECC_Pawn);
+	return World->OverlapAnyTestByObjectType(BoxCentre, FQuat::Identity, PawnObjects, FCollisionShape::MakeBox(FVector(HalfExtent)));
+}
+
+bool AVCPlayerController::DigVoxelAt(const FIntVector& VoxelCoord)
+{
+	APawn* ControlledPawn = GetPawn();
+	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	const UVoxelWorldConfiguration* Config = ChunkMgr && ChunkMgr->IsInitialized() ? ChunkMgr->GetConfiguration() : nullptr;
+	UVoxelEditManager* EditMgr = ChunkMgr ? ChunkMgr->GetEditManager() : nullptr;
+	if (!HasAuthority() || !ControlledPawn || !Config || !EditMgr)
+	{
+		return false;
+	}
+	if (!IsVoxelInEditReach(ControlledPawn->GetActorLocation(), VoxelCoord, Config))
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("DigVoxelAt: [%d,%d,%d] out of reach"), VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z);
+		return false;
+	}
+
+	// Set edit source to Player so scatter is permanently removed
+	EditMgr->SetEditSource(EEditSource::Player);
+
+	const FVector VoxelWorldPos = FVector(VoxelCoord) * Config->VoxelSize + Config->WorldOrigin;
+	// Cubic worlds edit whole blocks (world modes review WM-C2, KC5): a dig empties exactly the aimed voxel, a
+	// full-strength cube brush around that one voxel (density to 0), so one dig is one block. Smooth worlds keep the
+	// density brush that dents the surface gradually.
+	const bool bBlockEdit = Config->MeshingMode == EMeshingMode::Cubic;
+	// A cubic voxel's block spans [VoxelWorldPos, VoxelWorldPos + VoxelSize]; the single-voxel brush aims at its centre.
+	const FVector BlockCentre = VoxelWorldPos + FVector(Config->VoxelSize * 0.5f);
+	FVoxelBrushParams Brush;
+	if (bBlockEdit)
+	{
+		Brush.Shape = EVoxelBrushShape::Cube;
+		Brush.Radius = Config->VoxelSize * 0.4f; // under half a voxel: the cube reaches no neighbour
+		Brush.Strength = 1.f;
+		Brush.FalloffType = EVoxelBrushFalloff::Sharp;
+		Brush.DensityDelta = 255;
+	}
+	else
+	{
+		Brush.Shape = EVoxelBrushShape::Sphere;
+		Brush.Radius = Config->VoxelSize * 1.5f;
+		Brush.Strength = 1.f;
+		Brush.FalloffType = EVoxelBrushFalloff::Smooth;
+		Brush.DensityDelta = 80;
+	}
+
+	// Gathering (feature 8) pays for a voxel dug out, not for a swing: read every voxel the brush can
+	// reach before and after it runs, and pay once when the dig turned a solid voxel to air. A dug voxel
+	// keeps its material id, so paying whenever the brush changed anything let one voxel yield forever (G3).
+	// Sampled at voxel centres, so the position-to-index floor lands on the voxel the brush edits.
+	TArray<FVector> Reachable;
+	TArray<FVoxelData> Before;
+	TArray<float> DistSq;
+	const int32 Reach = FMath::CeilToInt(Brush.Radius / Config->VoxelSize);
+	for (int32 DZ = -Reach; DZ <= Reach; ++DZ)
+	{
+		for (int32 DY = -Reach; DY <= Reach; ++DY)
+		{
+			for (int32 DX = -Reach; DX <= Reach; ++DX)
+			{
+				const FVector Offset = FVector(DX, DY, DZ) * Config->VoxelSize;
+				if (Offset.SizeSquared() > FMath::Square(Brush.Radius))
+				{
+					continue;
+				}
+				Reachable.Add(VoxelWorldPos + Offset + FVector(Config->VoxelSize * 0.5f));
+				Before.Add(ChunkMgr->GetEditMergedVoxelAtWorldPosition(Reachable.Last()));
+				DistSq.Add(static_cast<float>(Offset.SizeSquared()));
+			}
+		}
+	}
+
+	EditMgr->BeginEditOperation(TEXT("Player dig"));
+	const int32 Modified = EditMgr->ApplyBrushEdit(bBlockEdit ? BlockCentre : VoxelWorldPos, Brush, EEditMode::Subtract);
+	EditMgr->EndEditOperation();
+	int32 Dug = INDEX_NONE;
+	if (Modified > 0)
+	{
+		TArray<FVoxelData> After;
+		After.Reserve(Reachable.Num());
+		for (const FVector& Sample : Reachable)
+		{
+			After.Add(ChunkMgr->GetEditMergedVoxelAtWorldPosition(Sample));
+		}
+		Dug = UVCGatherTable::FindDugVoxel(Before, After, DistSq);
+		if (Dug != INDEX_NONE)
+		{
+			GatherFromVoxel(Before[Dug].MaterialID);
+		}
+	}
+
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("Voxel destroyed at [%d,%d,%d]"),
+		VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z);
+
+	// Edit-protection feedback: the edit manager counts voxels a validator vetoed during the
+	// apply above (e.g. protected POI/dungeon claims). Tell the owning client so its UI can react.
+	const int32 RejectedVoxels = EditMgr->GetLastRejectedEditCount();
+	if (RejectedVoxels > 0)
+	{
+		Client_NotifyVoxelEditBlocked(RejectedVoxels);
+	}
+	return Dug != INDEX_NONE;
+}
+
 void AVCPlayerController::GatherFromVoxel(uint8 MaterialId)
 {
 #if WITH_INVENTORY_PLUGIN
@@ -1555,6 +1629,7 @@ void AVCPlayerController::GatherFromVoxel(uint8 MaterialId)
 	}
 	const int32 Count = UVCGatherTable::YieldFor(*Entry, Digger->GetMiningSpeed(), GatherTable->ToolMiningSpeedThreshold);
 	UE_LOG(LogVoxelCharacter, Log, TEXT("Gathered %d x %s from material %d"), Count, *Entry->ItemId.PrimaryAssetName.ToString(), MaterialId);
+	OnVoxelGathered.Broadcast(MaterialId, Entry->ItemId, Count);
 	GiveGatheredItem(Entry->ItemId, Count);
 #endif
 }
