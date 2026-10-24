@@ -394,10 +394,12 @@ void UVCBlockInteractionComponent::Draw(const UVoxelWorldConfiguration* Config, 
 {
 	const bool bEnabled = ChunkMgr && ShowsBlockFeedback(Config) && CVarVCDigHighlight.GetValueOnGameThread() != 0;
 	const bool bOutline = bEnabled && Targets.bHasDig;
-	const bool bGhost = bEnabled && Targets.bHasPlace;
+	// The ghost steps aside while a break runs: the player is mining, and it would cover the cracks on the top face.
+	const bool bBreaking = bOutline && bClientBreaking && ClientVoxel == Targets.DigVoxel;
+	const bool bGhost = bEnabled && Targets.bHasPlace && !bBreaking;
 	const FBox NewOutline = bOutline ? BlockCell(ChunkMgr, Config, Targets.DigVoxel) : FBox(ForceInit);
 	const FBox NewGhost = bGhost ? BlockCell(ChunkMgr, Config, Targets.PlaceVoxel) : FBox(ForceInit);
-	const float Progress = (bOutline && bClientBreaking && ClientVoxel == Targets.DigVoxel) ? ClientProgress : 0.f;
+	const float Progress = bBreaking ? ClientProgress : 0.f;
 	if (bOutline == bOutlineShown && bGhost == bGhostShown && NewOutline == OutlineBox && NewGhost == GhostBox
 		&& (!bGhost || Targets.bPlaceBlocked == bGhostBlockedShown) && Progress == DrawnProgress)
 	{

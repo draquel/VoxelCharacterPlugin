@@ -53,14 +53,14 @@ struct VOXELCHARACTERPLUGIN_API FVCBlockTargets
  * decisions D31-D34).
  *
  * On the locally controlled player it outlines the block the primary action would dig and shows a translucent ghost of
- * the block the secondary action would place (both from AVCCharacterBase::FindEditTarget, so exactly the voxels the edits
- * change, within AVCPlayerController::IsVoxelInEditReach), drawn by its own line batcher (no assets). While the primary
- * action is held on a block (StartHold / StopHold), the block breaks after its material's hardness divided by the
- * breaker's MiningSpeed (FVoxelMaterialRegistry::GetHardness): the owning client asks the server to begin a break on its
- * target, again on every retarget, and to stop on release, and draws cracks from its own prediction of the progress; the
- * server advances the one break it keeps per player, checks it again when the time is up and digs through the same path
- * an instant dig takes (AVCPlayerController::DigVoxelAt: one block, the gather table once per voxel). Smooth worlds keep
- * the instant dent per click and show nothing (D32).
+ * the block the secondary action would place (hidden while a break runs), both from AVCCharacterBase::FindEditTarget, so
+ * exactly the voxels the edits change, within AVCPlayerController::IsVoxelInEditReach, and drawn by its own line batcher
+ * (no assets). While the primary action is held on a block (StartHold / StopHold), the block breaks after its material's
+ * hardness divided by the breaker's MiningSpeed (FVoxelMaterialRegistry::GetHardness): the owning client asks the server
+ * to begin a break on its target, again on every retarget, and to stop on release, and draws cracks from its own
+ * prediction of the progress; the server advances the one break it keeps per player, checks it again when the time is up
+ * and digs through the same path an instant dig takes (AVCPlayerController::DigVoxelAt: one block, the gather table once
+ * per voxel). Smooth worlds keep the instant dent per click and show nothing (D32).
  */
 UCLASS(ClassGroup = (VoxelCharacter), meta = (BlueprintSpawnableComponent))
 class VOXELCHARACTERPLUGIN_API UVCBlockInteractionComponent : public UActorComponent
@@ -218,7 +218,7 @@ public:
 
 	/** Outline line width (world units). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|Voxel", meta = (ClampMin = "0"))
-	float OutlineThickness = 1.5f;
+	float OutlineThickness = 2.0f;
 
 	/** The ghost of the block a place would add (alpha = how solid it looks). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|Voxel")
@@ -234,7 +234,7 @@ public:
 
 	/** Crack line width (world units). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|Voxel", meta = (ClampMin = "0"))
-	float CrackThickness = 1.2f;
+	float CrackThickness = 1.8f;
 
 protected:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;

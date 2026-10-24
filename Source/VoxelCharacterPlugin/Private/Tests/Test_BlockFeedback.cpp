@@ -521,6 +521,10 @@ bool FVCBlock_Break::RunTest(const FString& Parameters)
 	AddInfo(FString::Printf(TEXT("Halfway: the client predicts %.3f, the server is at %.3f; %d crack lines drawn"), ClientProgress, Progress, B.Block->GetCrackSegmentCount()));
 	TestTrue(TEXT("Hold: the prediction is within two frames of the server"), FMath::Abs(ClientProgress - Progress) <= 2.f * Dt / StoneSeconds + 1.e-4f);
 	TestTrue(TEXT("Hold: cracks are drawn"), B.Block->GetCrackSegmentCount() > 0);
+	FBox HoldBox;
+	bool bHoldBlocked = false;
+	TestTrue(TEXT("Hold: the outline stays on the block"), B.Block->IsOutlineShown(HoldBox) && HoldBox.Equals(B.Cell(A), 0.01));
+	TestFalse(TEXT("Hold: the ghost steps aside while the break runs"), B.Block->IsGhostShown(HoldBox, bHoldBlocked));
 	for (int32 Frame = 0; Frame < StoneFrames; ++Frame)
 	{
 		B.Frame(Dt);
