@@ -16,6 +16,8 @@ class UItemCursorWidget;
 class UEquipmentManagerComponent;
 class UVCMinimapWidget;
 class UVCWorldMapWidget;
+class UVoxelChunkManager;
+struct FVoxelTreeInstance;
 
 /** A voxel modification was (partially) blocked — RejectedVoxelCount voxels refused the edit. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVoxelEditBlocked, int32, RejectedVoxelCount);
@@ -366,9 +368,36 @@ public:
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_ScatterHarvested(const FVector& Location);
 
+	/**
+	 * Authority: a chop hit on the voxel tree whose trunk holds a voxel (cubic worlds, world modes review WM-C8, KC9, D30).
+	 * As a scatter tree: yields the gather table's harvest entry for VoxelTreeHarvestCategory per hit (a tool doubles it),
+	 * and after its HitsToRemove hits fells the tree (UVoxelChunkManager::FellVoxelTree: its trunk above the stump and its
+	 * leaves, one player edit outside the undo history).
+	 *
+	 * @param VoxelCoord Global voxel coordinate of the trunk block hit
+	 * @return True when the voxel is a trunk block of a standing tree within reach
+	 */
+	bool ChopVoxelTreeAt(const FIntVector& VoxelCoord);
+
+	/** The harvest category voxel trees yield under (the same entry as the smooth world's scatter trees). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Gather")
+	FName VoxelTreeHarvestCategory = TEXT("Tree");
+
+	/**
+	 * Whether a voxel tree still stands: it has a trunk block above its stump (FellVoxelTree keeps the ground-level layer).
+	 *
+	 * @param ChunkMgr The voxel world
+	 * @param Tree The tree
+	 * @return True while there is something to fell
+	 */
+	static bool IsVoxelTreeStanding(const UVoxelChunkManager* ChunkMgr, const FVoxelTreeInstance& Tree);
+
 private:
 	/** Chop hits per instance (keyed by the instance base, rounded), authority. */
 	TMap<FIntVector, int32> ChopHits;
+
+	/** Chop hits per voxel tree (keyed by its base voxel), authority. */
+	TMap<FIntVector, int32> VoxelTreeChopHits;
 
 	// --- Click-to-move item management ---
 

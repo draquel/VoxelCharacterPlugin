@@ -529,30 +529,49 @@ bool AVCCharacterBase::IsIncapacitated() const
 	return CombatComponent && (ICGFDamageableInterface::Execute_IsDead(CombatComponent) || CombatComponent->IsDowned());
 }
 
-bool AVCCharacterBase::TryStartMeleeAttack()
+AActor* AVCCharacterBase::FindMeleeTargetUnderCrosshair()
 {
-	if (!CombatComponent || IsIncapacitated())
+	UWorld* World = GetWorld();
+	if (!World)
 	{
-		return false;
+		return nullptr;
 	}
-
 	// Same view the server-side ability uses: eyes + control rotation, not the third-person camera
 	// (which sits metres behind the pawn and lags the control rotation by a frame).
 	// ECC_Pawn, not ECC_Visibility: the engine's Pawn and CharacterMesh profiles ignore Visibility,
 	// so a visibility trace passes straight through every character. Terrain still blocks Pawn.
+	// A thin sphere, not a ray: a ray exactly through a capsule's axis misses it (WM-C9, KC12).
 	FVector Start;
 	FRotator ViewRotation;
 	GetActorEyesViewPoint(Start, ViewRotation);
 	const FVector End = Start + ViewRotation.Vector() * AttackTargetRange;
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCMeleeTarget), false, this);
 	FHitResult Hit;
-	if (!GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Pawn, Params))
+	if (!World->SweepSingleByChannel(Hit, Start, End, FQuat::Identity, ECC_Pawn, FCollisionShape::MakeSphere(AttackTargetProbeRadius), Params))
 	{
-		return false;
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s melee target: nothing within %.0f uu from %s toward %s."), *GetName(), AttackTargetRange,
+			*Start.ToCompactString(), *ViewRotation.ToCompactString());
+		return nullptr;
 	}
 
 	AActor* HitActor = Hit.GetActor();
 	if (!HitActor || !UCGFCombatStatics::FindDamageable(HitActor).GetObject() || !UCGFCombatStatics::AreHostile(this, HitActor))
+	{
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s melee target: the crosshair's sweep met %s (%s) at %s, %.0f uu, from %s toward %s."), *GetName(),
+			*GetNameSafe(HitActor), *GetNameSafe(Hit.GetComponent()), *Hit.ImpactPoint.ToCompactString(), Hit.Distance, *Start.ToCompactString(),
+			*ViewRotation.ToCompactString());
+		return nullptr;
+	}
+	return HitActor;
+}
+
+bool AVCCharacterBase::TryStartMeleeAttack()
+{
+	if (!CombatComponent || IsIncapacitated())
+	{
+		return false;
+	}
+	if (!FindMeleeTargetUnderCrosshair())
 	{
 		return false;
 	}
@@ -2084,6 +2103,12 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 		return;
 	}
 
+	// Step 1c: a cubic world's voxel tree under the crosshair is chopped too (WM-C8), unless edit mode digs its blocks.
+	if (!bEditModeEnabled && TryChopVoxelTree())
+	{
+		return;
+	}
+
 	// Steps 2-3 carve terrain, so they only run while edit mode is on (IA_ToggleEditMode / vox.EditMode)
 	// or a digging tool is equipped (feature 8: a pickaxe is the gathering mechanic). Attacking and
 	// interacting with neither must never touch voxels.
@@ -2631,6 +2656,50 @@ void AVCCharacterBase::Server_ChopScatter_Implementation(const FVector& AimPoint
 	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
 	{
 		PC->ChopScatterAt(AimPoint);
+	}
+}
+
+bool AVCCharacterBase::TryChopVoxelTree()
+{
+	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
+	if (!Config || !ChunkMgr->HasVoxelTrees() || !Cast<AVCPlayerController>(GetController()))
+	{
+		return false;
+	}
+	// The block under the crosshair, as a dig would take it (behind the hit face); local check first so a swing at the
+	// ground still digs, the server re-validates.
+	FHitResult Hit;
+	if (!TraceForVoxel(Hit))
+	{
+		return false;
+	}
+	const FIntVector VoxelCoord = GetEditVoxelCoord(Hit.ImpactPoint, Hit.ImpactNormal, Config, /*bPlace=*/false);
+	FVoxelTreeInstance Tree;
+	if (!ChunkMgr->FindVoxelTreeAt(ChunkMgr->GlobalVoxelToWorldCentre(VoxelCoord), Tree) || !AVCPlayerController::IsVoxelTreeStanding(ChunkMgr, Tree))
+	{
+		return false;
+	}
+	if (HasAuthority())
+	{
+		Server_ChopVoxelTree_Implementation(VoxelCoord);
+	}
+	else
+	{
+		Server_ChopVoxelTree(VoxelCoord);
+	}
+	return true;
+}
+
+void AVCCharacterBase::Server_ChopVoxelTree_Implementation(const FIntVector& VoxelCoord)
+{
+	if (IsIncapacitated())
+	{
+		return;
+	}
+	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	{
+		PC->ChopVoxelTreeAt(VoxelCoord);
 	}
 }
 

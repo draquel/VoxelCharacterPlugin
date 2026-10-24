@@ -1637,6 +1637,63 @@ void AVCPlayerController::Multicast_ScatterHarvested_Implementation(const FVecto
 	}
 }
 
+bool AVCPlayerController::IsVoxelTreeStanding(const UVoxelChunkManager* ChunkMgr, const FVoxelTreeInstance& Tree)
+{
+	if (!ChunkMgr || !Tree.IsValid())
+	{
+		return false;
+	}
+	TArray<FVoxelTreeVoxel> Blocks;
+	ChunkMgr->GetVoxelTreeBlocks(Tree, Blocks);
+	return Blocks.ContainsByPredicate([&Tree](const FVoxelTreeVoxel& Block) { return Block.bTrunk && Block.GlobalVoxel.Z > Tree.BaseVoxel.Z; });
+}
+
+bool AVCPlayerController::ChopVoxelTreeAt(const FIntVector& VoxelCoord)
+{
+	AVCCharacterBase* Chopper = Cast<AVCCharacterBase>(GetPawn());
+	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
+	UVoxelEditManager* EditMgr = ChunkMgr ? ChunkMgr->GetEditManager() : nullptr;
+	if (!HasAuthority() || !Chopper || !Config || !EditMgr || !GatherTable || !ChunkMgr->HasVoxelTrees())
+	{
+		return false;
+	}
+	// The same reach as digging (Server_RequestVoxelModification).
+	const FVector BlockCentre = ChunkMgr->GlobalVoxelToWorldCentre(VoxelCoord);
+	constexpr float MaxChopRange = 800.f;
+	if (FVector::Dist(Chopper->GetActorLocation(), BlockCentre) > MaxChopRange)
+	{
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("ChopVoxelTreeAt: out of range (%.0f > %.0f)"), FVector::Dist(Chopper->GetActorLocation(), BlockCentre), MaxChopRange);
+		return false;
+	}
+	FVoxelTreeInstance Tree;
+	if (!ChunkMgr->FindVoxelTreeAt(BlockCentre, Tree) || !IsVoxelTreeStanding(ChunkMgr, Tree))
+	{
+		return false;
+	}
+	const FVCHarvestEntry* Entry = GatherTable->FindHarvest(VoxelTreeHarvestCategory);
+	if (!Entry)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("ChopVoxelTreeAt: the gather table has no '%s' harvest entry."), *VoxelTreeHarvestCategory.ToString());
+		return false;
+	}
+	int32& Hits = VoxelTreeChopHits.FindOrAdd(Tree.BaseVoxel);
+	++Hits;
+	const int32 Count = UVCGatherTable::HarvestYieldFor(*Entry, Chopper->GetMiningSpeed(), GatherTable->ToolMiningSpeedThreshold);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("Chop %d/%d on the voxel tree at %s (template %d): +%d %s"), Hits, Entry->HitsToRemove,
+		*Tree.BaseVoxel.ToString(), Tree.TemplateIndex, Count, *Entry->ItemId.PrimaryAssetName.ToString());
+	GiveGatheredItem(Entry->ItemId, Count);
+	if (Hits >= Entry->HitsToRemove)
+	{
+		VoxelTreeChopHits.Remove(Tree.BaseVoxel);
+		// A player edit, so scatter treats the cleared ground as the player's (as a dig is), and the edit layer saves it.
+		EditMgr->SetEditSource(EEditSource::Player);
+		const int32 Removed = ChunkMgr->FellVoxelTree(Tree, /*bKeepStump=*/true);
+		UE_LOG(LogVoxelCharacter, Log, TEXT("Felled the voxel tree at %s: %d blocks removed, stump kept."), *Tree.BaseVoxel.ToString(), Removed);
+	}
+	return true;
+}
+
 void AVCPlayerController::Client_NotifyGathered_Implementation(const FText& ItemName, int32 Count)
 {
 	ShowToast(Count > 0 ? FText::Format(NSLOCTEXT("VCGather", "Gathered", "+{0} {1}"), Count, ItemName) : ItemName, 2.0f);

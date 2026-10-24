@@ -62,6 +62,36 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Camera|Collision", meta = (ClampMin = "0.0"))
 	float CameraCollisionProbeSize = 12.f;
 
+	// --- Block steps (world modes review WM-C7, D29) ---
+
+	/**
+	 * Ease the view through a step of a walker that steps whole blocks (UVCMovementComponent::IsSteppingBlocks, a cubic
+	 * world): the pawn rises or drops a block in one frame, and the camera follows it over a short ease instead of
+	 * jumping with it. Smooth worlds are not touched.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Camera|Steps")
+	bool bEaseBlockSteps = true;
+
+	/** How fast the eased step closes (FInterpTo speed; 12 closes most of a block in about 0.15 s). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Camera|Steps", meta = (ClampMin = "0.0"))
+	float BlockStepEaseSpeed = 12.f;
+
+	/**
+	 * The step ease's next offset along local up (pure): a grounded walker whose height along up changed by a step
+	 * (more than MinStep, at most MaxStep) since the last frame adds the opposite of that change to the offset, which then
+	 * eases toward zero; anything else (a jump, a fall, a teleport) drops the offset.
+	 *
+	 * @param Offset The offset carried from the last frame
+	 * @param HeightDelta Change of the pawn's height along up since the last frame
+	 * @param bGroundedBoth The walker was on the ground last frame and is now
+	 * @param MinStep Smallest change taken for a step
+	 * @param MaxStep Largest change taken for a step (the walker's step height)
+	 * @param DeltaTime Frame time
+	 * @param EaseSpeed BlockStepEaseSpeed
+	 * @return The offset to add to the camera along up this frame
+	 */
+	static float ComputeStepEaseOffset(float Offset, float HeightDelta, bool bGroundedBoth, float MinStep, float MaxStep, float DeltaTime, float EaseSpeed);
+
 	// --- Accessors ---
 
 	/** Current blended camera world location. */
@@ -97,6 +127,12 @@ protected:
 	FVector CurrentCameraLocation = FVector::ZeroVector;
 	FRotator CurrentCameraRotation = FRotator::ZeroRotator;
 	float CurrentFOV = 90.f;
+
+	// --- Block step ease ---
+	float StepEaseOffset = 0.f;
+	FVector LastPawnLocation = FVector::ZeroVector;
+	bool bLastPawnGrounded = false;
+	bool bHasLastPawnLocation = false;
 
 	/**
 	 * Pull the camera toward the pivot if terrain blocks the view.

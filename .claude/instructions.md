@@ -123,6 +123,7 @@ attacker builds FCGFDamageContext
 - `State.Dead` / `State.Downed` are replicated loose tags on the ASC (`EGameplayTagReplicationState::TagOnly`) and block ability activation; `bIsDead` / `bIsDowned` replicate on the component for client visuals.
 - `UVCMeleeAttackAbility` is `ServerOnly`; the client only requests activation by tag `Ability.Attack.Melee`. Damage comes from the main-hand `UItemFragment_Weapon` when present, else `UnarmedDamage`.
 - **Target traces use ECC_Pawn from `GetActorEyesViewPoint`**, never ECC_Visibility: the engine's Pawn and CharacterMesh profiles ignore Visibility, so a visibility trace passes through every character, and the third-person camera is metres behind the pawn.
+- **Sweep, don't ray, at a pawn** (world modes review WM-C9, KC12): a line trace that passes exactly through a capsule's axis misses the capsule (a Chaos query case: offset by 0.01 uu it hits), and an aim straight at a body's centre does exactly that (auto-aim, a target a block below). `AVCCharacterBase::FindMeleeTargetUnderCrosshair` sweeps a sphere of `AttackTargetProbeRadius` (5 uu); the melee ability sweeps `MeleeRadius`.
 - Crit is rolled on the server in the melee ability from the weapon fragment (`CritChance`, `CritMultiplier`); a critical hit carries `Damage.Critical` in `FCGFDamageContext::ContextTags`.
 
 ### Item loop integration (feature 2)
@@ -187,6 +188,7 @@ attacker builds FCGFDamageContext
 
 - **Gathering:** `UVCGatherTable` (Gathering/, data asset on `AVCPlayerController::GatherTable`): voxel material id → item id, base / tool yield; `ToolMiningSpeedThreshold` (1.5) decides when a dig counts as tool-assisted. `Server_RequestVoxelModification(Destroy)` reads the voxel's material before the brush, and when voxels were removed `GatherFromVoxel` creates the item, adds it (or drops it at the feet when full) and sends `Client_NotifyGathered` → toast "+N Wood". Pure `YieldFor` is tested.
 - **Chopping:** step 1b of the primary action: `TryChopScatter` asks the local `UVoxelScatterManager::HarvestScatterNear` for a harvestable scatter instance (a tree, `FScatterDefinition::HarvestCategory`) within `ChopSearchRadius` of `GetChopAimPoint()` (160 uu ahead); if there is one, `Server_ChopScatter` → `AVCPlayerController::ChopScatterAt` re-checks, yields the gather table's `HarvestEntries` item per hit (tool ×2) and after `HitsToRemove` hits `Multicast_ScatterHarvested` makes every machine remove its local instance (scatter is local). No edit mode or tool needed.
+- **Voxel trees (cubic worlds; world modes review WM-C8, decision D30):** step 1c of the primary action (`TryChopVoxelTree`, after `TryChopScatter`, skipped in edit mode so B digs a trunk block like any block): a trunk block of a standing voxel tree under the crosshair (`UVoxelChunkManager::FindVoxelTreeAt`) → `Server_ChopVoxelTree` → `AVCPlayerController::ChopVoxelTreeAt` re-checks reach (800 uu, as digging) and the tree, pays the gather table's `VoxelTreeHarvestCategory` (`Tree`, the scatter trees' entry) per hit and at `HitsToRemove` fells it (`UVoxelChunkManager::FellVoxelTree`: trunk above the stump and leaves, one player edit outside the undo history, saved with the edit layer). A stump (`IsVoxelTreeStanding` false) is not chopped. `vox.Chop` / `vox.Trees` in the game module.
 - **Dig gate:** the primary action digs with edit mode (B) **or** a digging tool (`HasDiggingTool`: main hand occupied and `GetMiningSpeed() > 1`, i.e. a pickaxe). Unarmed digging and placing stay behind B.
 - **Placeable items:** `UseItemInSlot` handles `UItemFragment_Placeable` before Consumable: `TryPlaceItem` traces the ground `PlaceDistance` ahead, rejects steep ground (`AcceptsGround`), spawns the actor facing the player on the authority, consumes the item.
 - **Rest points:** `RequestRest / RequestSleep / RequestCraft` route to `Server_RestAt / Server_SleepAt / Server_CraftRecipe`; the server re-checks `IsRestPointInRange` (an `ICGFRestPointInterface` actor within interaction range + 100 uu) and calls the interface (the rest point owns healing / respawn point / clock). `RestoreVitals()` sets health and stamina to max. Results come back as `Client_CraftResult` toasts. `AVCPlayerState::SetRespawnPoint` + `EVCRespawnPolicy::AtLastRest` (`ResolveRespawnTransform`, pure, tested) respawn at the last campsite.
@@ -278,6 +280,15 @@ worlds keep the old arithmetic. Rules:
 - Re-query every `TerrainCacheDuration` seconds (default 100ms)
 - Invalidate immediately when `OnVoxelChunkModified` fires for the character's current chunk
 - `EVoxelSurfaceType` drives friction multiplier, footstep sounds, and movement speed modifiers
+
+### Block steps (cubic worlds; world modes review WM-C7, decision D29)
+
+A cubic world's ground is blocks a voxel high. Once a walker sees an initialized voxel world with a block surface
+(`UVoxelChunkManager::IsBlockSurface`) `RefreshBlockStepHeight` sets `MaxStepHeight` to one block
+(`GetBlockStepHeight`: voxel size + `BlockStepMargin`, 80 at 75 uu), for players and NPCs alike (`bStepUpOneBlock`,
+`vc.Move.StepUpBlocks`), so one block is walked up and two are a wall (the jump's apex is about 113). Smooth worlds keep
+50. The surface navigation uses the same rule (`voxel.Nav.BlockSteps`). `UVCCameraManager` eases the view through a block
+step (`bEaseBlockSteps`, `BlockStepEaseSpeed`, pure `ComputeStepEaseOffset`) only for a walker that `IsSteppingBlocks()`.
 
 ### Terrain closing around a pawn
 

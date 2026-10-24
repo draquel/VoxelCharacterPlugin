@@ -127,6 +127,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Gather")
 	bool TryChopScatter();
 
+	/**
+	 * Chop the voxel tree (cubic worlds, world modes review WM-C8, D30) whose trunk block is under the crosshair, if it has
+	 * a trunk above its stump; the server re-checks and yields, and fells it after the harvest entry's hits. No tool
+	 * needed; in edit mode the primary action digs the block instead. @return True when a chop was sent.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Gather")
+	bool TryChopVoxelTree();
+
 	/** Authority: restore health and stamina to their maximums (resting). */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Rest")
 	void RestoreVitals();
@@ -176,6 +184,25 @@ public:
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0"))
 	float AttackTargetRange = 250.f;
+
+	/**
+	 * Radius of the sweep that looks for that target along the view (world modes review WM-C9, KC12). A line trace was
+	 * used before, and a ray that passes exactly through a capsule's axis misses the capsule (a Chaos query case), which
+	 * an aim straight at a body's centre does: vox.Attack's auto-aim, a target a block below. A thin sphere has no such
+	 * case and reaches a few uu further round a body's edge; the melee ability's own sweep is wider (MeleeRadius).
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0.1"))
+	float AttackTargetProbeRadius = 5.f;
+
+	/**
+	 * The hostile damageable under the crosshair within AttackTargetRange: the first thing a sphere of AttackTargetProbeRadius
+	 * sweeping from the eyes along the view meets on the Pawn channel, if it is a hostile damageable (terrain and walls stop
+	 * it). Step 1 of the primary-action chain asks this before it starts the melee ability.
+	 *
+	 * @return The target, or null
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Combat")
+	AActor* FindMeleeTargetUnderCrosshair();
 
 	/** True once this avatar has died (or been downed). Input and movement are off. */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
@@ -712,6 +739,9 @@ protected:
 
 	UFUNCTION(Server, Reliable)
 	void Server_ChopScatter(const FVector& AimPoint);
+
+	UFUNCTION(Server, Reliable)
+	void Server_ChopVoxelTree(const FIntVector& VoxelCoord);
 
 	UFUNCTION(Server, Reliable)
 	void Server_SleepAt(AActor* RestPoint);

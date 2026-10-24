@@ -16,6 +16,14 @@
 #include "AbilitySystemInterface.h"
 #include "Combat/VCCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
+#include "HAL/IConsoleManager.h"
+
+static TAutoConsoleVariable<int32> CVarStepUpBlocks(
+	TEXT("vc.Move.StepUpBlocks"),
+	1,
+	TEXT("Cubic worlds: players and NPCs step up one block without a jump (1, world modes review WM-C7, D29), or keep the ")
+	TEXT("smooth step so every block is a jump (0, as before). Read when a walker first sees the voxel world."),
+	ECVF_Default);
 
 namespace
 {
@@ -212,6 +220,7 @@ void UVCMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 		TerrainContextCacheTimer = 0.f;
 		UpdateVoxelTerrainContext();
 		RefreshWorldBounds();
+		RefreshBlockStepHeight();
 	}
 
 	// World edge band (WM-I5): every machine, from the position, for the HUD hint.
@@ -243,6 +252,32 @@ void UVCMovementComponent::RefreshWorldBounds()
 		CachedWorldBounds = ChunkMgr->GetWorldBounds();
 		bHasWorldBounds = true;
 		bPlanetGravity = CachedWorldBounds.Shape == EVoxelWorldBoundsShape::Shell;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Block steps (world modes review WM-C7, decision D29)
+// ---------------------------------------------------------------------------
+
+void UVCMovementComponent::RefreshBlockStepHeight()
+{
+	if (bBlockStepResolved)
+	{
+		return;
+	}
+	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
+	if (!ChunkMgr || !ChunkMgr->IsInitialized() || !Config)
+	{
+		return; // the voxel world is not up yet: try again at the next terrain refresh
+	}
+	bBlockStepResolved = true;
+	// A cubic world's ground is blocks a voxel high: step one, as the surface navigation does, and leave two to be a wall.
+	if (bStepUpOneBlock && CVarStepUpBlocks.GetValueOnGameThread() != 0 && ChunkMgr->IsBlockSurface())
+	{
+		MaxStepHeight = GetBlockStepHeight(Config->VoxelSize, BlockStepMargin);
+		bSteppingBlocks = true;
+		UE_LOG(LogVoxelCharacter, Log, TEXT("%s: cubic world, stepping one block (MaxStepHeight %.0f)."), *GetNameSafe(GetOwner()), MaxStepHeight);
 	}
 }
 
