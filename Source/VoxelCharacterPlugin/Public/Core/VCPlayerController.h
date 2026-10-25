@@ -17,10 +17,14 @@ class UEquipmentManagerComponent;
 class UVCMinimapWidget;
 class UVCWorldMapWidget;
 class UVoxelChunkManager;
+class UVoxelWorldConfiguration;
 struct FVoxelTreeInstance;
 
 /** A voxel modification was (partially) blocked — RejectedVoxelCount voxels refused the edit. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVoxelEditBlocked, int32, RejectedVoxelCount);
+
+/** Authority: a dug voxel paid the gather table (its material, the item, how many). */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnVCVoxelGathered, uint8, MaterialId, FPrimaryAssetId, ItemId, int32, Count);
 
 /**
  * Player controller for the voxel character system.
@@ -52,6 +56,10 @@ public:
 	/** Switch to UI input (show cursor, release mouse). */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
 	void SetUIInputMode(UUserWidget* FocusWidget = nullptr);
+
+	/** @return True while a UI has the input (inventory, crafting, map, pause menu): the block feedback hides. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Input")
+	bool IsInUIMode() const { return bIsInUIMode; }
 
 	// --- UI ---
 
@@ -125,6 +133,10 @@ public:
 	/** What digging yields (feature 8). None = digging gives nothing. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Gather")
 	TObjectPtr<class UVCGatherTable> GatherTable;
+
+	/** Authority: fired when a dug voxel pays the gather table (an instant dig or a cubic world's timed break). */
+	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Gather")
+	FOnVCVoxelGathered OnVoxelGathered;
 
 	/** Override class for the hand-crafting panel (None = UVCCraftingPanelWidget). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
@@ -219,6 +231,46 @@ public:
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "VoxelCharacter|Voxel")
 	void Server_RequestVoxelModification(const FIntVector& VoxelCoord, EVoxelModificationType ModType, uint8 MaterialID);
 
+	/** How far a player edits: from the pawn to the voxel's corner (Server_RequestVoxelModification's rule since feature 8). */
+	static constexpr float EditReach = 800.f;
+
+	/**
+	 * Whether a voxel is within a player's edit reach (world modes review WM-C12): the server's rule for digs, places and
+	 * timed breaks, and the block feedback's for what it shows.
+	 * @param PawnLocation The editing pawn's location
+	 * @param VoxelCoord   Global voxel coordinate
+	 * @param Config       The world's configuration
+	 * @return True within EditReach of the voxel's corner
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Voxel")
+	static bool IsVoxelInEditReach(const FVector& PawnLocation, const FIntVector& VoxelCoord, const UVoxelWorldConfiguration* Config);
+
+	/**
+	 * Whether placing a block in a voxel would close terrain around a pawn (this player, another, an NPC): the server
+	 * refuses such a place, and the placement preview turns red. Cubic: the block's own cell, less a 2 uu margin, so a
+	 * pawn only touching a face is not inside it. Smooth: a cube centred on the voxel's sample, half a voxel and 10 uu.
+	 * @param World      The world
+	 * @param Config     The world's configuration
+	 * @param VoxelCoord Global voxel coordinate a place would fill
+	 * @return True when a pawn overlaps it
+	 */
+	static bool WouldPlaceTrapPawn(const UWorld* World, const UVoxelWorldConfiguration* Config, const FIntVector& VoxelCoord);
+
+	/**
+	 * Authority: dig one voxel now, as a player (feature 8, WM-C2): in a cubic world the whole block, in a smooth one a
+	 * density dent, and the gather table pays once for a voxel the dig emptied (G3). Checks the pawn and the reach; not
+	 * the break time, which a cubic world's timed break (UVCBlockInteractionComponent) has already waited, and which
+	 * vox.Dig skips (QA).
+	 * @param VoxelCoord Global voxel coordinate
+	 * @return True when a solid voxel was emptied
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Voxel")
+	bool DigVoxelAt(const FIntVector& VoxelCoord);
+
+	/** Server->owning-client notification that a modification request was blocked (edit protection). */
+	UFUNCTION(Client, Reliable)
+	void Client_NotifyVoxelEditBlocked(int32 RejectedVoxelCount);
+
 	// --- Edit feedback ---
 
 	/**
@@ -234,10 +286,6 @@ public:
 	bool bShowEditBlockedMessage = true;
 
 protected:
-	/** Server->owning-client notification that the last modification request was blocked. */
-	UFUNCTION(Client, Reliable)
-	void Client_NotifyVoxelEditBlocked(int32 RejectedVoxelCount);
-
 	virtual void BeginPlay() override;
 	virtual void OnPossess(APawn* InPawn) override;
 	/** The owning client's side of a possession (remote clients): the view is levelled as in OnPossess. */

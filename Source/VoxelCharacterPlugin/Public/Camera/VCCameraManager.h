@@ -106,6 +106,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Camera")
 	float GetCurrentFOV() const { return CurrentFOV; }
 
+	/**
+	 * Put the blended view somewhere until the next camera update (scripted views, tests): the crosshair traces aim from
+	 * it (TraceForVoxel, the block feedback).
+	 * @param Location View location
+	 * @param Rotation View rotation
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Camera")
+	void SetCurrentView(const FVector& Location, const FRotator& Rotation) { CurrentCameraLocation = Location; CurrentCameraRotation = Rotation; }
+
 	/** Blend weight of the top (active) camera mode (0 = just pushed, 1 = fully blended). */
 	float GetTopModeBlendWeight() const;
 

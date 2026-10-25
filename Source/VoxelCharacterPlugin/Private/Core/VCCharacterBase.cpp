@@ -7,6 +7,7 @@
 #include "Core/VCPlayerController.h"
 #include "Core/VCGameModeBase.h"
 #include "Combat/VCCombatComponent.h"
+#include "Editing/VCBlockInteractionComponent.h"
 #include "Utilities/CGFCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
 #include "Interfaces/CGFRestPointInterface.h"
@@ -78,13 +79,22 @@ namespace
 	 * Mirror edit mode into VoxelWorlds' runtime switch for the test-actor brush (voxel.Edit.PlayerInputs), so a map
 	 * whose AVoxelWorldTestActor has bEnableEditInputs set (the demo) obeys the same toggle instead of polling the
 	 * raw mouse buttons. Looked up by name: no module dependency, and a no-op where VoxelStreaming is absent.
+	 * In a cubic world the character targets, previews and breaks the blocks itself (world modes review WM-C16), so the
+	 * test actor keeps only its keys (2): its own press-to-remove would skip the break time and its boxes double ours.
 	 */
-	void ApplyEditModeToVoxelTools(bool bEnabled)
+	void ApplyEditModeToVoxelTools(bool bEnabled, bool bCharacterEditsBlocks)
 	{
 		if (IConsoleVariable* Switch = IConsoleManager::Get().FindConsoleVariable(TEXT("voxel.Edit.PlayerInputs")))
 		{
-			Switch->Set(bEnabled ? 1 : 0, ECVF_SetByCode);
+			Switch->Set(bEnabled ? (bCharacterEditsBlocks ? 2 : 1) : 0, ECVF_SetByCode);
 		}
+	}
+
+	/** The world is cubic: the character's block feedback handles editing there. */
+	bool IsBlockWorld(const UWorld* World)
+	{
+		const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(World);
+		return ChunkMgr && UVCBlockInteractionComponent::ShowsBlockFeedback(ChunkMgr->GetConfiguration());
 	}
 }
 
@@ -167,6 +177,9 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 	// --- Combat ---
 	CombatComponent = CreateDefaultSubobject<UVCCombatComponent>(TEXT("CombatComponent"));
 	CombatComponent->FactionTag = CGFGameplayTags::Faction_Player;
+
+	// --- Block feedback and timed breaking (cubic worlds) ---
+	BlockInteraction = CreateDefaultSubobject<UVCBlockInteractionComponent>(TEXT("BlockInteraction"));
 
 	// --- Body mesh defaults ---
 	GetMesh()->SetOwnerNoSee(false);
@@ -1391,6 +1404,19 @@ bool AVCCharacterBase::TraceForVoxel(FHitResult& OutHit, float MaxDistance) cons
 	return GetWorld()->LineTraceSingleByChannel(OutHit, Start, End, ECC_Visibility, Params);
 }
 
+bool AVCCharacterBase::FindEditTarget(FHitResult& OutHit, FIntVector& OutDigVoxel, FIntVector& OutPlaceVoxel) const
+{
+	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
+	if (!Config || !TraceForVoxel(OutHit))
+	{
+		return false;
+	}
+	OutDigVoxel = GetEditVoxelCoord(OutHit.ImpactPoint, OutHit.ImpactNormal, Config, /*bPlace=*/false);
+	OutPlaceVoxel = GetEditVoxelCoord(OutHit.ImpactPoint, OutHit.ImpactNormal, Config, /*bPlace=*/true);
+	return true;
+}
+
 FIntVector AVCCharacterBase::GetEditVoxelCoord(const FVector& ImpactPoint, const FVector& ImpactNormal, const UVoxelWorldConfiguration* Config, bool bPlace)
 {
 	if (!Config)
@@ -1930,6 +1956,9 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	if (Config->IA_PrimaryAction)
 	{
 		EIC->BindAction(Config->IA_PrimaryAction, ETriggerEvent::Started, this, &AVCCharacterBase::Input_PrimaryAction);
+		// A cubic world's block breaks while the button stays down (WM-C15): the release ends the hold.
+		EIC->BindAction(Config->IA_PrimaryAction, ETriggerEvent::Completed, this, &AVCCharacterBase::Input_StopPrimaryAction);
+		EIC->BindAction(Config->IA_PrimaryAction, ETriggerEvent::Canceled, this, &AVCCharacterBase::Input_StopPrimaryAction);
 	}
 	if (Config->IA_SecondaryAction)
 	{
@@ -1967,7 +1996,7 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	}
 
 	// Input is only set up for the local player: start the world's test brush in the same (off) state as edit mode.
-	ApplyEditModeToVoxelTools(bEditModeEnabled);
+	ApplyEditModeToVoxelTools(bEditModeEnabled, IsBlockWorld(GetWorld()));
 	if (Config->IA_ScrollHotbar)
 	{
 		EIC->BindAction(Config->IA_ScrollHotbar, ETriggerEvent::Triggered, this, &AVCCharacterBase::Input_ScrollHotbar);
@@ -2117,48 +2146,29 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 		return;
 	}
 
-#if WITH_EQUIPMENT_PLUGIN
-	if (EquipmentManager)
+	// Step 2 (an equipped tool's dig) and step 3 (an unarmed dig, edit mode) dig the same voxel, FindEditTarget's (WM-C12).
+	// In a cubic world with break times the press starts a hold instead (WM-C15): the block under the crosshair breaks
+	// after its material's time while the button stays down, decided on the server.
+	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	if (BlockInteraction && ChunkMgr && UVCBlockInteractionComponent::UsesTimedBreaks(ChunkMgr->GetConfiguration()))
 	{
-		static const FGameplayTag MainHandTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.MainHand"), false);
-		if (EquipmentManager->IsSlotOccupied(MainHandTag))
-		{
-			// Step 2: equipped tool: route to voxel destruction via trace
-			FHitResult Hit;
-			if (TraceForVoxel(Hit))
-			{
-				if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
-				{
-					UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
-					if (ChunkMgr && ChunkMgr->GetConfiguration())
-					{
-						const FIntVector VoxelCoord = GetEditVoxelCoord(Hit.ImpactPoint, Hit.ImpactNormal, ChunkMgr->GetConfiguration(), /*bPlace*/ false);
-						PC->Server_RequestVoxelModification(VoxelCoord, EVoxelModificationType::Destroy, 0);
-					}
-				}
-			}
-			return;
-		}
-	}
-#endif
-
-	// Step 3: unarmed voxel dig (edit mode only; a tool was handled above)
-	if (!bEditModeEnabled)
-	{
+		BlockInteraction->StartHold();
 		return;
 	}
 	FHitResult Hit;
-	if (TraceForVoxel(Hit))
+	FIntVector DigVoxel, PlaceVoxel;
+	AVCPlayerController* PC = Cast<AVCPlayerController>(GetController());
+	if (PC && FindEditTarget(Hit, DigVoxel, PlaceVoxel))
 	{
-		if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
-		{
-			UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
-			if (ChunkMgr && ChunkMgr->GetConfiguration())
-			{
-				const FIntVector VoxelCoord = GetEditVoxelCoord(Hit.ImpactPoint, Hit.ImpactNormal, ChunkMgr->GetConfiguration(), /*bPlace*/ false);
-				PC->Server_RequestVoxelModification(VoxelCoord, EVoxelModificationType::Destroy, 0);
-			}
-		}
+		PC->Server_RequestVoxelModification(DigVoxel, EVoxelModificationType::Destroy, 0);
+	}
+}
+
+void AVCCharacterBase::Input_StopPrimaryAction(const FInputActionValue& Value)
+{
+	if (BlockInteraction)
+	{
+		BlockInteraction->StopHold();
 	}
 }
 
@@ -2176,45 +2186,14 @@ void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 		return;
 	}
 
-#if WITH_EQUIPMENT_PLUGIN
-	if (EquipmentManager)
-	{
-		static const FGameplayTag MainHandTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.MainHand"), false);
-		if (EquipmentManager->IsSlotOccupied(MainHandTag))
-		{
-			// Equipped tool: route to block placement via trace
-			FHitResult Hit;
-			if (TraceForVoxel(Hit))
-			{
-				if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
-				{
-					UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
-					if (ChunkMgr && ChunkMgr->GetConfiguration())
-					{
-						// Place block adjacent to the hit face (offset by normal)
-						const FIntVector VoxelCoord = GetEditVoxelCoord(Hit.ImpactPoint, Hit.ImpactNormal, ChunkMgr->GetConfiguration(), /*bPlace*/ true);
-						PC->Server_RequestVoxelModification(VoxelCoord, EVoxelModificationType::Place, 2); // Stone
-					}
-				}
-			}
-			return;
-		}
-	}
-#endif
-
-	// Fallback: voxel place with default block
+	// An equipped tool and bare hands place the same block, stone, in the voxel FindEditTarget gives (WM-C12): adjacent
+	// to the hit face, where the placement preview shows it.
 	FHitResult Hit;
-	if (TraceForVoxel(Hit))
+	FIntVector DigVoxel, PlaceVoxel;
+	AVCPlayerController* PC = Cast<AVCPlayerController>(GetController());
+	if (PC && FindEditTarget(Hit, DigVoxel, PlaceVoxel))
 	{
-		if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
-		{
-			UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
-			if (ChunkMgr && ChunkMgr->GetConfiguration())
-			{
-				const FIntVector VoxelCoord = GetEditVoxelCoord(Hit.ImpactPoint, Hit.ImpactNormal, ChunkMgr->GetConfiguration(), /*bPlace*/ true);
-				PC->Server_RequestVoxelModification(VoxelCoord, EVoxelModificationType::Place, 2); // Stone
-			}
-		}
+		PC->Server_RequestVoxelModification(PlaceVoxel, EVoxelModificationType::Place, 2); // Stone
 	}
 }
 
@@ -2300,7 +2279,7 @@ void AVCCharacterBase::SetEditModeEnabled(bool bEnabled)
 	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: voxel edit mode %s"), *GetName(), bEditModeEnabled ? TEXT("ON") : TEXT("OFF"));
 	if (IsLocallyControlled())
 	{
-		ApplyEditModeToVoxelTools(bEditModeEnabled);
+		ApplyEditModeToVoxelTools(bEditModeEnabled, IsBlockWorld(GetWorld()));
 	}
 	OnEditModeChanged.Broadcast(bEditModeEnabled);
 }
