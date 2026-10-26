@@ -24,6 +24,7 @@
 #include "DistanceBandLODStrategy.h"
 #include "IVoxelMeshRenderer.h"
 #include "ChunkRenderData.h"
+#include "Testing/VoxelTestChunkWorld.h"
 
 // ---------------------------------------------------------------------------
 // A walkable planet, the character side (VoxelWorlds WORLD_MODES_REVIEW_PLAN.md §17; SPHERICAL_PLANET_REQUIREMENTS.md
@@ -1058,6 +1059,122 @@ bool FVCPlane_SpawnAboveSeaWithOrigin::RunTest(const FString& Parameters)
 		TestTrue(*FString::Printf(TEXT("%s: from land, a spawn"), *Name), bFromLand);
 		TestTrue(*FString::Printf(TEXT("%s: where it started"), *Name), bFromLand && FVector2D(FromLand) == FVector2D(Land));
 	}
+	return true;
+}
+
+/**
+ * World modes review WM-MP10 (§23): the land search past the ring on a plane. The harness plane with its sea raised to
+ * +600 over terrain of +-800 (most of it under water, land the peaks). From a seabed start whose one-chunk ring (the
+ * eight points the ring search samples) is all sea, the search without bSearchWholeWorld fails (the rule before: the
+ * pawn waited in the water), and with it finds dry ground farther out (FindPlaneSpawnPointAtScale), inside the search's
+ * bound; a start on land is returned as before.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlane_SpawnPastRing, "VoxelCharacter.Plane.SpawnPastRing", VC_PLANET_FLAGS)
+
+bool FVCPlane_SpawnPastRing::RunTest(const FString& Parameters)
+{
+	using namespace VCPlanetWalkableTestHelpers;
+	FVoxelWorldHarness Plane(/*bPlanet=*/false);
+	Plane.Config->WaterLevel = 600.0f; // read by every sea query as it is made (GetSeaSurface reads the configuration)
+	const float WaterLevel = Plane.Config->WaterLevel;
+	const double Ring = Plane.Config->ChunkSize * Plane.Config->VoxelSize; // the ring search's one ring: a chunk, 1,600
+	auto IsDry = [&Plane, WaterLevel](double X, double Y) { return Plane.Manager->GetGeneratedSurfaceHeight(X, Y) > WaterLevel; };
+	static const FVector2D RingDirections[] = { {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}, {0, -1}, {1, -1} };
+
+	// A seabed start with its ring all sea, and a land point, on a 400 uu grid around the origin.
+	FVector Start = FVector::ZeroVector, Land = FVector::ZeroVector;
+	bool bStart = false, bLand = false;
+	for (int32 I = 0; I < 80 * 80 && !(bStart && bLand); ++I)
+	{
+		const double X = (I % 80 - 40) * 400.0;
+		const double Y = (I / 80 - 40) * 400.0;
+		const bool bDry = IsDry(X, Y);
+		if (!bLand && bDry)
+		{
+			Land = FVector(X, Y, Plane.Manager->GetGeneratedSurfaceHeight(X, Y));
+			bLand = true;
+		}
+		if (!bStart && !bDry)
+		{
+			bool bRingDry = false;
+			for (const FVector2D& Direction : RingDirections)
+			{
+				bRingDry |= IsDry(X + Direction.X * Ring, Y + Direction.Y * Ring);
+			}
+			if (!bRingDry)
+			{
+				Start = FVector(X, Y, Plane.Manager->GetGeneratedSurfaceHeight(X, Y));
+				bStart = true;
+			}
+		}
+	}
+	if (!TestTrue(TEXT("A seabed start with its ring all sea, and land somewhere"), bStart && bLand))
+	{
+		return true;
+	}
+
+	FVector Before, Past, FromLand;
+	const bool bBefore = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, Start, Before, static_cast<float>(Ring), /*bSearchWholeWorld=*/false);
+	const bool bPast = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, Start, Past, static_cast<float>(Ring), /*bSearchWholeWorld=*/true);
+	const bool bFromLand = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, Land, FromLand, static_cast<float>(Ring), /*bSearchWholeWorld=*/true);
+	const double Distance = bPast ? FVector2D::Distance(FVector2D(Past), FVector2D(Start)) : 0.0;
+	AddInfo(FString::Printf(TEXT("From the seabed at (%.0f, %.0f): the rule before %s; past the ring %s at (%.0f, %.0f) Z=%.0f, %.0f away (the ring %.0f); from land: %s"),
+		Start.X, Start.Y, bBefore ? TEXT("found land") : TEXT("found nothing"), bPast ? TEXT("found land") : TEXT("found nothing"),
+		Past.X, Past.Y, Past.Z, Distance, Ring, bFromLand && FVector2D(FromLand) == FVector2D(Land) ? TEXT("where it started") : TEXT("elsewhere")));
+	TestFalse(TEXT("The rule before: no land within the ring"), bBefore);
+	TestTrue(TEXT("Past the ring: land found"), bPast);
+	TestTrue(TEXT("... on dry ground, above the sea"), bPast && Past.Z > WaterLevel && IsDry(Past.X, Past.Y));
+	TestTrue(TEXT("... beyond the ring"), bPast && Distance > Ring);
+	TestTrue(TEXT("... within the plane's bound of 512 chunks"), bPast && Distance <= 512.0 * Ring);
+	TestTrue(TEXT("A start on land is returned as before"), bFromLand && FVector2D(FromLand) == FVector2D(Land));
+	return true;
+}
+
+/**
+ * WM-MP10 on an island: a start outside the island's bounds searches from the nearest point inside its edge (WM-I3),
+ * where the rim lies under the sea; with bSearchWholeWorld the rings go on inside the bounds until they find the island's
+ * land, and never outside them.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCIsland_SpawnPastRing, "VoxelCharacter.Island.SpawnPastRing", VC_PLANET_FLAGS)
+
+bool FVCIsland_SpawnPastRing::RunTest(const FString& Parameters)
+{
+	VoxelTesting::FTestChunkWorld W;
+	W.Create(TEXT("VCIslandSpawnPastRingWorld"));
+	W.ConfigureSmallPlane();
+	W.Config->WorldMode = EWorldMode::IslandBowl;
+	W.Config->IslandRadius = 20000.0f;
+	W.Config->IslandFalloffWidth = 4000.0f;
+	W.Config->IslandEdgeHeight = -1000.0f;
+	W.Config->HeightScale = 1600.0f;
+	W.Config->bEnableWaterLevel = true;
+	W.Config->WaterLevel = 0.0f;
+	W.Config->bWorldBoundary = false;
+	W.Config->bIslandFarOcean = false;
+	W.StartManager();
+	FVCVoxelNavigationHelper::ClearCache();
+
+	const FVoxelWorldBounds Bounds = W.Manager->GetWorldBounds();
+	const float Ring = static_cast<float>(W.Config->GetChunkWorldSize());
+	TestTrue(TEXT("The island is bounded"), Bounds.IsBounded());
+	const FVector Outside(Bounds.Center.X + 60000.0, Bounds.Center.Y, 0.0);
+	FVector Before, Past;
+	const bool bBefore = FVCVoxelNavigationHelper::FindSpawnablePosition(W.World, Outside, Before, Ring, /*bSearchWholeWorld=*/false);
+	const bool bPast = FVCVoxelNavigationHelper::FindSpawnablePosition(W.World, Outside, Past, Ring, /*bSearchWholeWorld=*/true);
+	const float GroundAtPast = bPast ? W.Manager->GetGeneratedSurfaceHeight(Past.X, Past.Y) : 0.0f;
+	AddInfo(FString::Printf(TEXT("From (%.0f, %.0f), outside the island: the rule before %s%s; past the ring %s at (%.0f, %.0f) Z=%.0f, %.0f from the centre"),
+		Outside.X, Outside.Y, bBefore ? TEXT("found land at ") : TEXT("found nothing"), bBefore ? *FString::Printf(TEXT("(%.0f, %.0f)"), Before.X, Before.Y) : TEXT(""),
+		bPast ? TEXT("found land") : TEXT("found nothing"), Past.X, Past.Y, Past.Z, bPast ? FVector2D::Distance(FVector2D(Past), FVector2D(Bounds.Center.X, Bounds.Center.Y)) : 0.0));
+	TestTrue(TEXT("Past the ring: land found on the island"), bPast);
+	TestTrue(TEXT("... inside the island's bounds"), bPast && Bounds.ContainsXY(Past.X, Past.Y));
+	TestTrue(TEXT("... on dry ground, above the sea"), bPast && Past.Z > W.Config->WaterLevel && FMath::IsNearlyEqual(Past.Z, GroundAtPast, 0.01f));
+	if (bBefore)
+	{
+		TestTrue(TEXT("The rule before, when it finds land, finds it inside the bounds too"), Bounds.ContainsXY(Before.X, Before.Y));
+	}
+
+	FVCVoxelNavigationHelper::ClearCache();
+	W.Stop();
 	return true;
 }
 

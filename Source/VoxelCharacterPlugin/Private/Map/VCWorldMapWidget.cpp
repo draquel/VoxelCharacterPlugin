@@ -123,9 +123,11 @@ void UVCWorldMapWidget::NativeConstruct()
 			// Zoomed out to the globe's albedo the tile images do not show: only the albedo landing ((-1, -1)) redraws at
 			// once. Tiles, and the exploration they carry, redraw it at most every 2 s: an ExploreAll on a big planet
 			// streams tens of thousands of images, and a redraw for each held the map at 6 FPS (spherical Phase 6, P6.5).
-			if (bRenderedFromAlbedo && Tile != FIntPoint(-1, -1))
+			// A wide heightmap view waits the same way (world modes review WM-MP9): a redraw blits every tile in view.
+			const int32 TilesInView = bRenderedPlanet ? 0 : FMath::Square(2 * RenderedTileRadius + 1);
+			if (DefersTileRedraw(bRenderedFromAlbedo && Tile != FIntPoint(-1, -1), TilesInView))
 			{
-				bAlbedoTilesPending = true;
+				bTileRedrawPending = true;
 				return;
 			}
 			bMapDirty = true;
@@ -166,9 +168,9 @@ void UVCWorldMapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 
 	bool bViewChanged = false;
 	const bool bPlanet = MapSubsystem.IsValid() && MapSubsystem->IsPlanetMap();
-	if (bAlbedoTilesPending && bPlanet && FPlatformTime::Seconds() - LastPlanetRebuildSeconds >= 2.0)
+	if (bTileRedrawPending && FPlatformTime::Seconds() - LastTileRedrawSeconds >= 2.0)
 	{
-		bAlbedoTilesPending = false;
+		bTileRedrawPending = false;
 		bMapDirty = true;
 	}
 	if (bMapDirty && bPlanet)
@@ -178,6 +180,7 @@ void UVCWorldMapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 		if (Now - LastPlanetRebuildSeconds >= 1.0 / 30.0)
 		{
 			LastPlanetRebuildSeconds = Now;
+			LastTileRedrawSeconds = Now;
 			RebuildMapTexture();
 			bMapDirty = false;
 			bViewChanged = true;
@@ -185,6 +188,7 @@ void UVCWorldMapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 	}
 	else if (bMapDirty)
 	{
+		LastTileRedrawSeconds = FPlatformTime::Seconds();
 		RebuildMapTexture();
 		bMapDirty = false;
 		bViewChanged = true;
@@ -226,6 +230,11 @@ void UVCWorldMapWidget::GetZoomRange(float& OutMinZoom, float& OutMaxZoom) const
 		// A planet: out to the whole globe at any radius (WM-BP11).
 		GetPlanetZoomRange(Subsystem->GetPlanetRadius(), Subsystem->GetTileWorldSize(), MinZoom, MaxZoom, OutMinZoom, OutMaxZoom);
 	}
+}
+
+bool UVCWorldMapWidget::DefersTileRedraw(bool bAlbedoWithTile, int32 TilesInView, int32 Threshold)
+{
+	return bAlbedoWithTile || TilesInView > Threshold;
 }
 
 UVCWorldMapWidget* UVCWorldMapWidget::FindOpen(const UWorld* World)

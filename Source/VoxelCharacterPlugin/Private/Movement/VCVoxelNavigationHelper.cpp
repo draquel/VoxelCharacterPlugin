@@ -174,7 +174,7 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 	const FVector& NearPosition,
 	FVector& OutPosition,
 	float MaxSearchRadius,
-	bool bAnywhereOnPlanet)
+	bool bSearchWholeWorld)
 {
 	UVoxelChunkManager* ChunkMgr = FindChunkManager(World);
 	if (!ChunkMgr)
@@ -225,7 +225,7 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 		}
 		// The rest of the planet (WM-BP11, G36): a big planet's open sea can lie hundreds of km across.
 		double Arc = 0.0;
-		if (bAnywhereOnPlanet && FindPlanetSpawnPointAtScale(Centre, Radius, StartDirection, FMath::Max(static_cast<double>(MaxSearchRadius), static_cast<double>(ChunkWorldSize)),
+		if (bSearchWholeWorld && FindPlanetSpawnPointAtScale(Centre, Radius, StartDirection, FMath::Max(static_cast<double>(MaxSearchRadius), static_cast<double>(ChunkWorldSize)),
 			SurfaceAt, Sea, OutPosition, Arc))
 		{
 			UE_LOG(LogVoxelCharacter, Log,
@@ -310,9 +310,83 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 		}
 	}
 
+	// The rest of the world (world modes review WM-MP10; the plane's G36): widening rings to the island's bounds, or a few
+	// hundred chunks out on a plane, so a seed whose spawn is open sea, or an island whose radius shrank, still lands.
+	if (bSearchWholeWorld)
+	{
+		double MaxRadius = 512.0 * ChunkWorldSize;
+		if (Bounds.IsBounded())
+		{
+			const FBox2D Box = Bounds.GetBox2D();
+			const FVector2D Start2D(Start.X, Start.Y);
+			MaxRadius = 0.0;
+			for (const FVector2D& Corner : { Box.Min, Box.Max, FVector2D(Box.Min.X, Box.Max.Y), FVector2D(Box.Max.X, Box.Min.Y) })
+			{
+				MaxRadius = FMath::Max(MaxRadius, FVector2D::Distance(Start2D, Corner));
+			}
+		}
+		auto HeightAt = [ChunkMgr](double X, double Y) { return ChunkMgr->GetGeneratedSurfaceHeight(X, Y); };
+		double Distance = 0.0;
+		if (FindPlaneSpawnPointAtScale(FVector2D(Start.X, Start.Y), FMath::Max(static_cast<double>(MaxSearchRadius), static_cast<double>(Step)), Step,
+			MaxRadius, Bounds, HeightAt, Sea, OutPosition, Distance))
+		{
+			UE_LOG(LogVoxelCharacter, Log,
+				TEXT("FindSpawnablePosition: no land within %.0f of (%.0f, %.0f); the nearest land found at (%.0f, %.0f) Z=%.0f, %.0f away."),
+				MaxSearchRadius, Start.X, Start.Y, OutPosition.X, OutPosition.Y, OutPosition.Z, Distance);
+			return true;
+		}
+	}
+
 	UE_LOG(LogVoxelCharacter, Warning,
-		TEXT("FindSpawnablePosition: No land found within %.0f units of (%.0f, %.0f)"),
-		MaxSearchRadius, Start.X, Start.Y);
+		TEXT("FindSpawnablePosition: No land found within %.0f units of (%.0f, %.0f)%s"),
+		MaxSearchRadius, Start.X, Start.Y, bSearchWholeWorld ? TEXT(", nor in the rest of the world searched") : TEXT(""));
+	return false;
+}
+
+bool FVCVoxelNavigationHelper::FindPlaneSpawnPointAtScale(const FVector2D& Start, double FirstRadius, double StepSize, double MaxRadius,
+	const FVoxelWorldBounds& Bounds, TFunctionRef<float(double X, double Y)> SurfaceHeightAt, const FVoxelSeaSurface& Sea,
+	FVector& OutPosition, double& OutDistance, int32 MaxSamples)
+{
+	OutDistance = 0.0;
+	if (FirstRadius <= 0.0 || StepSize <= 0.0 || MaxRadius < FirstRadius)
+	{
+		return false;
+	}
+	// Rings a quarter of their radius apart, at least a step (so the search is bounded in samples, as the planet's is in
+	// angle), each ring's bearings as far apart as the rings.
+	constexpr double Growth = 0.25;
+	int32 Samples = 0;
+	double Radius = FirstRadius;
+	while (Radius <= MaxRadius && Samples < MaxSamples)
+	{
+		const double Spacing = FMath::Max(Radius * Growth, StepSize);
+		const int32 Bearings = FMath::Clamp(FMath::CeilToInt32(UE_DOUBLE_TWO_PI * Radius / Spacing), 8, 128);
+		bool bAnyInside = false;
+		for (int32 Bearing = 0; Bearing < Bearings && Samples < MaxSamples; ++Bearing)
+		{
+			const double B = Bearing * (UE_DOUBLE_TWO_PI / Bearings);
+			const double X = Start.X + Radius * FMath::Cos(B);
+			const double Y = Start.Y + Radius * FMath::Sin(B);
+			if (!Bounds.ContainsXY(X, Y))
+			{
+				continue;
+			}
+			bAnyInside = true;
+			++Samples;
+			const float Height = SurfaceHeightAt(X, Y);
+			if (!Sea.bEnabled || Sea.GetDepth(FVector(X, Y, Height)) < 0.0)
+			{
+				OutPosition = FVector(X, Y, Height);
+				OutDistance = Radius;
+				return true;
+			}
+		}
+		if (!bAnyInside)
+		{
+			break; // the ring lies wholly outside the world: nothing farther is inside it either
+		}
+		Radius += Spacing;
+	}
 	return false;
 }
 

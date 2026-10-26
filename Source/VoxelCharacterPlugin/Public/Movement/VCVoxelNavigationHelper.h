@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Core/VCTypes.h"
 #include "VoxelSeaSurface.h"
+#include "VoxelWorldModeTypes.h"
 
 class UVoxelChunkManager;
 class UVoxelWorldConfiguration;
@@ -71,15 +72,17 @@ public:
 	 * searches from the nearest point a chunk inside the edge (world modes review WM-I3).
 	 * On a planet the search is by direction (spherical SP-F4, FindPlanetSpawnPoint): the terrain along the direction
 	 * from the centre to NearPosition, then rings of directions around it; OutPosition is then the surface point itself.
-	 * With bAnywhereOnPlanet the rings go on past MaxSearchRadius to the far side of the planet
-	 * (FindPlanetSpawnPointAtScale, spherical Phase 6, WM-BP11, G36): a big planet's open sea can lie hundreds of km
-	 * across, and a spawn there would otherwise wait for land that never comes.
+	 * With bSearchWholeWorld the search goes on past MaxSearchRadius: on a planet to its far side
+	 * (FindPlanetSpawnPointAtScale, spherical Phase 6, WM-BP11, G36: a big planet's open sea can lie hundreds of km
+	 * across), on a heightmap world in widening rings to the island's bounds or a few hundred chunks on a plane
+	 * (FindPlaneSpawnPointAtScale, world modes review WM-MP10: a seed whose spawn is open sea, an island whose radius
+	 * shrank). A spawn there would otherwise wait for land that never comes.
 	 *
 	 * @param World World context
 	 * @param NearPosition Desired spawn position (world space)
 	 * @param OutPosition Output: valid terrain position with safe Z margin
 	 * @param MaxSearchRadius Maximum search radius in world units (default 50000)
-	 * @param bAnywhereOnPlanet Planets: search the whole planet when there is no land within MaxSearchRadius
+	 * @param bSearchWholeWorld Search the rest of the world when there is no land within MaxSearchRadius
 	 * @return True if a valid position was found
 	 */
 	static bool FindSpawnablePosition(
@@ -87,7 +90,30 @@ public:
 		const FVector& NearPosition,
 		FVector& OutPosition,
 		float MaxSearchRadius = 50000.f,
-		bool bAnywhereOnPlanet = false);
+		bool bSearchWholeWorld = false);
+
+	/**
+	 * Pure: the spawn search on a heightmap world past the ring search (world modes review WM-MP10; the plane's
+	 * FindPlanetSpawnPointAtScale). Rings around Start from FirstRadius outward, each a quarter of its radius past the
+	 * last (at least StepSize), with as many bearings as fit at that spacing (8 to 128), out to MaxRadius or MaxSamples
+	 * surface samples: the nearest land is found to within about a quarter of its distance. A sample outside Bounds is
+	 * skipped, and a ring with no sample inside them ends the search (an island fully covered).
+	 *
+	 * @param Start The start, in world XY
+	 * @param FirstRadius The first ring's radius (where the ring search's rings ended)
+	 * @param StepSize The least ring spacing (a chunk)
+	 * @param MaxRadius The farthest ring
+	 * @param Bounds The world's bounds (an unbounded plane contains everything)
+	 * @param SurfaceHeightAt The generated surface height at a world (X, Y) (UVoxelChunkManager::GetGeneratedSurfaceHeight)
+	 * @param Sea The sea (disabled: everything is dry)
+	 * @param OutPosition Receives the surface point found
+	 * @param OutDistance Receives its distance from Start
+	 * @param MaxSamples Most surface samples to take
+	 * @return True if dry land was found
+	 */
+	static bool FindPlaneSpawnPointAtScale(const FVector2D& Start, double FirstRadius, double StepSize, double MaxRadius,
+		const FVoxelWorldBounds& Bounds, TFunctionRef<float(double X, double Y)> SurfaceHeightAt, const FVoxelSeaSurface& Sea,
+		FVector& OutPosition, double& OutDistance, int32 MaxSamples = 4096);
 
 	/**
 	 * Pure: the spawn search on a planet (spherical SP-F4). The terrain surface along StartDirection, when it is above the
