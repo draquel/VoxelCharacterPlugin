@@ -885,7 +885,7 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 	// core for land that never streamed. A planet with no land at all spawns at the sea's surface, swimming.
 	FVector ValidSpawn;
 	bSpawnAtSea = false;
-	if (!bResumeAtExactLocation && FVCVoxelNavigationHelper::FindSpawnablePosition(GetWorld(), GetActorLocation(), ValidSpawn, 50000.f, /*bAnywhereOnPlanet=*/true))
+	if (!bResumeAtExactLocation && FVCVoxelNavigationHelper::FindSpawnablePosition(GetWorld(), GetActorLocation(), ValidSpawn, 50000.f, /*bSearchWholeWorld=*/true))
 	{
 		SetActorLocation(ValidSpawn);
 	}

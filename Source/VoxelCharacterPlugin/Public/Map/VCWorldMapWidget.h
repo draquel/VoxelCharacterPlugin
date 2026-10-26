@@ -100,6 +100,23 @@ public:
 	 */
 	static UVCWorldMapWidget* FindOpen(const UWorld* World);
 
+	/**
+	 * A view of more than this many tiles redraws for tile arrivals at most every 2 s (world modes review WM-MP9, the
+	 * planet's G51 rule in every mode): a plane's most zoomed-out view holds about 66,000 tiles, and a voxel.Map.ExploreAll
+	 * streams an image for each; a redraw per arrival blits every tile in view each time. 256 tiles is a view zoomed in
+	 * to about 16 tiles across, where an arrival still redraws at once.
+	 */
+	static constexpr int32 TileRedrawThrottleTiles = 256;
+
+	/**
+	 * Pure: whether a tile arrival waits for the throttled redraw rather than redrawing the map at once.
+	 * @param bAlbedoWithTile The globe shows the map's albedo and the arrival is a tile (not the albedo itself)
+	 * @param TilesInView Tiles the rendered view holds (a heightmap view; 0 on a planet)
+	 * @param Threshold Views of more tiles than this wait
+	 * @return True to wait
+	 */
+	static bool DefersTileRedraw(bool bAlbedoWithTile, int32 TilesInView, int32 Threshold = TileRedrawThrottleTiles);
+
 protected:
 	virtual void NativeOnInitialized() override;
 	virtual void NativeConstruct() override;
@@ -188,8 +205,13 @@ private:
 	/** The globe was last drawn from the map subsystem's albedo (zoomed out, WM-BP11): tile images do not show in it. */
 	bool bRenderedFromAlbedo = false;
 
-	/** Tile images (or exploration) arrived while the globe shows the albedo: it redraws at most every 2 s for them. */
-	bool bAlbedoTilesPending = false;
+	/**
+	 * Tile images (or exploration) arrived while a redraw for each would be waste (DefersTileRedraw: the globe showing its
+	 * albedo, or a view of more than TileRedrawThrottleTiles tiles in any mode): the map redraws for them at most every 2 s
+	 * after the last redraw (LastTileRedrawSeconds).
+	 */
+	bool bTileRedrawPending = false;
+	double LastTileRedrawSeconds = 0.0;
 
 	// Cached from last render — used by player marker positioning
 	FIntPoint RenderedCenterTile = FIntPoint(0, 0);

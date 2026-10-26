@@ -5,6 +5,7 @@
 #if WITH_AUTOMATION_TESTS
 
 #include "Map/VCPlanetMapProjection.h"
+#include "Map/VCWorldMapWidget.h"
 #include "VoxelMapSubsystem.h"
 #include "Testing/VoxelTestChunkWorld.h"
 #include "Async/TaskGraphInterfaces.h"
@@ -22,6 +23,27 @@
 // ---------------------------------------------------------------------------
 
 #define VC_MINIMAP_FLAGS (EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * World modes review WM-MP9 (§23): the world map's redraw for tile arrivals waits (at most every 2 s) when a redraw per
+ * arrival would be waste: the globe drawn from its albedo (the planet's G51 rule) and, in every mode, a view of more than
+ * TileRedrawThrottleTiles tiles (a plane's most zoomed-out view holds about 66,000, and voxel.Map.ExploreAll streams an
+ * image for each); a view zoomed in to a few tiles redraws at once, as the albedo's own arrival does.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCMap_TileRedrawThrottle, "VoxelCharacter.Map.TileRedrawThrottle", VC_MINIMAP_FLAGS)
+bool FVCMap_TileRedrawThrottle::RunTest(const FString& Parameters)
+{
+	const int32 Threshold = UVCWorldMapWidget::TileRedrawThrottleTiles;
+	TestFalse(TEXT("A narrow view redraws at once"), UVCWorldMapWidget::DefersTileRedraw(false, 1));
+	TestFalse(TEXT("A view at the threshold redraws at once"), UVCWorldMapWidget::DefersTileRedraw(false, Threshold));
+	TestTrue(TEXT("A view past the threshold waits"), UVCWorldMapWidget::DefersTileRedraw(false, Threshold + 1));
+	TestTrue(TEXT("The plane's most zoomed-out view (257 x 257 tiles) waits"), UVCWorldMapWidget::DefersTileRedraw(false, 257 * 257));
+	TestTrue(TEXT("The globe on its albedo waits for a tile"), UVCWorldMapWidget::DefersTileRedraw(true, 0));
+	TestFalse(TEXT("The globe on its albedo redraws for the albedo itself"), UVCWorldMapWidget::DefersTileRedraw(false, 0));
+	TestFalse(TEXT("A custom threshold"), UVCWorldMapWidget::DefersTileRedraw(false, 1000, 1000));
+	TestTrue(TEXT("... exceeded"), UVCWorldMapWidget::DefersTileRedraw(false, 1001, 1000));
+	return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCMap_PlaneMapSampler, "VoxelCharacter.Map.PlaneMapSampler", VC_MINIMAP_FLAGS)
 bool FVCMap_PlaneMapSampler::RunTest(const FString& Parameters)
