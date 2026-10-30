@@ -31,10 +31,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Camera")
 	void PushCameraMode(TSubclassOf<UVCCameraModeBase> CameraModeClass);
 
-	/** Pop the top camera mode off the stack. */
-	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Camera")
-	void PopCameraMode();
-
 	/** Called each tick to compute and apply the blended camera transform. */
 	void UpdateCamera(float DeltaTime);
 

@@ -43,7 +43,6 @@ enum class EVoxelModificationType : uint8
 {
 	Destroy,
 	Place,
-	Paint,
 };
 
 /** Animation archetype for the currently equipped item.
@@ -59,14 +58,6 @@ enum class EVCEquipmentAnimType : uint8
 	Bow,
 	Shield,
 	Tool,
-};
-
-/** Interaction scanner tuning profile, switched per view mode. */
-UENUM(BlueprintType)
-enum class EVCInteractionScanProfile : uint8
-{
-	FirstPerson,
-	ThirdPerson,
 };
 
 /** What a combatant does when Health reaches zero (UVCCombatComponent::OutOfHealthPolicy). */

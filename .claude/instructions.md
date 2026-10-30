@@ -339,7 +339,6 @@ All input uses UE5 Enhanced Input. No legacy `BindAction`/`BindAxis` calls.
 |---|---|---|
 | 0 | `IMC_Gameplay` | Always (base layer) |
 | 1 | `IMC_UI` | Inventory/menu open (adds cursor, blocks gameplay) |
-| 2 | `IMC_Vehicle` | In vehicle (future) |
 | 10 | `IMC_Ability` | During GAS ability activation that overrides input (future) |
 
 ### Input → Action Routing
@@ -561,11 +560,7 @@ When implementing from scratch, create files in this order with compile gates:
 18. **Compile gate — character spawns, moves, camera works, GAS initializes**
 
 ### Gate 4: Integration Bridges
-19. `IVCInventoryBridge.h` (interface)
-20. `IVCInteractionBridge.h` (interface)
-21. `IVCEquipmentBridge.h` (interface)
-22. `IVCAbilityBridge.h` (interface)
-23. Wire bridges into `AVCCharacterBase` and `AVCPlayerController`
+19. The four `IVC*Bridge` interfaces were deleted in CR1 (VCP-01): the character implements their methods directly
 24. **Compile gate — full plugin compiles with and without gameplay plugins**
 
 ### Gate 5: Voxel Integration

@@ -17,9 +17,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"EnhancedInput",
 				"GameplayAbilities",
 				"GameplayTags",
-				"GameplayTasks",
 				"CommonGameFramework",
-				"NetCore",
 				"AIModule",
 				"VoxelCore", // FVoxelWorldBounds in UVCMovementComponent's header (world edge push-back)
 			}
@@ -28,18 +26,22 @@ public class VoxelCharacterPlugin : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
-				"Slate",
-				"SlateCore",
+			// Linked, not included (CR1, VCP-29): FReply in the world map widget (SlateCore, Slate), FUniqueNetIdWrapper
+			// (CoreOnline), and the tests' box world constructing the distance-band strategy and a renderer stub.
+			"Slate",
+			"SlateCore",
+			"CoreOnline",
+			"VoxelLOD",
+			"VoxelRendering",
 				"UMG",
 				"VoxelStreaming",
-				"VoxelLOD", // the planet tests stand up a real chunk manager (FDistanceBandLODStrategy)
-				"VoxelRendering", // ... and its IVoxelMeshRenderer
+				"VoxelGeneration", // IVoxelWorldMode.h (VCVoxelNavigationHelper.cpp)
+				"PhysicsCore", // CollisionShape.h
 				"VoxelNavigation", // UVCVoxelPathProvider (feature 10)
 				"VoxelScatter",
 				"JsonUtilities",
 				"VoxelMap",
 				"Json",
-				"CoreOnline", // FUniqueNetIdWrapper::ToString (AVCPlayerState::GetSaveKey)
 			}
 		);
 
@@ -72,7 +74,6 @@ public class VoxelCharacterPlugin : ModuleRules
 		if (bHasEquipment)
 		{
 			PrivateDependencyModuleNames.Add("EquipmentPlugin");
-			PrivateDependencyModuleNames.Add("EquipmentGASIntegration");
 		}
 	}
 }

@@ -399,10 +399,12 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 		}
 	}
 
+#if !UE_BUILD_SHIPPING
 	if (bShowVoxelDebug && IsLocallyControlled())
 	{
 		DrawVoxelDebugInfo();
 	}
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -1547,32 +1549,6 @@ FVector AVCCharacterBase::GetPawnViewLocation() const
 	return GetActorLocation() + FVCGravityFrame::VectorToWorld(GetCharacterMovement(), FVector(0.f, 0.f, BaseEyeHeight));
 }
 
-FVector AVCCharacterBase::GetInteractionTraceOrigin() const
-{
-	if (CurrentViewMode == EVCViewMode::FirstPerson)
-	{
-		// Trace from camera position
-		if (CameraManager)
-		{
-			return CameraManager->GetCurrentCameraLocation();
-		}
-	}
-
-	// Third person: trace from character eye height (avoids targeting behind character), along local up on a planet
-	return GetActorLocation() + FVCGravityFrame::VectorToWorld(GetCharacterMovement(), FVector(0.f, 0.f, BaseEyeHeight));
-}
-
-FVector AVCCharacterBase::GetInteractionTraceDirection() const
-{
-	// Always use camera forward, regardless of view mode
-	if (CameraManager)
-	{
-		return CameraManager->GetCurrentCameraRotation().Vector();
-	}
-
-	return GetActorForwardVector();
-}
-
 float AVCCharacterBase::GetInteractionRange() const
 {
 	if (CurrentViewMode == EVCViewMode::FirstPerson)
@@ -1808,10 +1784,13 @@ void AVCCharacterBase::Client_LightBurntOut_Implementation()
 
 void AVCCharacterBase::ToggleVoxelDebug()
 {
+#if !UE_BUILD_SHIPPING
 	bShowVoxelDebug = !bShowVoxelDebug;
 	UE_LOG(LogVoxelCharacter, Log, TEXT("VoxelCharacter debug: %s"), bShowVoxelDebug ? TEXT("ON") : TEXT("OFF"));
+#endif
 }
 
+#if !UE_BUILD_SHIPPING
 void AVCCharacterBase::DrawVoxelDebugInfo()
 {
 	if (!GEngine)
@@ -1891,6 +1870,7 @@ void AVCCharacterBase::DrawVoxelDebugInfo()
 	GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::White,
 		FString::Printf(TEXT("Hotbar: %d  AnimType: %s"), ActiveHotbarSlot, *AnimName));
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // Input

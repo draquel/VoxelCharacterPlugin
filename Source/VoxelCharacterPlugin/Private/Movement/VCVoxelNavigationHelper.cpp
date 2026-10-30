@@ -121,21 +121,6 @@ FVoxelTerrainContext FVCVoxelNavigationHelper::QueryTerrainContext(const UWorld*
 }
 
 // ---------------------------------------------------------------------------
-// Material Lookup
-// ---------------------------------------------------------------------------
-
-uint8 FVCVoxelNavigationHelper::GetVoxelMaterialAtLocation(const UWorld* World, const FVector& Location)
-{
-	UVoxelChunkManager* ChunkMgr = FindChunkManager(World);
-	if (!ChunkMgr)
-	{
-		return 0;
-	}
-
-	return ChunkMgr->GetVoxelAtWorldPosition(Location).MaterialID;
-}
-
-// ---------------------------------------------------------------------------
 // Water Check
 // ---------------------------------------------------------------------------
 
