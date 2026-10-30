@@ -26,6 +26,12 @@ public class VoxelCharacterPlugin : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
+			// Linked, not included (CR1, VCP-29): FReply in the world map widget (Slate), FUniqueNetIdWrapper
+			// (CoreOnline), and the tests' box world constructing the distance-band strategy and a renderer stub.
+			"Slate",
+			"CoreOnline",
+			"VoxelLOD",
+			"VoxelRendering",
 				"UMG",
 				"VoxelStreaming",
 				"VoxelGeneration", // IVoxelWorldMode.h (VCVoxelNavigationHelper.cpp)
