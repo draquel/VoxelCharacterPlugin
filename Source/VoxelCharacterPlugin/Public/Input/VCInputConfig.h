@@ -104,8 +104,4 @@ public:
 	/** UI overlay context — active when inventory / menus are open (priority 1). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Contexts")
 	TObjectPtr<UInputMappingContext> IMC_UI;
-
-	/** Vehicle context — active when possessing a vehicle (priority 2, future). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Contexts")
-	TObjectPtr<UInputMappingContext> IMC_Vehicle;
 };

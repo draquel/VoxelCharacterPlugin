@@ -1205,6 +1205,7 @@ void AVCPlayerController::HideItemCursor()
 
 void AVCPlayerController::GiveItem(FString AssetName, int32 Count)
 {
+#if !UE_BUILD_SHIPPING
 #if WITH_INVENTORY_PLUGIN
 	if (Count <= 0)
 	{
@@ -1268,10 +1269,12 @@ void AVCPlayerController::GiveItem(FString AssetName, int32 Count)
 #else
 	UE_LOG(LogVoxelCharacter, Warning, TEXT("GiveItem: ItemInventoryPlugin not enabled"));
 #endif
+#endif // !UE_BUILD_SHIPPING
 }
 
 void AVCPlayerController::SpawnWorldItem(FString AssetName, int32 Count)
 {
+#if !UE_BUILD_SHIPPING
 #if WITH_INVENTORY_PLUGIN && WITH_INTERACTION_PLUGIN
 	if (Count <= 0)
 	{
@@ -1340,6 +1343,7 @@ void AVCPlayerController::SpawnWorldItem(FString AssetName, int32 Count)
 #else
 	UE_LOG(LogVoxelCharacter, Warning, TEXT("SpawnWorldItem: ItemInventoryPlugin/InteractionPlugin not enabled"));
 #endif
+#endif // !UE_BUILD_SHIPPING
 }
 
 // ---------------------------------------------------------------------------
@@ -1458,21 +1462,6 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 		EditMgr->EndEditOperation();
 
 		UE_LOG(LogVoxelCharacter, Verbose, TEXT("Voxel placed at [%d,%d,%d] Material=%d"),
-			VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z, MaterialID);
-		break;
-	}
-
-	case EVoxelModificationType::Paint:
-	{
-		Brush.Radius = Config->VoxelSize * 1.0f;
-		Brush.Strength = 1.f;
-		Brush.MaterialID = MaterialID;
-
-		EditMgr->BeginEditOperation(TEXT("Player paint"));
-		EditMgr->ApplyBrushEdit(VoxelWorldPos, Brush, EEditMode::Paint);
-		EditMgr->EndEditOperation();
-
-		UE_LOG(LogVoxelCharacter, Verbose, TEXT("Voxel painted at [%d,%d,%d] Material=%d"),
 			VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z, MaterialID);
 		break;
 	}
