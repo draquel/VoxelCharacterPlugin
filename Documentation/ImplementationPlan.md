@@ -111,7 +111,7 @@ enum class EVCViewMode : uint8 { FirstPerson, ThirdPerson };
 enum class EVoxelSurfaceType : uint8 { Default, Stone, Dirt, Sand, Ice, Mud, Snow, Wood, Metal };
 
 // EVoxelModificationType enum
-enum class EVoxelModificationType : uint8 { Destroy, Place, Paint };
+enum class EVoxelModificationType : uint8 { Destroy, Place }; // Paint deleted in CR1 (VCP-03)
 
 // FVoxelTerrainContext struct
 struct FVoxelTerrainContext { ... };
@@ -169,8 +169,8 @@ Extends `UCharacterMovementComponent`. Initial implementation:
 - Surface type → friction multiplier mapping (a simple switch/map)
 - `OnVoxelChunkModified()` delegate handler — stub
 - `FindFloor()` override — call Super, add transitional state handling for async mesh rebuilds (if no floor found and was grounded last frame, hold grounded briefly)
-- `PhysCustom()` override — placeholder for climbing mode
-- Exposed properties: `VoxelClimbingSpeed`, `VoxelSwimmingSpeedMultiplier`, `VoxelSurfaceGripMultiplier`, `CurrentSurfaceType`
+- `PhysCustom()` override — deleted in CR1 (VCP-02)
+- Exposed properties: `VoxelSwimmingSpeedMultiplier`, `VoxelSurfaceGripMultiplier`, `CurrentSurfaceType` (`VoxelClimbingSpeed` deleted in CR1 (VCP-02))
 - `OnMoveSpeedAttributeChanged()` — GAS delegate callback for `MoveSpeedMultiplier` attribute (updates `MaxWalkSpeed`)
 
 **Note:** At this gate, the movement component works as a standard CMC extension. Voxel-specific queries are stubs returning defaults.
@@ -216,7 +216,7 @@ Extends `UVCCameraModeBase`:
 
 - `CameraModeStack` (TArray of UVCCameraModeBase*)
 - `PushCameraMode(TSubclassOf<>)` — creates instance, pushes to stack, starts blend
-- `PopCameraMode()` — removes top mode
+- `PopCameraMode()` — deleted in CR1 (VCP-07)
 - `UpdateCamera(DeltaTime)` — called from character Tick:
   1. Update blend weights on stack (top mode blends toward 1.0, others toward 0.0)
   2. Compute each active mode's desired transform
@@ -403,75 +403,26 @@ Detection via directory existence check or `Target.bBuildAllModules` awareness.
 
 ### 4.2 — `IVCInventoryBridge`
 
-**File:** `Public/Integration/VCInventoryBridge.h`
-
-Interface for inventory access:
-
-```cpp
-class IVCInventoryBridge
-{
-    virtual UActorComponent* GetPrimaryInventory() const = 0;
-    virtual int32 GetActiveHotbarSlot() const = 0;
-    virtual void SetActiveHotbarSlot(int32 SlotIndex) = 0;
-    virtual bool RequestPickupItem(AActor* WorldItem) = 0;
-    virtual bool RequestDropActiveItem(int32 Count = 1) = 0;
-};
-```
-
-**Note:** Uses `UActorComponent*` (not `UInventoryComponent*`) in the interface to avoid header dependency. Callers cast in .cpp files.
+Deleted in CR1 (VCP-01).
 
 ### 4.3 — `IVCInteractionBridge`
 
-**File:** `Public/Integration/VCInteractionBridge.h`
-
-Interface for interaction system queries:
-
-```cpp
-class IVCInteractionBridge
-{
-    virtual FVector GetInteractionTraceOrigin() const = 0;
-    virtual FVector GetInteractionTraceDirection() const = 0;
-    virtual void SetInteractionScanProfile(EVCViewMode ViewMode) = 0;
-};
-```
+Deleted in CR1 (VCP-01).
 
 ### 4.4 — `IVCEquipmentBridge`
 
-**File:** `Public/Integration/VCEquipmentBridge.h`
-
-Interface for equipment visual management:
-
-```cpp
-class IVCEquipmentBridge
-{
-    virtual void OnEquipmentChanged(const FGameplayTag& Slot, ...) = 0;
-    virtual void UpdateEquipmentVisuals(EVCViewMode ViewMode) = 0;
-    virtual void ReattachAllEquipment(USkeletalMeshComponent* TargetMesh) = 0;
-};
-```
+Deleted in CR1 (VCP-01).
 
 ### 4.5 — `IVCAbilityBridge`
 
-**File:** `Public/Integration/VCAbilityBridge.h`
-
-Interface for ability system integration points:
-
-```cpp
-class IVCAbilityBridge
-{
-    virtual void GrantDefaultAbilities(UAbilitySystemComponent* ASC) = 0;
-    virtual void OnEquipmentAbilitiesGranted(const FGameplayTag& Slot) = 0;
-};
-```
+Deleted in CR1 (VCP-01).
 
 ### 4.6 — Wire Bridges into Character
 
 Update `AVCCharacterBase.cpp`:
 
 - In constructor/BeginPlay: conditionally create/find `UInteractionComponent` and `UEquipmentManagerComponent` using `#if WITH_*_PLUGIN` guards
-- Implement `IVCInventoryBridge` on the character (or a helper component)
-- Implement `IVCInteractionBridge` — provide trace origin/direction based on view mode
-- Implement `IVCEquipmentBridge` — handle equipment visual attachment to correct mesh
+- The `IVC*Bridge` interfaces: deleted in CR1 (VCP-01)
 - Wire `OnEquipmentChanged` delegate from EquipmentManagerComponent
 - Wire interaction input to InteractionComponent
 - Add hotbar input handling (IA_HotbarSlot, IA_ScrollHotbar)
@@ -496,10 +447,7 @@ Create or integrate `FVCEquipmentSocketMapping` DataAsset/DataTable for socket n
 | # | File | Action |
 |---|------|--------|
 | 1 | `VoxelCharacterPlugin.Build.cs` | Modify — conditional deps |
-| 2 | `Public/Integration/VCInventoryBridge.h` | Create |
-| 3 | `Public/Integration/VCInteractionBridge.h` | Create |
-| 4 | `Public/Integration/VCEquipmentBridge.h` | Create |
-| 5 | `Public/Integration/VCAbilityBridge.h` | Create |
+| 2-5 | `Public/Integration/VC*Bridge.h` | deleted in CR1 (VCP-01) |
 | 6 | `Private/Core/VCCharacterBase.cpp` | Modify — wire bridges |
 | 7 | `Private/Core/VCPlayerController.cpp` | Modify — wire bridges |
 | 8 | `Public/Core/VCCharacterBase.h` | Modify — add interface impls |
@@ -526,8 +474,7 @@ Static utility class for voxel world queries:
   - Line trace against voxel collision channel
 - `WorldToVoxelCoord(FVector)` → `FIntVector`
   - Utility coordinate conversion using VoxelWorlds' VoxelCoordinates
-- `GetVoxelMaterialAtLocation(UWorld*, FVector)` → `EVoxelMaterial`
-  - Direct voxel data lookup
+- `GetVoxelMaterialAtLocation(UWorld*, FVector)` — deleted in CR1 (VCP-06)
 
 ### 5.2 — Wire Voxel Queries into Movement Component
 

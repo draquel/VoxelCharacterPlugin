@@ -83,9 +83,7 @@ public:
     // Used to adjust movement parameters based on voxel material
     void UpdateVoxelTerrainContext();
 
-    // Override to use voxel collision when the voxel world doesn't provide
-    // standard Unreal collision primitives
-    virtual void PhysCustom(float DeltaTime, int32 Iterations) override;
+    // PhysCustom: deleted in CR1 (VCP-02)
 
     // Custom floor detection that consults voxel world geometry
     virtual void FindFloor(const FVector& CapsuleLocation,
@@ -94,8 +92,7 @@ public:
                           const FHitResult* DownwardSweepResult) const override;
 
     // --- Custom Movement Modes ---
-    UPROPERTY(EditDefaultsOnly, Category = "Movement|Voxel")
-    float VoxelClimbingSpeed = 200.f;
+    // VoxelClimbingSpeed: deleted in CR1 (VCP-02)
 
     UPROPERTY(EditDefaultsOnly, Category = "Movement|Voxel")
     float VoxelSwimmingSpeedMultiplier = 0.6f;
@@ -280,8 +277,7 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Camera")
     void PushCameraMode(TSubclassOf<UVCCameraModeBase> CameraModeClass);
 
-    UFUNCTION(BlueprintCallable, Category = "Camera")
-    void PopCameraMode();
+    // PopCameraMode: deleted in CR1 (VCP-07)
 
     // Called every frame to compute final camera transform
     void UpdateCamera(float DeltaTime);
@@ -415,30 +411,7 @@ The character controller connects to each plugin system through **interfaces and
 
 The character doesn't own inventory directly — it accesses inventory through `IInventoryOwnerInterface` (defined in CommonGameFramework), which can live on the PlayerState, a component, or a separate actor.
 
-```cpp
-// In VCInventoryInterface.h — thin adapter, NOT a hard dependency
-
-UINTERFACE(MinimalAPI, Blueprintable)
-class UVCInventoryBridge : public UInterface { GENERATED_BODY() };
-
-class VOXELCHARACTERPLUGIN_API IVCInventoryBridge
-{
-    GENERATED_BODY()
-public:
-    // Quick access to the player's primary inventory
-    virtual UInventoryContainerComponent* GetPrimaryInventory() const = 0;
-
-    // Hotbar slot selection (drives equipment and held item visuals)
-    virtual int32 GetActiveHotbarSlot() const = 0;
-    virtual void SetActiveHotbarSlot(int32 SlotIndex) = 0;
-
-    // Item pickup request — returns true if any items were added
-    virtual bool RequestPickupItem(AWorldItem* WorldItem) = 0;
-
-    // Drop currently held item into the world
-    virtual bool RequestDropActiveItem(int32 Count = 1) = 0;
-};
-```
+The `IVCInventoryBridge` interface: deleted in CR1 (VCP-01).
 
 **Flow: Picking Up an Item**
 
@@ -446,7 +419,7 @@ public:
 1. InteractionScanner detects AWorldItem in range
 2. Player presses Interact → Input_Interact fires
 3. Character calls InteractionScanner->TryInteract()
-4. InteractionPlugin resolves the interaction → calls IVCInventoryBridge::RequestPickupItem
+4. InteractionPlugin resolves the interaction → calls RequestPickupItem (IVCInventoryBridge deleted in CR1 (VCP-01))
 5. InventoryPlugin validates space, weight, adds item (server-authoritative)
 6. On success: WorldItem is destroyed, inventory UI updates via delegate
 7. EquipmentPlugin notified if item auto-equips to hotbar
@@ -456,31 +429,7 @@ public:
 
 The `InteractionScannerComponent` (from InteractionPlugin) lives on the character and handles detection of interactable objects. The character controller simply provides input routing and view-mode-aware trace origins.
 
-```cpp
-// The character provides trace context to the interaction system
-// based on current view mode
-
-FVector AVCCharacterBase::GetInteractionTraceOrigin() const
-{
-    if (CurrentViewMode == EVCViewMode::FirstPerson)
-    {
-        // Trace from camera/eye position
-        return CameraManager->GetCurrentCameraLocation();
-    }
-    else
-    {
-        // Trace from character center + camera direction
-        // Avoids interacting with objects behind the character in TP
-        return GetActorLocation() + FVector(0, 0, BaseEyeHeight);
-    }
-}
-
-FVector AVCCharacterBase::GetInteractionTraceDirection() const
-{
-    // Always use camera forward, regardless of view mode
-    return CameraManager->GetCurrentCameraRotation().Vector();
-}
-```
+`GetInteractionTraceOrigin` / `GetInteractionTraceDirection` and `IVCInteractionBridge`: deleted in CR1 (VCP-01).
 
 **Interaction scanner configuration differs by view mode:**
 
@@ -913,8 +862,7 @@ public:
     UPROPERTY(EditDefaultsOnly, Category = "Input")
     TObjectPtr<UInputMappingContext> IMC_UI;
 
-    UPROPERTY(EditDefaultsOnly, Category = "Input")
-    TObjectPtr<UInputMappingContext> IMC_Vehicle;  // Future
+    // IMC_Vehicle: deleted in CR1 (VCP-04)
 };
 ```
 
@@ -924,7 +872,7 @@ public:
 |----------|---------|-------------|
 | 0 | `IMC_Gameplay` | Always (base) |
 | 1 | `IMC_UI` | Inventory/menu open |
-| 2 | `IMC_Vehicle` | In vehicle (future) |
+| 2 | `IMC_Vehicle` | deleted in CR1 (VCP-04) |
 | 10 | `IMC_Ability` | During ability activation (GAS, future) |
 
 ---

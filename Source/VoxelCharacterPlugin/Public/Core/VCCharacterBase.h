@@ -9,10 +9,6 @@
 #include "Types/CGFItemTypes.h"
 #include "Interfaces/CGFInventoryInterface.h"
 #include "Interfaces/CGFLightBearerInterface.h"
-#include "Integration/VCInventoryBridge.h"
-#include "Integration/VCInteractionBridge.h"
-#include "Integration/VCEquipmentBridge.h"
-#include "Integration/VCAbilityBridge.h"
 #include "VoxelWorldModeTypes.h"
 #include "VCCharacterBase.generated.h"
 
@@ -44,18 +40,13 @@ class UInventoryComponent;
  *
  * Assembles movement, camera, and integration components.
  * Implements IAbilitySystemInterface as a passthrough to the
- * ASC on AVCPlayerState. Implements bridge interfaces for
- * optional plugin integration (inventory, interaction, equipment, GAS).
+ * ASC on AVCPlayerState.
  */
 UCLASS()
 class VOXELCHARACTERPLUGIN_API AVCCharacterBase : public ACharacter,
 	public IAbilitySystemInterface,
 	public ICGFInventoryInterface,
-	public ICGFLightBearerInterface,
-	public IVCInventoryBridge,
-	public IVCInteractionBridge,
-	public IVCEquipmentBridge,
-	public IVCAbilityBridge
+	public ICGFLightBearerInterface
 {
 	GENERATED_BODY()
 
@@ -523,30 +514,23 @@ public:
 	// Bridge Interface Overrides
 	// =================================================================
 
-	// --- IVCInventoryBridge ---
-	virtual UActorComponent* GetPrimaryInventory() const override;
-	virtual int32 GetActiveHotbarSlot() const override;
-	virtual void SetActiveHotbarSlot(int32 SlotIndex) override;
-	virtual bool RequestPickupItem(AActor* WorldItem) override;
-	virtual bool RequestDropActiveItem(int32 Count = 1) override;
-
-	// --- IVCInteractionBridge ---
-	virtual FVector GetInteractionTraceOrigin() const override;
+	virtual UActorComponent* GetPrimaryInventory() const;
+	virtual int32 GetActiveHotbarSlot() const;
+	virtual void SetActiveHotbarSlot(int32 SlotIndex);
+	virtual bool RequestPickupItem(AActor* WorldItem);
+	virtual bool RequestDropActiveItem(int32 Count = 1);
 
 	/**
 	 * The eyes: BaseEyeHeight along local up (spherical Phase 4, WM-SY12). The engine adds it along world Z, which at a
 	 * planet's equator puts the eyes beside the head; without custom gravity this is the engine's location.
 	 */
 	virtual FVector GetPawnViewLocation() const override;
-	virtual FVector GetInteractionTraceDirection() const override;
-	virtual float GetInteractionRange() const override;
+	virtual float GetInteractionRange() const;
 
-	// --- IVCEquipmentBridge ---
-	virtual void UpdateEquipmentAttachments() override;
-	virtual USkeletalMeshComponent* GetTargetMeshForSlot(const FGameplayTag& SlotTag) const override;
+	virtual void UpdateEquipmentAttachments();
+	virtual USkeletalMeshComponent* GetTargetMeshForSlot(const FGameplayTag& SlotTag) const;
 
-	// --- IVCAbilityBridge ---
-	virtual void OnEquipmentAbilitiesChanged(const FGameplayTag& SlotTag) override;
+	virtual void OnEquipmentAbilitiesChanged(const FGameplayTag& SlotTag);
 
 protected:
 	// --- Lifecycle ---
@@ -788,6 +772,8 @@ protected:
 	/** Resolve the InputConfig from the owning PlayerController. */
 	const UVCInputConfig* GetInputConfig() const;
 
+#if !UE_BUILD_SHIPPING
 	/** Draw on-screen debug overlay with terrain, camera, and movement info. */
 	void DrawVoxelDebugInfo();
+#endif
 };

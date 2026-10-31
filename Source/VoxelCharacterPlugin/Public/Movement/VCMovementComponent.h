@@ -46,9 +46,6 @@ public:
 	// --- Custom Movement Mode Properties ---
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
-	float VoxelClimbingSpeed = 200.f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
 	float VoxelSwimmingSpeedMultiplier = 0.6f;
 
 	/** Water depth (world units) at character feet before entering swimming mode. */
@@ -231,7 +228,6 @@ public:
 
 	// --- Overrides ---
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
-	virtual void PhysCustom(float DeltaTime, int32 Iterations) override;
 	virtual void PhysSwimming(float DeltaTime, int32 Iterations) override;
 	virtual void CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration) override;
 	virtual void FindFloor(const FVector& CapsuleLocation, FFindFloorResult& OutFloorResult, bool bCanUseCachedLocation, const FHitResult* DownwardSweepResult = nullptr) const override;

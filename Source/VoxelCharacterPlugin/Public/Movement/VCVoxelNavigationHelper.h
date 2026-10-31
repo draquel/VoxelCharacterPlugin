@@ -42,15 +42,6 @@ public:
 	static FVoxelTerrainContext QueryTerrainContext(const UWorld* World, const FVector& Location, const FVector& Up = FVector::UpVector);
 
 	/**
-	 * Get the raw voxel material ID at a world position.
-	 *
-	 * @param World World context
-	 * @param Location World-space position
-	 * @return Material ID (0 if unloaded or air)
-	 */
-	static uint8 GetVoxelMaterialAtLocation(const UWorld* World, const FVector& Location);
-
-	/**
 	 * Check if a world position is underwater: in a water-flagged voxel, with its depth below the sea
 	 * (UVoxelChunkManager::GetSeaSurface: the WaterLevel plane, or the sphere of WaterRadius on a planet, SP-E1).
 	 *

@@ -41,14 +41,6 @@ void UVCCameraManager::PushCameraMode(TSubclassOf<UVCCameraModeBase> CameraModeC
 	CameraModeStack.Push(NewMode);
 }
 
-void UVCCameraManager::PopCameraMode()
-{
-	if (CameraModeStack.Num() > 1)
-	{
-		CameraModeStack.Pop();
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Update Camera
 // ---------------------------------------------------------------------------

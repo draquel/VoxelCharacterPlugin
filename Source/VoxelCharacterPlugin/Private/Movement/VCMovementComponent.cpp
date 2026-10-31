@@ -847,17 +847,6 @@ bool UVCMovementComponent::IsValidLandingSpot(const FVector& CapsuleLocation, co
 }
 
 // ---------------------------------------------------------------------------
-// Custom Physics (climbing placeholder)
-// ---------------------------------------------------------------------------
-
-void UVCMovementComponent::PhysCustom(float DeltaTime, int32 Iterations)
-{
-	Super::PhysCustom(DeltaTime, Iterations);
-
-	// Future: climbing mode implementation
-}
-
-// ---------------------------------------------------------------------------
 // Immersion Depth (voxel-based water detection)
 // ---------------------------------------------------------------------------
 
