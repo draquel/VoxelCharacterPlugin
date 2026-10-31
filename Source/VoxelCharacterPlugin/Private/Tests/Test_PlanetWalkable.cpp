@@ -46,7 +46,6 @@ namespace VCPlanetWalkableTestHelpers
 		virtual void Initialize(UWorld* World, const UVoxelWorldConfiguration* WorldConfig) override { bInitialized = true; }
 		virtual void Shutdown() override { bInitialized = false; }
 		virtual bool IsInitialized() const override { return bInitialized; }
-		virtual void UpdateChunkMesh(const FChunkRenderData& RenderData) override {}
 		virtual void UpdateChunkMeshFromCPU(const FIntVector& ChunkCoord, int32 LODLevel, const FChunkMeshData& MeshData) override {}
 		virtual void RemoveChunk(const FIntVector& ChunkCoord) override {}
 		virtual void ClearAllChunks() override {}
@@ -111,7 +110,6 @@ namespace VCPlanetWalkableTestHelpers
 			Config->VoxelSize = 50.0f;
 			Config->ViewDistance = 3000.0f;
 			Config->bUseGPUGeneration = false;
-			Config->bUseGPUMeshing = false;
 			Config->bGenerateCollision = false;
 			Config->bEnableScatter = false;
 			Config->bEnableCaves = false;
