@@ -295,7 +295,7 @@ step (`bEaseBlockSteps`, `BlockStepEaseSpeed`, pure `ComputeStepEaseOffset`) onl
 
 Edits must never trap a pawn. `Server_RequestVoxelModification` refuses a placement whose voxel cube (smooth worlds:
 centred on the sample, half a voxel plus a margin; cubic worlds: the block's own cell) overlaps ANY pawn and tells the player through `Client_ShowToast` ("Too close to
-place a block"); the demo `AVoxelWorldTestActor` build / place inputs refuse brushes that overlap a pawn. As a safety
+place a block"); the demo `AVoxelDemoActor` build / place inputs refuse brushes that overlap a pawn. As a safety
 net for everything else (stamps, scripts), an edit near a pawn arms `UVCMovementComponent`, and when the new
 collision lands nearby `ResolveTerrainEmbedding()` lifts the pawn onto the new surface if its centre and upper body are
 inside solid voxels (players and NPCs both use this component). "Near" is a brush's sphere, or for an edit with no
@@ -356,7 +356,7 @@ Dead or downed characters ignore primary/secondary actions entirely.
 `SetEditModeEnabled()` from Blueprint/code, or by `vox.EditMode` in the game module. The flag is local input state,
 never replicated; the server still validates every `Server_RequestVoxelModification`. `OnEditModeChanged(bool)`
 drives the `EDIT` cue on `UVCVitalsWidget`. The toggle also mirrors into the VoxelWorlds console variable
-`voxel.Edit.PlayerInputs` (looked up by name, no dependency) so a map whose `AVoxelWorldTestActor` has
+`voxel.Edit.PlayerInputs` (looked up by name, no dependency) so a map whose `AVoxelDemoActor` has
 `bEnableEditInputs` set (the demo's brush sphere) obeys the same key instead of polling the raw mouse; in a cubic world
 the mirror sets 2 (the test actor keeps its keys, no mouse edits or target boxes: the character edits blocks itself, with
 break times; world modes review WM-C16). This is a stop-gap so attacking/interacting never digs; the plan is to bind edit
