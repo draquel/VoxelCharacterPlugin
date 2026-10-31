@@ -76,8 +76,8 @@
 namespace
 {
 	/**
-	 * Mirror edit mode into VoxelWorlds' runtime switch for the test-actor brush (voxel.Edit.PlayerInputs), so a map
-	 * whose AVoxelWorldTestActor has bEnableEditInputs set (the demo) obeys the same toggle instead of polling the
+	 * Mirror edit mode into the demo actor's runtime switch for its brush (voxel.Edit.PlayerInputs), so a map
+	 * whose AVoxelDemoActor has bEnableEditInputs set (the demo) obeys the same toggle instead of polling the
 	 * raw mouse buttons. Looked up by name: no module dependency, and a no-op where VoxelStreaming is absent.
 	 * In a cubic world the character targets, previews and breaks the blocks itself (world modes review WM-C16), so the
 	 * test actor keeps only its keys (2): its own press-to-remove would skip the break time and its boxes double ours.
