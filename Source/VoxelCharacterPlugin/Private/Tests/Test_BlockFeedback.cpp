@@ -91,7 +91,6 @@ namespace VCBlockFeedbackTestHelpers
 			W.ConfigureSmallPlane();
 			W.Config->MeshingMode = bCubic ? EMeshingMode::Cubic : EMeshingMode::DualContouring;
 			W.StartManager();
-			FVCVoxelNavigationHelper::ClearCache();
 			VoxelSize = W.Config->VoxelSize;
 			W.SetViewer(FVector(0.0, 0.0, W.Manager->GetGeneratedSurfaceHeight(0.0, 0.0) + 300.0));
 			if (!W.Settle())
@@ -182,7 +181,6 @@ namespace VCBlockFeedbackTestHelpers
 			{
 				Character->Controller = nullptr;
 			}
-			FVCVoxelNavigationHelper::ClearCache();
 			W.Stop();
 		}
 	};

@@ -28,7 +28,7 @@ void AVCGameModeBase::StartPlay()
 
 void AVCGameModeBase::ApplyVoxelWorldShape()
 {
-	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	if (!ChunkMgr)
 	{
 		// No voxel world (yet): keep looking for a minute, then give up quietly (a map without one).

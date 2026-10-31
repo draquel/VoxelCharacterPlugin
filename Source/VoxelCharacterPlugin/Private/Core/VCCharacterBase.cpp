@@ -93,7 +93,7 @@ namespace
 	/** The world is cubic: the character's block feedback handles editing there. */
 	bool IsBlockWorld(const UWorld* World)
 	{
-		const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(World);
+		const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
 		return ChunkMgr && UVCBlockInteractionComponent::ShowsBlockFeedback(ChunkMgr->GetConfiguration());
 	}
 }
@@ -851,7 +851,7 @@ void AVCCharacterBase::FreezeForTerrainWait()
 void AVCCharacterBase::InitiateChunkBasedWait()
 {
 	// Find the collision manager via the chunk manager
-	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	if (!ChunkMgr)
 	{
 		UE_LOG(LogVoxelCharacter, Warning, TEXT("InitiateChunkBasedWait: No VoxelChunkManager found — placing immediately."));
@@ -1159,7 +1159,7 @@ bool AVCCharacterBase::ResolveRecoveryLocation(bool bAllowLastSafe, FVector& Out
 		OutLocation = LastSafeLocation;
 		return true;
 	}
-	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	const FVoxelWorldBounds Bounds = ChunkMgr ? ChunkMgr->GetWorldBounds() : FVoxelWorldBounds();
 	const FVector Here = GetActorLocation();
 	// A candidate must be inside the world and away from here: the point is to leave a spot with no terrain. (On a planet
@@ -1304,7 +1304,7 @@ void AVCCharacterBase::TickWorldSafety(float DeltaSeconds)
 	}
 	SafeLocationTimer = 0.25f;
 
-	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	if (!ChunkMgr)
 	{
 		return;
@@ -1408,7 +1408,7 @@ bool AVCCharacterBase::TraceForVoxel(FHitResult& OutHit, float MaxDistance) cons
 
 bool AVCCharacterBase::FindEditTarget(FHitResult& OutHit, FIntVector& OutDigVoxel, FIntVector& OutPlaceVoxel) const
 {
-	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
 	if (!Config || !TraceForVoxel(OutHit))
 	{
@@ -2129,7 +2129,7 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 	// Step 2 (an equipped tool's dig) and step 3 (an unarmed dig, edit mode) dig the same voxel, FindEditTarget's (WM-C12).
 	// In a cubic world with break times the press starts a hold instead (WM-C15): the block under the crosshair breaks
 	// after its material's time while the button stays down, decided on the server.
-	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	if (BlockInteraction && ChunkMgr && UVCBlockInteractionComponent::UsesTimedBreaks(ChunkMgr->GetConfiguration()))
 	{
 		BlockInteraction->StartHold();
@@ -2581,7 +2581,7 @@ void AVCCharacterBase::TickRadialRagdoll(USkeletalMeshComponent* Body, const FVe
 
 bool AVCCharacterBase::TryChopScatter()
 {
-	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	UVoxelScatterManager* Scatter = ChunkMgr ? ChunkMgr->GetScatterManager() : nullptr;
 	const AVCPlayerController* PC = Cast<AVCPlayerController>(GetController());
 	if (!Scatter || !PC)
@@ -2620,7 +2620,7 @@ void AVCCharacterBase::Server_ChopScatter_Implementation(const FVector& AimPoint
 
 bool AVCCharacterBase::TryChopVoxelTree()
 {
-	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
 	if (!Config || !ChunkMgr->HasVoxelTrees() || !Cast<AVCPlayerController>(GetController()))
 	{

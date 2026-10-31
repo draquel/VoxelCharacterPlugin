@@ -8,45 +8,6 @@
 #include "VoxelData.h"
 #include "IVoxelWorldMode.h"
 #include "VoxelCharacterPlugin.h"
-#include "EngineUtils.h"
-
-TWeakObjectPtr<UVoxelChunkManager> FVCVoxelNavigationHelper::CachedChunkManager;
-
-// ---------------------------------------------------------------------------
-// Find Chunk Manager
-// ---------------------------------------------------------------------------
-
-UVoxelChunkManager* FVCVoxelNavigationHelper::FindChunkManager(const UWorld* World)
-{
-	if (!World)
-	{
-		return nullptr;
-	}
-
-	// Validate cached manager belongs to the same world (critical for PIE)
-	if (CachedChunkManager.IsValid() && CachedChunkManager->GetWorld() == World)
-	{
-		return CachedChunkManager.Get();
-	}
-
-	// Cache miss or wrong world — clear and re-search
-	CachedChunkManager.Reset();
-
-	// Search all actors for one with a VoxelChunkManager component
-	for (TActorIterator<AActor> It(const_cast<UWorld*>(World)); It; ++It)
-	{
-		if (UVoxelChunkManager* ChunkMgr = It->FindComponentByClass<UVoxelChunkManager>())
-		{
-			if (ChunkMgr->IsInitialized())
-			{
-				CachedChunkManager = ChunkMgr;
-				return ChunkMgr;
-			}
-		}
-	}
-
-	return nullptr;
-}
 
 // ---------------------------------------------------------------------------
 // Query Terrain Context
@@ -56,7 +17,7 @@ FVoxelTerrainContext FVCVoxelNavigationHelper::QueryTerrainContext(const UWorld*
 {
 	FVoxelTerrainContext Context;
 
-	UVoxelChunkManager* ChunkMgr = FindChunkManager(World);
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
 	if (!ChunkMgr)
 	{
 		return Context;
@@ -128,7 +89,7 @@ bool FVCVoxelNavigationHelper::IsPositionUnderwater(const UWorld* World, const F
 {
 	OutWaterDepth = 0.f;
 
-	UVoxelChunkManager* ChunkMgr = FindChunkManager(World);
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
 	if (!ChunkMgr)
 	{
 		return false;
@@ -161,7 +122,7 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 	float MaxSearchRadius,
 	bool bSearchWholeWorld)
 {
-	UVoxelChunkManager* ChunkMgr = FindChunkManager(World);
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
 	if (!ChunkMgr)
 	{
 		return false;
@@ -467,13 +428,4 @@ bool FVCVoxelNavigationHelper::FindPlanetSpawnPointAtScale(const FVector& Centre
 		Angle += Spacing;
 	}
 	return false;
-}
-
-// ---------------------------------------------------------------------------
-// Cache Management
-// ---------------------------------------------------------------------------
-
-void FVCVoxelNavigationHelper::ClearCache()
-{
-	CachedChunkManager.Reset();
 }

@@ -1360,7 +1360,7 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 		return;
 	}
 
-	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	if (!ChunkMgr || !ChunkMgr->IsInitialized())
 	{
 		UE_LOG(LogVoxelCharacter, Warning, TEXT("Server_RequestVoxelModification: No chunk manager"));
@@ -1508,7 +1508,7 @@ bool AVCPlayerController::WouldPlaceTrapPawn(const UWorld* World, const UVoxelWo
 bool AVCPlayerController::DigVoxelAt(const FIntVector& VoxelCoord)
 {
 	APawn* ControlledPawn = GetPawn();
-	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	const UVoxelWorldConfiguration* Config = ChunkMgr && ChunkMgr->IsInitialized() ? ChunkMgr->GetConfiguration() : nullptr;
 	UVoxelEditManager* EditMgr = ChunkMgr ? ChunkMgr->GetEditManager() : nullptr;
 	if (!HasAuthority() || !ControlledPawn || !Config || !EditMgr)
@@ -1657,7 +1657,7 @@ void AVCPlayerController::GiveGatheredItem(FPrimaryAssetId ItemId, int32 Count)
 bool AVCPlayerController::ChopScatterAt(const FVector& AimPoint)
 {
 	AVCCharacterBase* Chopper = Cast<AVCCharacterBase>(GetPawn());
-	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	UVoxelScatterManager* Scatter = ChunkMgr ? ChunkMgr->GetScatterManager() : nullptr;
 	if (!HasAuthority() || !Chopper || !Scatter || !GatherTable)
 	{
@@ -1691,7 +1691,7 @@ bool AVCPlayerController::ChopScatterAt(const FVector& AimPoint)
 
 void AVCPlayerController::Multicast_ScatterHarvested_Implementation(const FVector& Location)
 {
-	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	UVoxelScatterManager* Scatter = ChunkMgr ? ChunkMgr->GetScatterManager() : nullptr;
 	FScatterHarvestResult Removed;
 	if (Scatter)
@@ -1715,7 +1715,7 @@ bool AVCPlayerController::IsVoxelTreeStanding(const UVoxelChunkManager* ChunkMgr
 bool AVCPlayerController::ChopVoxelTreeAt(const FIntVector& VoxelCoord)
 {
 	AVCCharacterBase* Chopper = Cast<AVCCharacterBase>(GetPawn());
-	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
 	UVoxelEditManager* EditMgr = ChunkMgr ? ChunkMgr->GetEditManager() : nullptr;
 	if (!HasAuthority() || !Chopper || !Config || !EditMgr || !GatherTable || !ChunkMgr->HasVoxelTrees())

@@ -45,7 +45,7 @@ namespace
 	UVoxelChunkManager* ResolveVoxelWorld(const AActor* Owner, const UVoxelWorldConfiguration*& OutConfig)
 	{
 		OutConfig = nullptr;
-		UVoxelChunkManager* ChunkMgr = Owner ? FVCVoxelNavigationHelper::FindChunkManager(Owner->GetWorld()) : nullptr;
+		UVoxelChunkManager* ChunkMgr = Owner ? UVoxelChunkManager::Find(Owner->GetWorld()) : nullptr;
 		if (!ChunkMgr || !ChunkMgr->IsInitialized())
 		{
 			return nullptr;
