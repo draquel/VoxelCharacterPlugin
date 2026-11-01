@@ -1563,7 +1563,7 @@ bool AVCPlayerController::DigVoxelAt(const FIntVector& VoxelCoord)
 					continue;
 				}
 				Reachable.Add(VoxelWorldPos + Offset + FVector(Config->VoxelSize * 0.5f));
-				Before.Add(ChunkMgr->GetEditMergedVoxelAtWorldPosition(Reachable.Last()));
+				Before.Add(ChunkMgr->GetVoxelAt(Reachable.Last()));
 				DistSq.Add(static_cast<float>(Offset.SizeSquared()));
 			}
 		}
@@ -1579,7 +1579,7 @@ bool AVCPlayerController::DigVoxelAt(const FIntVector& VoxelCoord)
 		After.Reserve(Reachable.Num());
 		for (const FVector& Sample : Reachable)
 		{
-			After.Add(ChunkMgr->GetEditMergedVoxelAtWorldPosition(Sample));
+			After.Add(ChunkMgr->GetVoxelAt(Sample));
 		}
 		Dug = UVCGatherTable::FindDugVoxel(Before, After, DistSq);
 		if (Dug != INDEX_NONE)

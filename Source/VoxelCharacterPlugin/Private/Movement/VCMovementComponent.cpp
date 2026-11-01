@@ -1260,7 +1260,7 @@ bool UVCMovementComponent::ResolveTerrainEmbedding()
 	// beside it, but never both.
 	auto IsSolidAt = [ChunkMgr, VoxelSize](const FVector& P)
 	{
-		return ChunkMgr->GetEditMergedVoxelAtWorldPosition(P + FVector(VoxelSize * 0.5f)).IsSolid();
+		return ChunkMgr->GetVoxelAt(P + FVector(VoxelSize * 0.5f)).IsSolid();
 	};
 	// Along local up (radial on a planet, WM-W2).
 	const FVector Up = FVCGravityFrame::GetUp(this);
