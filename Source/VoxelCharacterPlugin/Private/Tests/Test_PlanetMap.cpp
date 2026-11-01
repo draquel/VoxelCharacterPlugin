@@ -4,7 +4,7 @@
 
 #if WITH_AUTOMATION_TESTS
 
-#include "Map/VCPlanetMapProjection.h"
+#include "Map/VCMapSamplers.h"
 #include "Map/VCWorldMapWidget.h"
 #include "Misc/Parse.h"
 #include "VoxelMapSubsystem.h"

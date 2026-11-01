@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
-#include "Map/VCPlanetMapProjection.h"
+#include "Map/VCMapSamplers.h"
 #include "VCMinimapWidget.generated.h"
 
 class UVoxelMapSubsystem;

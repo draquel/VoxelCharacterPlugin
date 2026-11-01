@@ -10,7 +10,7 @@
 #include "Core/VCPlayerController.h"
 #include "Camera/VCCameraManager.h"
 #include "Gathering/VCGatherTable.h"
-#include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCTerrainQueryHelper.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
@@ -492,12 +492,12 @@ bool FVCBlock_Break::RunTest(const FString& Parameters)
 
 	// The instant request cannot skip the time where breaks are timed.
 	AddExpectedMessage(TEXT("refused a dig"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
-	B.PC->Server_RequestVoxelModification(A, EVoxelModificationType::Destroy, 0);
+	B.PC->Server_RequestVoxelModification(A, EVCVoxelModificationType::Destroy, 0);
 	TestTrue(TEXT("Server_RequestVoxelModification(Destroy) breaks nothing in a timed world"), B.Voxel(A).IsSolid());
 	{
 		// vc.Dig.BreakTimes 0: the request digs at once, as before.
 		FCVarScope Instant(TEXT("vc.Dig.BreakTimes"), TEXT("0"));
-		B.PC->Server_RequestVoxelModification(A, EVoxelModificationType::Destroy, 0);
+		B.PC->Server_RequestVoxelModification(A, EVCVoxelModificationType::Destroy, 0);
 		TestTrue(TEXT("vc.Dig.BreakTimes 0: the request digs at once"), B.Voxel(A).IsAir());
 	}
 
@@ -564,7 +564,7 @@ bool FVCBlock_Break::RunTest(const FString& Parameters)
 		const FIntVector Ground = FVoxelCoordinates::WorldToVoxel(FVector(0.0, 0.0, GroundTop - S.VoxelSize) - S.W.Config->WorldOrigin, S.VoxelSize);
 		S.SpawnPlayer(S.Centre(Ground) + FVector(-300.0, 0.0, 150.0));
 		const uint8 Before = S.Voxel(Ground).Density;
-		S.PC->Server_RequestVoxelModification(Ground, EVoxelModificationType::Destroy, 0);
+		S.PC->Server_RequestVoxelModification(Ground, EVCVoxelModificationType::Destroy, 0);
 		AddInfo(FString::Printf(TEXT("Smooth: density %d -> %d at once"), Before, S.Voxel(Ground).Density));
 		TestTrue(TEXT("Smooth: the dig dents at once"), S.Voxel(Ground).Density < Before);
 		TestFalse(TEXT("Smooth: no break begins"), S.Block->BeginBreakOnServer(Ground));

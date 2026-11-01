@@ -22,7 +22,7 @@ enum class EVCViewMode : uint8
 /** Logical surface type derived from the voxel material beneath the character.
  *  Drives movement friction, footstep sounds, and animation. */
 UENUM(BlueprintType)
-enum class EVoxelSurfaceType : uint8
+enum class EVCSurfaceType : uint8
 {
 	Default,
 	Stone,
@@ -39,7 +39,7 @@ enum class EVoxelSurfaceType : uint8
 
 /** Type of voxel modification requested through the server RPC. */
 UENUM(BlueprintType)
-enum class EVoxelModificationType : uint8
+enum class EVCVoxelModificationType : uint8
 {
 	Destroy,
 	Place,
@@ -109,12 +109,12 @@ enum class EVCRespawnPolicy : uint8
 /** Cached terrain data beneath / around the character.
  *  Populated by UVCMovementComponent, consumed by movement, animation, and audio. */
 USTRUCT(BlueprintType)
-struct VOXELCHARACTERPLUGIN_API FVoxelTerrainContext
+struct VOXELCHARACTERPLUGIN_API FVCTerrainContext
 {
 	GENERATED_BODY()
 
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Terrain")
-	EVoxelSurfaceType SurfaceType = EVoxelSurfaceType::Default;
+	EVCSurfaceType SurfaceType = EVCSurfaceType::Default;
 
 	/** Raw voxel MaterialID at the character's feet. */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Terrain")

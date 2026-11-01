@@ -35,7 +35,7 @@ public class VoxelCharacterPlugin : ModuleRules
 			"VoxelRendering",
 				"UMG",
 				"VoxelStreaming",
-				"VoxelGeneration", // IVoxelWorldMode.h (VCVoxelNavigationHelper.cpp)
+				"VoxelGeneration", // IVoxelWorldMode.h (VCTerrainQueryHelper.cpp)
 				"PhysicsCore", // CollisionShape.h
 				"VoxelNavigation", // UVCVoxelPathProvider (feature 10)
 				"VoxelScatter",

@@ -2,7 +2,7 @@
 
 #include "Camera/VCUnderwaterPostProcess.h"
 #include "Movement/VCMovementComponent.h"
-#include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCTerrainQueryHelper.h"
 #include "Camera/CameraComponent.h"
 #include "Components/PostProcessComponent.h"
 #include "GameFramework/Character.h"
@@ -125,7 +125,7 @@ bool UVCUnderwaterPostProcess::IsCameraUnderwater() const
 
 			// Check if camera position is in a water-flagged voxel
 			float WaterDepth = 0.f;
-			return FVCVoxelNavigationHelper::IsPositionUnderwater(
+			return FVCTerrainQueryHelper::IsPositionUnderwater(
 				Owner->GetWorld(), CameraLoc, WaterDepth);
 		}
 	}

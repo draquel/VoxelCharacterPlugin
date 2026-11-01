@@ -9,7 +9,7 @@
 #include "GameFramework/Pawn.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
-#include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCTerrainQueryHelper.h"
 #include "VoxelChunkManager.h"
 #if WITH_INTERACTION_PLUGIN
 #include "Subsystems/WorldItemPoolSubsystem.h"

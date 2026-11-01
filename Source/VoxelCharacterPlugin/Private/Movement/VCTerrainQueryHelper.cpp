@@ -1,6 +1,6 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
-#include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCTerrainQueryHelper.h"
 #include "Movement/VCMovementComponent.h"
 #include "VoxelChunkManager.h"
 #include "VoxelWorldConfiguration.h"
@@ -13,9 +13,9 @@
 // Query Terrain Context
 // ---------------------------------------------------------------------------
 
-FVoxelTerrainContext FVCVoxelNavigationHelper::QueryTerrainContext(const UWorld* World, const FVector& Location, const FVector& Up)
+FVCTerrainContext FVCTerrainQueryHelper::QueryTerrainContext(const UWorld* World, const FVector& Location, const FVector& Up)
 {
-	FVoxelTerrainContext Context;
+	FVCTerrainContext Context;
 
 	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
 	if (!ChunkMgr)
@@ -41,19 +41,19 @@ FVoxelTerrainContext FVCVoxelNavigationHelper::QueryTerrainContext(const UWorld*
 	// Surface hardness based on material
 	switch (Context.SurfaceType)
 	{
-	case EVoxelSurfaceType::Stone:
-	case EVoxelSurfaceType::Metal:
+	case EVCSurfaceType::Stone:
+	case EVCSurfaceType::Metal:
 		Context.SurfaceHardness = 1.0f;
 		break;
-	case EVoxelSurfaceType::Dirt:
-	case EVoxelSurfaceType::Grass:
+	case EVCSurfaceType::Dirt:
+	case EVCSurfaceType::Grass:
 		Context.SurfaceHardness = 0.5f;
 		break;
-	case EVoxelSurfaceType::Sand:
-	case EVoxelSurfaceType::Snow:
+	case EVCSurfaceType::Sand:
+	case EVCSurfaceType::Snow:
 		Context.SurfaceHardness = 0.3f;
 		break;
-	case EVoxelSurfaceType::Mud:
+	case EVCSurfaceType::Mud:
 		Context.SurfaceHardness = 0.2f;
 		break;
 	default:
@@ -82,7 +82,7 @@ FVoxelTerrainContext FVCVoxelNavigationHelper::QueryTerrainContext(const UWorld*
 // Water Check
 // ---------------------------------------------------------------------------
 
-bool FVCVoxelNavigationHelper::IsPositionUnderwater(const UWorld* World, const FVector& Location, float& OutWaterDepth)
+bool FVCTerrainQueryHelper::IsPositionUnderwater(const UWorld* World, const FVector& Location, float& OutWaterDepth)
 {
 	OutWaterDepth = 0.f;
 
@@ -140,7 +140,7 @@ namespace
 	}
 }
 
-bool FVCVoxelNavigationHelper::FindSpawnablePosition(
+bool FVCTerrainQueryHelper::FindSpawnablePosition(
 	const UWorld* World,
 	const FVector& NearPosition,
 	FVector& OutPosition,
@@ -296,7 +296,7 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 	return false;
 }
 
-bool FVCVoxelNavigationHelper::FindPlaneSpawnPoint(const FVector2D& Start, float Step, float MaxSearchRadius, const FVoxelWorldBounds& Bounds,
+bool FVCTerrainQueryHelper::FindPlaneSpawnPoint(const FVector2D& Start, float Step, float MaxSearchRadius, const FVoxelWorldBounds& Bounds,
 	TFunctionRef<float(float X, float Y)> SurfaceHeightAt, const FVoxelSeaSurface& Sea, FVector& OutPosition, int32& OutRing)
 {
 	OutRing = 0;
@@ -327,7 +327,7 @@ bool FVCVoxelNavigationHelper::FindPlaneSpawnPoint(const FVector2D& Start, float
 	}, OutPosition, OutRing);
 }
 
-bool FVCVoxelNavigationHelper::FindPlaneSpawnPointAtScale(const FVector2D& Start, double FirstRadius, double StepSize, double MaxRadius,
+bool FVCTerrainQueryHelper::FindPlaneSpawnPointAtScale(const FVector2D& Start, double FirstRadius, double StepSize, double MaxRadius,
 	const FVoxelWorldBounds& Bounds, TFunctionRef<float(double X, double Y)> SurfaceHeightAt, const FVoxelSeaSurface& Sea,
 	FVector& OutPosition, double& OutDistance, int32 MaxSamples)
 {
@@ -374,7 +374,7 @@ bool FVCVoxelNavigationHelper::FindPlaneSpawnPointAtScale(const FVector2D& Start
 	return false;
 }
 
-bool FVCVoxelNavigationHelper::FindPlanetSpawnPoint(const FVector& Centre, double Radius, const FVector& StartDirection, double StepArc,
+bool FVCTerrainQueryHelper::FindPlanetSpawnPoint(const FVector& Centre, double Radius, const FVector& StartDirection, double StepArc,
 	double MaxSearchArc, TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelSeaSurface& Sea,
 	FVector& OutPosition, int32& OutRing)
 {
@@ -415,7 +415,7 @@ bool FVCVoxelNavigationHelper::FindPlanetSpawnPoint(const FVector& Centre, doubl
 	}, OutPosition, OutRing);
 }
 
-bool FVCVoxelNavigationHelper::FindPlanetSpawnPointAtScale(const FVector& Centre, double Radius, const FVector& StartDirection, double FirstArc,
+bool FVCTerrainQueryHelper::FindPlanetSpawnPointAtScale(const FVector& Centre, double Radius, const FVector& StartDirection, double FirstArc,
 	TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelSeaSurface& Sea, FVector& OutPosition, double& OutArc,
 	int32 MaxSamples)
 {

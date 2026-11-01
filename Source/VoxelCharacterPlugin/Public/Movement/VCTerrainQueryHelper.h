@@ -17,7 +17,7 @@ class UVoxelWorldConfiguration;
  * and voxel material queries. All methods are static and thread-safe
  * for game-thread use.
  */
-class VOXELCHARACTERPLUGIN_API FVCVoxelNavigationHelper
+class VOXELCHARACTERPLUGIN_API FVCTerrainQueryHelper
 {
 public:
 	/**
@@ -30,7 +30,7 @@ public:
 	 * @param Up Local up at Location: the surface material is sampled a little below it along -Up (radial on a planet)
 	 * @return Terrain context with all fields populated
 	 */
-	static FVoxelTerrainContext QueryTerrainContext(const UWorld* World, const FVector& Location, const FVector& Up = FVector::UpVector);
+	static FVCTerrainContext QueryTerrainContext(const UWorld* World, const FVector& Location, const FVector& Up = FVector::UpVector);
 
 	/**
 	 * Check if a world position is underwater: in a water-flagged voxel, with its depth below the sea

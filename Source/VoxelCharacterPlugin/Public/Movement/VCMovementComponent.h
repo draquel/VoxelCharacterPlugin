@@ -17,7 +17,7 @@ enum class EEditSource : uint8;
  *
  * Caches terrain context (surface type, friction, water state) and adjusts
  * movement parameters accordingly. Queries voxel terrain data via
- * FVCVoxelNavigationHelper and automatically transitions to swimming
+ * FVCTerrainQueryHelper and automatically transitions to swimming
  * mode when water is detected.
  */
 UCLASS()
@@ -35,13 +35,13 @@ public:
 
 	/** Current cached terrain context (read by animation, audio, etc.). */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement")
-	const FVoxelTerrainContext& GetTerrainContext() const { return CachedTerrainContext; }
+	const FVCTerrainContext& GetTerrainContext() const { return CachedTerrainContext; }
 
 	/** Map a voxel MaterialID to a logical surface type. */
-	static EVoxelSurfaceType MaterialIDToSurfaceType(uint8 MaterialID);
+	static EVCSurfaceType MaterialIDToSurfaceType(uint8 MaterialID);
 
 	/** Get friction multiplier for a given surface type. */
-	static float GetSurfaceFriction(EVoxelSurfaceType Surface);
+	static float GetSurfaceFriction(EVCSurfaceType Surface);
 
 	// --- Custom Movement Mode Properties ---
 
@@ -132,7 +132,7 @@ public:
 
 	/** Current logical surface type (derived from voxel material). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
-	EVoxelSurfaceType CurrentSurfaceType = EVoxelSurfaceType::Default;
+	EVCSurfaceType CurrentSurfaceType = EVCSurfaceType::Default;
 
 	// --- World edge (world modes review WM-I5, decision D9) ---
 	// A bounded world (an island) ends at invisible walls on its edge (R + falloff). Before them a current pushes the
@@ -397,7 +397,7 @@ public:
 
 protected:
 	/** Cached terrain data, refreshed every TerrainCacheDuration seconds. */
-	FVoxelTerrainContext CachedTerrainContext;
+	FVCTerrainContext CachedTerrainContext;
 
 	/** Time accumulator for terrain cache refresh. */
 	float TerrainContextCacheTimer = 0.f;
