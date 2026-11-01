@@ -1173,7 +1173,7 @@ bool AVCCharacterBase::ResolveRecoveryLocation(bool bAllowLastSafe, FVector& Out
 	{
 		// The world's centre: an island's middle, a plane's origin; a planet's spawn point over its terrain (its centre is
 		// inside it, SP-F4).
-		OutLocation = bShell ? ChunkMgr->GetPlanetSpawnPosition()
+		OutLocation = bShell ? ChunkMgr->GetSpawnPosition()
 			: (Bounds.IsBounded() ? Bounds.Center : ChunkMgr->GetConfiguration()->WorldOrigin);
 		return true;
 	}

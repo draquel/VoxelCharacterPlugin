@@ -179,7 +179,7 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 		FVector StartDirection = (NearPosition - Centre).GetSafeNormal();
 		if (StartDirection.IsNearlyZero())
 		{
-			StartDirection = (ChunkMgr->GetPlanetSpawnPosition() - Centre).GetSafeNormal();
+			StartDirection = (ChunkMgr->GetSpawnPosition() - Centre).GetSafeNormal();
 		}
 		const double Radius = Config->WorldRadius;
 		auto SurfaceAt = [ChunkMgr, &Centre, Radius](const FVector& Direction)
