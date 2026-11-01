@@ -351,6 +351,14 @@ public:
 	double GetFlightHoldLevel() const { return FlightHoldLevel; }
 
 	/**
+	 * The flight level of a position (what FlightHoldLevel holds): its distance from the planet centre, its Z on a heightmap
+	 * world. The one definition (vox.FlyTo reads it; code review CR2, FW-20).
+	 * @param Location World position
+	 * @return The level
+	 */
+	double GetFlightLevel(const FVector& Location) const;
+
+	/**
 	 * Debug flight: hold this level instead (no climb), reached at up to MaxFlySpeed along local up; vox.FlyTo moves it each
 	 * frame along its altitude profile (spherical Phase 6, WM-BP10).
 	 * @param Level Distance from the planet centre (Z on a heightmap world)
@@ -450,9 +458,6 @@ protected:
 
 	/** The level debug flight holds with no climb: distance from the planet centre, or Z on a heightmap world. */
 	double FlightHoldLevel = 0.0;
-
-	/** The flight level of a position (see FlightHoldLevel). */
-	double GetFlightLevel(const FVector& Location) const;
 
 	/** Speed across local up, squared (Velocity.SizeSquared2D() for the default gravity). */
 	double GetHorizontalSpeedSquared(const FVector& InVelocity) const;

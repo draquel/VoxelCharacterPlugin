@@ -1219,50 +1219,36 @@ void AVCPlayerController::GiveItem(FString AssetName, int32 Count)
 		return;
 	}
 
-	// Resolve asset name by substring match against all registered definitions
-	FPrimaryAssetId FoundId;
-	const TArray<FPrimaryAssetId> AllIds = ItemDB->GetAllDefinitionIds();
-
-	for (const FPrimaryAssetId& Id : AllIds)
-	{
-		if (Id.PrimaryAssetName.ToString().Contains(AssetName))
-		{
-			FoundId = Id;
-			break;
-		}
-	}
-
-	if (!FoundId.IsValid())
-	{
-		UE_LOG(LogVoxelCharacter, Warning, TEXT("GiveItem: No item found matching '%s'. Available items:"), *AssetName);
-		for (const FPrimaryAssetId& Id : AllIds)
-		{
-			UE_LOG(LogVoxelCharacter, Warning, TEXT("  - %s"), *Id.PrimaryAssetName.ToString());
-		}
-		return;
-	}
-
-	FItemInstance Instance = ItemDB->CreateItemInstance(FoundId, Count);
-	if (!Instance.IsValid())
-	{
-		UE_LOG(LogVoxelCharacter, Error, TEXT("GiveItem: Failed to create item instance for '%s'"), *FoundId.ToString());
-		return;
-	}
-
-	// Find inventory on the possessed pawn
+	// The inventory on the possessed pawn (judged after the item is resolved and made, as the messages below are ordered).
 	UInventoryComponent* Inventory = nullptr;
 	if (APawn* ControlledPawn = GetPawn())
 	{
 		Inventory = ControlledPawn->FindComponentByClass<UInventoryComponent>();
 	}
 
+	// The one give (code review CR2, FW-37): the asset name by substring match against all registered definitions.
+	FPrimaryAssetId FoundId;
+	const EInventoryOperationResult Result = ItemDB->GiveItemByName(Inventory, AssetName, Count, /*bMatchSubstring=*/true, FoundId);
+	if (Result == EInventoryOperationResult::ItemNotFound)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("GiveItem: No item found matching '%s'. Available items:"), *AssetName);
+		for (const FPrimaryAssetId& Id : ItemDB->GetAllDefinitionIds())
+		{
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("  - %s"), *Id.PrimaryAssetName.ToString());
+		}
+		return;
+	}
+	if (Result == EInventoryOperationResult::InvalidItem)
+	{
+		UE_LOG(LogVoxelCharacter, Error, TEXT("GiveItem: Failed to create item instance for '%s'"), *FoundId.ToString());
+		return;
+	}
 	if (!Inventory)
 	{
 		UE_LOG(LogVoxelCharacter, Error, TEXT("GiveItem: No InventoryComponent found on possessed pawn"));
 		return;
 	}
 
-	const EInventoryOperationResult Result = Inventory->TryAddItem(Instance);
 	UE_LOG(LogVoxelCharacter, Log, TEXT("GiveItem: %s x%d -> %s"),
 		*FoundId.PrimaryAssetName.ToString(), Count,
 		Result == EInventoryOperationResult::Success ? TEXT("Success") : TEXT("Failed"));
