@@ -345,7 +345,7 @@ bool FVCCubic_FellVoxelTree::RunTest(const FString& Parameters)
 	W.Config->TreeDensity = 3.0f;
 	W.Config->TreeMode = EVoxelTreeMode::VoxelData;
 	W.StartManager();
-	W.SetViewer(FVector(0.0, 0.0, W.Manager->GetGeneratedSurfaceHeight(0.0, 0.0) + 300.0));
+	W.SetViewer(FVector(0.0, 0.0, W.Manager->GetGeneratedSurfacePoint(FVector(0.0, 0.0, 0.0)).Z + 300.0));
 	if (!TestTrue(TEXT("Streaming settles"), W.Settle()))
 	{
 		W.Stop();

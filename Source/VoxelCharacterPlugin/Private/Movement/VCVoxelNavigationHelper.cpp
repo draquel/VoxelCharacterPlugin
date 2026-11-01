@@ -220,7 +220,7 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 			NearPosition.X, NearPosition.Y, Start.X, Start.Y);
 	}
 
-	// Helper: query terrain height and check if above water. GetGeneratedSurfaceHeight is the
+	// Helper: query terrain height and check if above water. GetGeneratedSurfacePoint is the
 	// canonical analytic surface (continentalness AND terrain-conditioning zones): the raw
 	// IVoxelWorldMode::GetTerrainHeightAt misses POI-pad flattening, so spawns/settles on
 	// conditioner-FILLED ground landed below the real surface (inside the fill) and fell/traced
@@ -232,7 +232,7 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 			OutTerrainHeight = 0.f;
 			return false;
 		}
-		OutTerrainHeight = ChunkMgr->GetGeneratedSurfaceHeight(X, Y);
+		OutTerrainHeight = ChunkMgr->GetGeneratedSurfacePoint(FVector(X, Y, 0.0)).Z;
 		return !bHasWater || Sea.GetDepth(FVector(X, Y, OutTerrainHeight)) < 0.0;
 	};
 
@@ -254,7 +254,7 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 	// Rings a chunk apart in the eight compass directions (FindPlaneSpawnPoint; the planet's FindPlanetSpawnPoint walks the
 	// same sequence on its sphere).
 	const float Step = ChunkWorldSize;
-	auto HeightAtF = [ChunkMgr](float X, float Y) { return ChunkMgr->GetGeneratedSurfaceHeight(X, Y); };
+	auto HeightAtF = [ChunkMgr](float X, float Y) { return static_cast<float>(ChunkMgr->GetGeneratedSurfacePoint(FVector(X, Y, 0.0)).Z); };
 	int32 Ring = 0;
 	if (FindPlaneSpawnPoint(FVector2D(Start.X, Start.Y), Step, MaxSearchRadius, Bounds, HeightAtF, Sea, OutPosition, Ring))
 	{
@@ -278,7 +278,7 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 				MaxRadius = FMath::Max(MaxRadius, FVector2D::Distance(Start2D, Corner));
 			}
 		}
-		auto HeightAt = [ChunkMgr](double X, double Y) { return ChunkMgr->GetGeneratedSurfaceHeight(X, Y); };
+		auto HeightAt = [ChunkMgr](double X, double Y) { return static_cast<float>(ChunkMgr->GetGeneratedSurfacePoint(FVector(X, Y, 0.0)).Z); };
 		double Distance = 0.0;
 		if (FindPlaneSpawnPointAtScale(FVector2D(Start.X, Start.Y), FMath::Max(static_cast<double>(MaxSearchRadius), static_cast<double>(Step)), Step,
 			MaxRadius, Bounds, HeightAt, Sea, OutPosition, Distance))

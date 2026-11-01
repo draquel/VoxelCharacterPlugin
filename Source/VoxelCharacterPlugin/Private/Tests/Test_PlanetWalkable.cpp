@@ -405,7 +405,7 @@ bool FVCPlanet_SpawnByDirection::RunTest(const FString& Parameters)
 		const bool bFound = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, FVector(1234.0, -5678.0, 9999.0), Out);
 		TestTrue(TEXT("Plane: found"), bFound);
 		TestTrue(TEXT("Plane: (X, Y, generated height) as before"),
-			Out == FVector(1234.0, -5678.0, Plane.Manager->GetGeneratedSurfaceHeight(1234.0, -5678.0)));
+			Out == FVector(1234.0, -5678.0, Plane.Manager->GetGeneratedSurfacePoint(FVector(1234.0, -5678.0, 0.0)).Z));
 	}
 	return true;
 }
@@ -1024,7 +1024,7 @@ bool FVCPlane_SpawnAboveSeaWithOrigin::RunTest(const FString& Parameters)
 		{
 			const double X = Plane.Config->WorldOrigin.X + (I % 40 - 20) * 400.0;
 			const double Y = Plane.Config->WorldOrigin.Y + (I / 40 - 20) * 400.0;
-			const float Ground = Plane.Manager->GetGeneratedSurfaceHeight(X, Y);
+			const float Ground = Plane.Manager->GetGeneratedSurfacePoint(FVector(X, Y, 0.0)).Z;
 			if (!bSeabed && Ground < WaterLevel - 100.0f)
 			{
 				Seabed = FVector(X, Y, Ground);
@@ -1071,7 +1071,7 @@ bool FVCPlane_SpawnPastRing::RunTest(const FString& Parameters)
 	Plane.Config->WaterLevel = 600.0f; // read by every sea query as it is made (GetSeaSurface reads the configuration)
 	const float WaterLevel = Plane.Config->WaterLevel;
 	const double Ring = Plane.Config->ChunkSize * Plane.Config->VoxelSize; // the ring search's one ring: a chunk, 1,600
-	auto IsDry = [&Plane, WaterLevel](double X, double Y) { return Plane.Manager->GetGeneratedSurfaceHeight(X, Y) > WaterLevel; };
+	auto IsDry = [&Plane, WaterLevel](double X, double Y) { return Plane.Manager->GetGeneratedSurfacePoint(FVector(X, Y, 0.0)).Z > WaterLevel; };
 	static const FVector2D RingDirections[] = { {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}, {0, -1}, {1, -1} };
 
 	// A seabed start with its ring all sea, and a land point, on a 400 uu grid around the origin.
@@ -1084,7 +1084,7 @@ bool FVCPlane_SpawnPastRing::RunTest(const FString& Parameters)
 		const bool bDry = IsDry(X, Y);
 		if (!bLand && bDry)
 		{
-			Land = FVector(X, Y, Plane.Manager->GetGeneratedSurfaceHeight(X, Y));
+			Land = FVector(X, Y, Plane.Manager->GetGeneratedSurfacePoint(FVector(X, Y, 0.0)).Z);
 			bLand = true;
 		}
 		if (!bStart && !bDry)
@@ -1096,7 +1096,7 @@ bool FVCPlane_SpawnPastRing::RunTest(const FString& Parameters)
 			}
 			if (!bRingDry)
 			{
-				Start = FVector(X, Y, Plane.Manager->GetGeneratedSurfaceHeight(X, Y));
+				Start = FVector(X, Y, Plane.Manager->GetGeneratedSurfacePoint(FVector(X, Y, 0.0)).Z);
 				bStart = true;
 			}
 		}
@@ -1153,7 +1153,7 @@ bool FVCIsland_SpawnPastRing::RunTest(const FString& Parameters)
 	FVector Before, Past;
 	const bool bBefore = FVCVoxelNavigationHelper::FindSpawnablePosition(W.World, Outside, Before, Ring, /*bSearchWholeWorld=*/false);
 	const bool bPast = FVCVoxelNavigationHelper::FindSpawnablePosition(W.World, Outside, Past, Ring, /*bSearchWholeWorld=*/true);
-	const float GroundAtPast = bPast ? W.Manager->GetGeneratedSurfaceHeight(Past.X, Past.Y) : 0.0f;
+	const float GroundAtPast = bPast ? W.Manager->GetGeneratedSurfacePoint(FVector(Past.X, Past.Y, 0.0)).Z : 0.0f;
 	AddInfo(FString::Printf(TEXT("From (%.0f, %.0f), outside the island: the rule before %s%s; past the ring %s at (%.0f, %.0f) Z=%.0f, %.0f from the centre"),
 		Outside.X, Outside.Y, bBefore ? TEXT("found land at ") : TEXT("found nothing"), bBefore ? *FString::Printf(TEXT("(%.0f, %.0f)"), Before.X, Before.Y) : TEXT(""),
 		bPast ? TEXT("found land") : TEXT("found nothing"), Past.X, Past.Y, Past.Z, bPast ? FVector2D::Distance(FVector2D(Past), FVector2D(Bounds.Center.X, Bounds.Center.Y)) : 0.0));
