@@ -78,7 +78,7 @@ static TAutoConsoleVariable<int32> CVarMinimapTexelFill(
 // Console: vc.Minimap.Stats [reset]
 static FAutoConsoleCommand GVCMinimapStatsCmd(
 	TEXT("vc.Minimap.Stats"),
-	TEXT("Log the minimap's refresh cost per phase since the last reset (G64). 'reset' clears it."),
+	TEXT("Log the minimap's refresh cost per phase since the last reset. 'reset' clears it."),
 	FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
 	{
 		using namespace VCMinimapStats;
