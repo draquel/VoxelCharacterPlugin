@@ -199,7 +199,7 @@ FVCBlockTargets UVCBlockInteractionComponent::ComputeTargets() const
 	// The primary action digs with edit mode on or a digging tool in hand (its gate), the secondary places in edit mode.
 	if (Character->IsEditModeEnabled() || Character->HasDiggingTool())
 	{
-		const FVoxelData Voxel = ChunkMgr->GetEditMergedVoxelAtWorldPosition(ChunkMgr->GlobalVoxelToWorldCentre(DigVoxel));
+		const FVoxelData Voxel = ChunkMgr->GetVoxelAt(ChunkMgr->GlobalVoxelToWorldCentre(DigVoxel));
 		if (Voxel.IsSolid() && AVCPlayerController::IsVoxelInEditReach(PawnLocation, DigVoxel, Config))
 		{
 			Out.bHasDig = true;
@@ -209,7 +209,7 @@ FVCBlockTargets UVCBlockInteractionComponent::ComputeTargets() const
 	}
 	if (Character->IsEditModeEnabled())
 	{
-		const FVoxelData Voxel = ChunkMgr->GetEditMergedVoxelAtWorldPosition(ChunkMgr->GlobalVoxelToWorldCentre(PlaceVoxel));
+		const FVoxelData Voxel = ChunkMgr->GetVoxelAt(ChunkMgr->GlobalVoxelToWorldCentre(PlaceVoxel));
 		if (Voxel.IsAir() && AVCPlayerController::IsVoxelInEditReach(PawnLocation, PlaceVoxel, Config))
 		{
 			Out.bHasPlace = true;
@@ -227,7 +227,7 @@ uint8 UVCBlockInteractionComponent::FindExposedFaces(const UVoxelChunkManager* C
 	uint8 Mask = 0;
 	for (int32 Face = 0; Face < 6; ++Face)
 	{
-		if (ChunkMgr->GetEditMergedVoxelAtWorldPosition(ChunkMgr->GlobalVoxelToWorldCentre(VoxelCoord + Offsets[Face])).IsAir())
+		if (ChunkMgr->GetVoxelAt(ChunkMgr->GlobalVoxelToWorldCentre(VoxelCoord + Offsets[Face])).IsAir())
 		{
 			Mask |= 1 << Face;
 		}
@@ -517,7 +517,7 @@ bool UVCBlockInteractionComponent::BeginBreakOnServer(const FIntVector& VoxelCoo
 		return Refuse(TEXT("out of reach"));
 	}
 	const FVector Centre = ChunkMgr->GlobalVoxelToWorldCentre(VoxelCoord);
-	const FVoxelData Voxel = ChunkMgr->GetEditMergedVoxelAtWorldPosition(Centre);
+	const FVoxelData Voxel = ChunkMgr->GetVoxelAt(Centre);
 	if (!Voxel.IsSolid())
 	{
 		return Refuse(TEXT("not a solid block"));
@@ -578,7 +578,7 @@ void UVCBlockInteractionComponent::AdvanceServerBreak(float DeltaSeconds)
 		Cancel(TEXT("out of reach"));
 		return;
 	}
-	const FVoxelData Voxel = ChunkMgr->GetEditMergedVoxelAtWorldPosition(ChunkMgr->GlobalVoxelToWorldCentre(VoxelCoord));
+	const FVoxelData Voxel = ChunkMgr->GetVoxelAt(ChunkMgr->GlobalVoxelToWorldCentre(VoxelCoord));
 	if (!Voxel.IsSolid() || Voxel.MaterialID != ServerMaterial)
 	{
 		Cancel(TEXT("the block changed"));

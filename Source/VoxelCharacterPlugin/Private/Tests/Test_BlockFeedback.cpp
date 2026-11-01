@@ -128,7 +128,7 @@ namespace VCBlockFeedbackTestHelpers
 			return FBox(Centre(Voxel) - FVector(VoxelSize * 0.5f), Centre(Voxel) + FVector(VoxelSize * 0.5f));
 		}
 
-		FVoxelData Voxel(const FIntVector& Coord) const { return W.Manager->GetEditMergedVoxelAtWorldPosition(Centre(Coord)); }
+		FVoxelData Voxel(const FIntVector& Coord) const { return W.Manager->GetVoxelAt(Centre(Coord)); }
 
 		/** Set one voxel (a block of Material, or air) in the edit layer. */
 		void SetVoxel(const FIntVector& Coord, uint8 Material, bool bSolid)

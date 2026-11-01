@@ -31,7 +31,7 @@ FVoxelTerrainContext FVCVoxelNavigationHelper::QueryTerrainContext(const UWorld*
 
 	// Get voxel data at feet position (sample slightly below, along local down, to catch surface)
 	const FVector SamplePos = Location - Up * 10.f;
-	const FVoxelData VoxelAtFeet = ChunkMgr->GetVoxelAtWorldPosition(SamplePos);
+	const FVoxelData VoxelAtFeet = ChunkMgr->GetGeneratedVoxelAt(SamplePos);
 
 	// Material and surface type
 	Context.VoxelMaterialID = VoxelAtFeet.MaterialID;
@@ -98,7 +98,7 @@ bool FVCVoxelNavigationHelper::IsPositionUnderwater(const UWorld* World, const F
 		return false;
 	}
 
-	const FVoxelData VoxelAtLocation = ChunkMgr->GetVoxelAtWorldPosition(Location);
+	const FVoxelData VoxelAtLocation = ChunkMgr->GetGeneratedVoxelAt(Location);
 	if (VoxelAtLocation.HasWaterFlag())
 	{
 		OutWaterDepth = FMath::Max(0.0, ChunkMgr->GetSeaSurface().GetDepth(Location));
