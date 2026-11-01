@@ -409,7 +409,7 @@ Do not bypass this chain. New action types insert into the chain, they don't rep
 the centre (`UVoxelChunkManager::GetSurfacePointAt`), dry when it is above the sea sphere, else rings of directions one
 chunk of arc apart in 8 bearings. `InitiateChunkBasedWait` then waits on a chunk grid in the tangent plane (plus the chunk
 under the feet along local down), `PlaceOnTerrainAndResume` traces along local up and stands the pawn upright, the
-recovery location is `UVoxelChunkManager::GetPlanetSpawnPosition` (the planet centre is inside it), and the
+recovery location is `UVoxelChunkManager::GetSpawnPosition` (the planet centre is inside it), and the
 out-of-world rule is radial (`AVCCharacterBase::IsOutOfWorld`: `OutOfWorldDepth` inside the shell's inner radius).
 Water depth everywhere (`QueryTerrainContext`, `IsPositionUnderwater`, the spawn search) is the chunk manager's sea
 (`GetSeaSurface(true)`: the plane at `WaterLevel + WorldOrigin.Z`, or the sphere of `WaterRadius` on a planet).
