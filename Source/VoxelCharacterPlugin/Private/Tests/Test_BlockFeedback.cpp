@@ -92,7 +92,7 @@ namespace VCBlockFeedbackTestHelpers
 			W.Config->MeshingMode = bCubic ? EMeshingMode::Cubic : EMeshingMode::DualContouring;
 			W.StartManager();
 			VoxelSize = W.Config->VoxelSize;
-			W.SetViewer(FVector(0.0, 0.0, W.Manager->GetGeneratedSurfaceHeight(0.0, 0.0) + 300.0));
+			W.SetViewer(FVector(0.0, 0.0, W.Manager->GetGeneratedSurfacePoint(FVector(0.0, 0.0, 0.0)).Z + 300.0));
 			if (!W.Settle())
 			{
 				return false;
@@ -163,7 +163,7 @@ namespace VCBlockFeedbackTestHelpers
 		/** A floating block of Material well above the ground near the origin, with its collider; all six faces exposed. */
 		FIntVector FloatingBlock(uint8 Material, int32 BlocksUp = 4)
 		{
-			const float Top = W.Manager->GetGeneratedSurfaceHeight(0.0, 0.0);
+			const float Top = W.Manager->GetGeneratedSurfacePoint(FVector(0.0, 0.0, 0.0)).Z;
 			const FIntVector Ground = FVoxelCoordinates::WorldToVoxel(FVector(0.0, 0.0, Top - VoxelSize * 0.5f) - W.Config->WorldOrigin, VoxelSize);
 			const FIntVector Coord = Ground + FIntVector(0, 0, BlocksUp);
 			SetVoxel(Coord, Material, true);
@@ -560,7 +560,7 @@ bool FVCBlock_Break::RunTest(const FString& Parameters)
 	FBlockWorld S;
 	if (TestTrue(TEXT("The smooth world streams"), S.Start(/*bCubic=*/false, TEXT("VCBlockBreakSmooth"))))
 	{
-		const float GroundTop = S.W.Manager->GetGeneratedSurfaceHeight(0.0, 0.0);
+		const float GroundTop = S.W.Manager->GetGeneratedSurfacePoint(FVector(0.0, 0.0, 0.0)).Z;
 		const FIntVector Ground = FVoxelCoordinates::WorldToVoxel(FVector(0.0, 0.0, GroundTop - S.VoxelSize) - S.W.Config->WorldOrigin, S.VoxelSize);
 		S.SpawnPlayer(S.Centre(Ground) + FVector(-300.0, 0.0, 150.0));
 		const uint8 Before = S.Voxel(Ground).Density;
