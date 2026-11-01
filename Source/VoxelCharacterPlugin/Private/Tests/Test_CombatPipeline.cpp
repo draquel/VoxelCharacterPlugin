@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Misc/AutomationTest.h"
+#include "Testing/VCTestWorld.h"
 
 #if WITH_AUTOMATION_TESTS
 
@@ -21,30 +22,10 @@
 // ---------------------------------------------------------------------------
 namespace VCCombatTestHelpers
 {
-	struct FWorldHarness
+	/** A game world that has begun play (VCTesting::FPlayWorld), destroyed as it is. */
+	struct FWorldHarness : VCTesting::FPlayWorld
 	{
-		UWorld* World = nullptr;
-
-		FWorldHarness()
-		{
-			World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("VCCombatTestWorld"));
-			FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-			Context.SetCurrentWorld(World);
-			World->InitializeActorsForPlay(FURL());
-			if (AWorldSettings* WorldSettings = World->GetWorldSettings())
-			{
-				WorldSettings->NotifyBeginPlay();
-			}
-		}
-
-		~FWorldHarness()
-		{
-			if (World)
-			{
-				GEngine->DestroyWorldContext(World);
-				World->DestroyWorld(false);
-			}
-		}
+		FWorldHarness() : VCTesting::FPlayWorld(TEXT("VCCombatTestWorld"), /*bDestroyActorsFirst=*/false) {}
 	};
 
 	/** Spawn an NPC combatant with the given stats; BeginPlay has run on return. */

@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Misc/AutomationTest.h"
+#include "Testing/VCTestWorld.h"
 
 #if WITH_AUTOMATION_TESTS
 
@@ -15,42 +16,10 @@
 
 namespace VCEditModeTestHelpers
 {
-	struct FWorldHarness
+	/** A game world that has begun play (VCTesting::FPlayWorld), its actors destroyed before it. */
+	struct FWorldHarness : VCTesting::FPlayWorld
 	{
-		UWorld* World = nullptr;
-
-		FWorldHarness()
-		{
-			World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("VCEditModeTestWorld"));
-			FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-			Context.SetCurrentWorld(World);
-			World->InitializeActorsForPlay(FURL());
-			if (AWorldSettings* WorldSettings = World->GetWorldSettings())
-			{
-				WorldSettings->NotifyBeginPlay();
-			}
-		}
-
-		~FWorldHarness()
-		{
-			if (World)
-			{
-				// Route EndPlay while the world still exists: a character left for the GC runs its components'
-				// EndPlay with GetWorld() == null later (UInteractionComponent clears a timer there) and crashes
-				// the editor on the next map load.
-				TArray<AActor*> Actors;
-				for (TActorIterator<AActor> It(World); It; ++It)
-				{
-					Actors.Add(*It);
-				}
-				for (AActor* Actor : Actors)
-				{
-					World->DestroyActor(Actor);
-				}
-				GEngine->DestroyWorldContext(World);
-				World->DestroyWorld(false);
-			}
-		}
+		FWorldHarness() : VCTesting::FPlayWorld(TEXT("VCEditModeTestWorld"), /*bDestroyActorsFirst=*/true) {}
 	};
 
 	/** Spawn a player character without the terrain wait (no voxel world in the test harness). */
