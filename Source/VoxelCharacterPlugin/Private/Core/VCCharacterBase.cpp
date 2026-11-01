@@ -16,7 +16,7 @@
 #include "Camera/VCFirstPersonCameraMode.h"
 #include "Camera/VCThirdPersonCameraMode.h"
 #include "Movement/VCMovementComponent.h"
-#include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCTerrainQueryHelper.h"
 #include "Movement/VCGravityFrame.h"
 #include "Camera/VCUnderwaterPostProcess.h"
 #include "Input/VCInputConfig.h"
@@ -877,7 +877,7 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 	// core for land that never streamed. A planet with no land at all spawns at the sea's surface, swimming.
 	FVector ValidSpawn;
 	bSpawnAtSea = false;
-	if (!bResumeAtExactLocation && FVCVoxelNavigationHelper::FindSpawnablePosition(GetWorld(), GetActorLocation(), ValidSpawn, 50000.f, /*bSearchWholeWorld=*/true))
+	if (!bResumeAtExactLocation && FVCTerrainQueryHelper::FindSpawnablePosition(GetWorld(), GetActorLocation(), ValidSpawn, 50000.f, /*bSearchWholeWorld=*/true))
 	{
 		SetActorLocation(ValidSpawn);
 	}
@@ -1773,8 +1773,8 @@ void AVCCharacterBase::DrawVoxelDebugInfo()
 	// --- Terrain Context ---
 	if (MovComp)
 	{
-		const FVoxelTerrainContext& Ctx = MovComp->GetTerrainContext();
-		const UEnum* SurfaceEnum = StaticEnum<EVoxelSurfaceType>();
+		const FVCTerrainContext& Ctx = MovComp->GetTerrainContext();
+		const UEnum* SurfaceEnum = StaticEnum<EVCSurfaceType>();
 		const FString SurfaceName = SurfaceEnum ? SurfaceEnum->GetNameStringByValue(static_cast<int64>(Ctx.SurfaceType)) : TEXT("?");
 
 		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Cyan,
@@ -2110,7 +2110,7 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 	AVCPlayerController* PC = Cast<AVCPlayerController>(GetController());
 	if (PC && FindEditTarget(Hit, DigVoxel, PlaceVoxel))
 	{
-		PC->Server_RequestVoxelModification(DigVoxel, EVoxelModificationType::Destroy, 0);
+		PC->Server_RequestVoxelModification(DigVoxel, EVCVoxelModificationType::Destroy, 0);
 	}
 }
 
@@ -2143,7 +2143,7 @@ void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 	AVCPlayerController* PC = Cast<AVCPlayerController>(GetController());
 	if (PC && FindEditTarget(Hit, DigVoxel, PlaceVoxel))
 	{
-		PC->Server_RequestVoxelModification(PlaceVoxel, EVoxelModificationType::Place, 2); // Stone
+		PC->Server_RequestVoxelModification(PlaceVoxel, EVCVoxelModificationType::Place, 2); // Stone
 	}
 }
 

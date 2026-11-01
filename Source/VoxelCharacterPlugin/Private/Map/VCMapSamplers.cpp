@@ -1,6 +1,6 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
-#include "Map/VCPlanetMapProjection.h"
+#include "Map/VCMapSamplers.h"
 #include "VoxelCubeSphere.h"
 #include "VoxelMapSubsystem.h"
 

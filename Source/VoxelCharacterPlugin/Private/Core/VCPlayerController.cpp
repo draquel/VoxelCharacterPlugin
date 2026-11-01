@@ -15,7 +15,7 @@
 #include "AbilitySystemComponent.h"
 #include "Core/VCCharacterAttributeSet.h"
 #include "Input/VCInputConfig.h"
-#include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCTerrainQueryHelper.h"
 #include "Movement/VCGravityFrame.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Camera/PlayerCameraManager.h"
@@ -1336,7 +1336,7 @@ void AVCPlayerController::SpawnWorldItem(FString AssetName, int32 Count)
 // Server RPC — Voxel Modification
 // ---------------------------------------------------------------------------
 
-void AVCPlayerController::Server_RequestVoxelModification_Implementation(const FIntVector& VoxelCoord, EVoxelModificationType ModType, uint8 MaterialID)
+void AVCPlayerController::Server_RequestVoxelModification_Implementation(const FIntVector& VoxelCoord, EVCVoxelModificationType ModType, uint8 MaterialID)
 {
 	// --- Validation ---
 	APawn* ControlledPawn = GetPawn();
@@ -1370,7 +1370,7 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 		return;
 	}
 
-	if (ModType == EVoxelModificationType::Destroy)
+	if (ModType == EVCVoxelModificationType::Destroy)
 	{
 		// A cubic world with break times breaks a block only through the timed path (UVCBlockInteractionComponent,
 		// WM-C15), which waits the material's time on this server; an instant request would skip it.
@@ -1405,10 +1405,10 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 
 	switch (ModType)
 	{
-	case EVoxelModificationType::Destroy:
+	case EVCVoxelModificationType::Destroy:
 		break; // DigVoxelAt, above
 
-	case EVoxelModificationType::Place:
+	case EVCVoxelModificationType::Place:
 	{
 		// Reject a placement that would close terrain around any pawn (this player, other players, NPCs); the
 		// placement preview shows the same test in red.

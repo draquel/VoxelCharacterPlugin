@@ -64,7 +64,7 @@ public:
 	// ==================== Surface ====================
 
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
-	EVoxelSurfaceType SurfaceType = EVoxelSurfaceType::Default;
+	EVCSurfaceType SurfaceType = EVCSurfaceType::Default;
 
 	// ==================== Swimming ====================
 

@@ -22,7 +22,7 @@ struct FVoxelBrushParams;
 struct FVoxelTreeInstance;
 
 /** A voxel modification was (partially) blocked — RejectedVoxelCount voxels refused the edit. */
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVoxelEditBlocked, int32, RejectedVoxelCount);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCVoxelEditBlocked, int32, RejectedVoxelCount);
 
 /** Authority: a dug voxel paid the gather table (its material, the item, how many). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnVCVoxelGathered, uint8, MaterialId, FPrimaryAssetId, ItemId, int32, Count);
@@ -230,7 +230,7 @@ public:
 	/** Request a server-authoritative voxel modification. BlueprintCallable so BP tools/UI can
 	 *  request edits through the same validated path as input-driven digging. */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "VoxelCharacter|Voxel")
-	void Server_RequestVoxelModification(const FIntVector& VoxelCoord, EVoxelModificationType ModType, uint8 MaterialID);
+	void Server_RequestVoxelModification(const FIntVector& VoxelCoord, EVCVoxelModificationType ModType, uint8 MaterialID);
 
 	/** How far a player edits: from the pawn to the voxel's corner (Server_RequestVoxelModification's rule since feature 8). */
 	static constexpr float EditReach = 800.f;
@@ -292,7 +292,7 @@ public:
 	 * stays policy-free: it reports "blocked", not why. Bind UI here for real messaging.
 	 */
 	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Voxel")
-	FOnVoxelEditBlocked OnVoxelEditBlocked;
+	FOnVCVoxelEditBlocked OnVoxelEditBlocked;
 
 	/** Show the built-in minimal on-screen "protected" message when an edit is blocked. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "VoxelCharacter|Voxel")

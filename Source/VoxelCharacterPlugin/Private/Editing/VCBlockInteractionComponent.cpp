@@ -3,7 +3,7 @@
 #include "Editing/VCBlockInteractionComponent.h"
 #include "Core/VCCharacterBase.h"
 #include "Core/VCPlayerController.h"
-#include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCTerrainQueryHelper.h"
 #include "VoxelCharacterPlugin.h"
 #include "VoxelChunkManager.h"
 #include "VoxelEditManager.h"

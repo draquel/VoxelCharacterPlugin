@@ -70,9 +70,13 @@ Source/VoxelCharacterPlugin/
 
 - Input Actions: `IA_Verb` (e.g., `IA_Move`, `IA_Interact`, `IA_ToggleView`)
 - Input Mapping Contexts: `IMC_Context` (e.g., `IMC_Gameplay`, `IMC_UI`)
-- Enums: `EVCName` (e.g., `EVCViewMode`, `EVoxelSurfaceType`)
-- Structs: `FVCName` or `FVoxelName` (e.g., `FVCEquipmentSocketMapping`, `FVoxelTerrainContext`)
+- Enums: `EVCName` (e.g., `EVCViewMode`, `EVCSurfaceType`)
+- Structs: `FVCName` (e.g., `FVCEquipmentSocketMapping`, `FVCTerrainContext`)
 - Delegates: `FOnVCEvent` (e.g., `FOnVCViewModeChanged`)
+- The `VC` prefix is the plugin's identity (CODE_REVIEW_PLAN.md D-CR3): every type carries it; `Voxel` after it says
+  what a type is about (`EVCVoxelModificationType`), never that it is VoxelWorlds' (CR3 renamed `EVoxelSurfaceType`,
+  `EVoxelModificationType`, `FVoxelTerrainContext`, `FOnVoxelEditBlocked`, with `[CoreRedirects]` in
+  `Config/DefaultVoxelCharacterPlugin.ini`)
 - DataAssets: `UVC{Name}Config` or `UVC{Name}Data`
 
 ### C++ Standards
@@ -276,11 +280,11 @@ worlds keep the old arithmetic. Rules:
 
 ### Voxel Terrain Context
 
-`UVCMovementComponent` caches voxel terrain data in `FVoxelTerrainContext` to avoid per-frame voxel queries. Cache rules:
+`UVCMovementComponent` caches voxel terrain data in `FVCTerrainContext` to avoid per-frame voxel queries. Cache rules:
 
 - Re-query every `TerrainCacheDuration` seconds (default 100ms)
 - Invalidate immediately when `OnVoxelChunkModified` fires for the character's current chunk
-- `EVoxelSurfaceType` drives friction multiplier, footstep sounds, and movement speed modifiers
+- `EVCSurfaceType` drives friction multiplier, footstep sounds, and movement speed modifiers
 
 ### Block steps (cubic worlds; world modes review WM-C7, decision D29)
 
@@ -397,7 +401,7 @@ Do not bypass this chain. New action types insert into the chain, they don't rep
 
 ### FindSpawnablePosition
 
-`FVCVoxelNavigationHelper::FindSpawnablePosition()` uses `IVoxelWorldMode::GetTerrainHeightAt()` to deterministically query terrain height from noise parameters — no loaded chunks required. Called at the top of `InitiateChunkBasedWait()` to correct the spawn position before chunk collision is requested.
+`FVCTerrainQueryHelper::FindSpawnablePosition()` uses `IVoxelWorldMode::GetTerrainHeightAt()` to deterministically query terrain height from noise parameters — no loaded chunks required. Called at the top of `InitiateChunkBasedWait()` to correct the spawn position before chunk collision is requested.
 
 - If position is above water (or water disabled): returns terrain height at that X,Y
 - If underwater: spirals outward at `ChunkWorldSize` intervals in 8 directions until above-water terrain is found
@@ -539,7 +543,7 @@ When implementing from scratch, create files in this order with compile gates:
 1. `VoxelCharacterPlugin.Build.cs` (module dependencies)
 2. `VoxelCharacterPlugin.h/.cpp` (module startup)
 3. `EVCViewMode.h` (enum, no dependencies)
-4. `FVoxelTerrainContext.h` (struct, no dependencies)
+4. `FVCTerrainContext.h` (struct, no dependencies)
 5. `UVCInputConfig.h/.cpp` (DataAsset with input action refs)
 6. **Compile gate — module loads, types exist**
 

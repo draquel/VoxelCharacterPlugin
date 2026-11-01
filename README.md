@@ -75,7 +75,7 @@ Switching view mode is a coordinated operation that updates camera, mesh visibil
 `UVCMovementComponent` extends `UCharacterMovementComponent` with:
 
 - **Terrain context caching** — Voxel material queries are cached and refreshed at configurable intervals (default 100ms) or immediately on chunk modification events.
-- **Surface-driven parameters** — `EVoxelSurfaceType` (ice, mud, sand, stone, etc.) drives ground friction, speed multipliers, and footstep sound selection.
+- **Surface-driven parameters** — `EVCSurfaceType` (ice, mud, sand, stone, etc.) drives ground friction, speed multipliers, and footstep sound selection.
 - **Custom floor finding** — Handles transitional states during async voxel mesh rebuilds to prevent grounded characters from briefly entering falling state.
 - **Custom movement modes** — Climbing (vertical voxel surfaces), swimming (voxel water detection with depth tracking).
 
@@ -130,11 +130,11 @@ Changing between first and third person touches multiple systems. The full seque
 Characters spawn frozen until terrain collision is ready beneath them. The system uses deterministic terrain height queries (`IVoxelWorldMode::GetTerrainHeightAt`) — pure math from noise parameters — to validate and correct spawn positions before any chunks are loaded:
 
 1. `FreezeForTerrainWait()` — Disables movement and collision
-2. `InitiateChunkBasedWait()` — Calls `FVCVoxelNavigationHelper::FindSpawnablePosition()` to verify terrain is above water at the spawn point. If underwater, spirals outward at chunk-sized intervals to find nearest land. Relocates the character to valid terrain before requesting chunk collision.
+2. `InitiateChunkBasedWait()` — Calls `FVCTerrainQueryHelper::FindSpawnablePosition()` to verify terrain is above water at the spawn point. If underwater, spirals outward at chunk-sized intervals to find nearest land. Relocates the character to valid terrain before requesting chunk collision.
 3. Chunk collision requests go to the correct terrain-level chunks
 4. `PlaceOnTerrainAndResume()` — Sphere sweep (±50,000 units) finds the exact surface position once collision is cooked
 
-`FindSpawnablePosition()` is a static utility on `FVCVoxelNavigationHelper`, available for gameplay use (respawns, multiplayer joins, teleportation).
+`FindSpawnablePosition()` is a static utility on `FVCTerrainQueryHelper`, available for gameplay use (respawns, multiplayer joins, teleportation).
 
 ### Voxel Modification Flow
 

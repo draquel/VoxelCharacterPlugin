@@ -1,7 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Movement/VCMovementComponent.h"
-#include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCTerrainQueryHelper.h"
 #include "Movement/VCGravityFrame.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/PhysicsVolume.h"
@@ -639,7 +639,7 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 	// Query voxel terrain at the character's feet position (along local down: radial on a planet)
 	const float HalfHeight = Owner->GetSimpleCollisionHalfHeight();
 	const FVector FeetPos = Owner->GetActorLocation() + GetGravityDirection() * HalfHeight;
-	CachedTerrainContext = FVCVoxelNavigationHelper::QueryTerrainContext(GetWorld(), FeetPos, FVCGravityFrame::GetUp(this));
+	CachedTerrainContext = FVCTerrainQueryHelper::QueryTerrainContext(GetWorld(), FeetPos, FVCGravityFrame::GetUp(this));
 
 	// If feet-level water check missed (feet on solid ocean floor), check at body center.
 	// When standing on the seabed, feet are in a solid voxel (no water flag) but the
@@ -647,7 +647,7 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 	if (!CachedTerrainContext.bIsUnderwater)
 	{
 		float BodyWaterDepth = 0.f;
-		if (FVCVoxelNavigationHelper::IsPositionUnderwater(GetWorld(), Owner->GetActorLocation(), BodyWaterDepth))
+		if (FVCTerrainQueryHelper::IsPositionUnderwater(GetWorld(), Owner->GetActorLocation(), BodyWaterDepth))
 		{
 			CachedTerrainContext.bIsUnderwater = true;
 			CachedTerrainContext.WaterDepth = BodyWaterDepth;
@@ -687,7 +687,7 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 		{
 			const FVector UpperBodyPos = Owner->GetActorLocation() + FVCGravityFrame::GetUp(this) * (HalfHeight * 0.5f);
 			float UpperBodyWaterDepth = 0.f;
-			if (FVCVoxelNavigationHelper::IsPositionUnderwater(GetWorld(), UpperBodyPos, UpperBodyWaterDepth))
+			if (FVCTerrainQueryHelper::IsPositionUnderwater(GetWorld(), UpperBodyPos, UpperBodyWaterDepth))
 			{
 				// Upper body still in water — seabed contact, stay swimming
 				return;
@@ -884,44 +884,44 @@ void UVCMovementComponent::OnMoveSpeedAttributeChanged(const FOnAttributeChangeD
 // Surface Type Mapping
 // ---------------------------------------------------------------------------
 
-EVoxelSurfaceType UVCMovementComponent::MaterialIDToSurfaceType(uint8 MaterialID)
+EVCSurfaceType UVCMovementComponent::MaterialIDToSurfaceType(uint8 MaterialID)
 {
 	// The registry's materials (EVoxelMaterial, VoxelMaterialRegistry.h) to the movement's surface types (code review CR2,
 	// VCP-14; a surface class on FVoxelMaterialDefinition would make this data).
 	switch (MaterialID)
 	{
-	case EVoxelMaterial::Grass:      return EVoxelSurfaceType::Grass;
-	case EVoxelMaterial::Dirt:       return EVoxelSurfaceType::Dirt;
-	case EVoxelMaterial::Stone:      return EVoxelSurfaceType::Stone;
-	case EVoxelMaterial::Sand:       return EVoxelSurfaceType::Sand;
-	case EVoxelMaterial::Snow:       return EVoxelSurfaceType::Snow;
-	case EVoxelMaterial::Sandstone:  return EVoxelSurfaceType::Sand;
-	case EVoxelMaterial::FrozenDirt: return EVoxelSurfaceType::Ice;
-	case EVoxelMaterial::Coal:       return EVoxelSurfaceType::Stone;
-	case EVoxelMaterial::Iron:       return EVoxelSurfaceType::Metal;
-	case EVoxelMaterial::Gold:       return EVoxelSurfaceType::Metal;
-	case EVoxelMaterial::Copper:     return EVoxelSurfaceType::Metal;
-	case EVoxelMaterial::Diamond:    return EVoxelSurfaceType::Stone;
-	case EVoxelMaterial::Wood:       return EVoxelSurfaceType::Wood;
-	case EVoxelMaterial::Leaves:     return EVoxelSurfaceType::Grass;
-	default: return EVoxelSurfaceType::Default;
+	case EVoxelMaterial::Grass:      return EVCSurfaceType::Grass;
+	case EVoxelMaterial::Dirt:       return EVCSurfaceType::Dirt;
+	case EVoxelMaterial::Stone:      return EVCSurfaceType::Stone;
+	case EVoxelMaterial::Sand:       return EVCSurfaceType::Sand;
+	case EVoxelMaterial::Snow:       return EVCSurfaceType::Snow;
+	case EVoxelMaterial::Sandstone:  return EVCSurfaceType::Sand;
+	case EVoxelMaterial::FrozenDirt: return EVCSurfaceType::Ice;
+	case EVoxelMaterial::Coal:       return EVCSurfaceType::Stone;
+	case EVoxelMaterial::Iron:       return EVCSurfaceType::Metal;
+	case EVoxelMaterial::Gold:       return EVCSurfaceType::Metal;
+	case EVoxelMaterial::Copper:     return EVCSurfaceType::Metal;
+	case EVoxelMaterial::Diamond:    return EVCSurfaceType::Stone;
+	case EVoxelMaterial::Wood:       return EVCSurfaceType::Wood;
+	case EVoxelMaterial::Leaves:     return EVCSurfaceType::Grass;
+	default: return EVCSurfaceType::Default;
 	}
 }
 
-float UVCMovementComponent::GetSurfaceFriction(EVoxelSurfaceType Surface)
+float UVCMovementComponent::GetSurfaceFriction(EVCSurfaceType Surface)
 {
 	switch (Surface)
 	{
-	case EVoxelSurfaceType::Ice:   return 0.2f;
-	case EVoxelSurfaceType::Mud:   return 0.6f;
-	case EVoxelSurfaceType::Sand:  return 0.8f;
-	case EVoxelSurfaceType::Snow:  return 0.7f;
-	case EVoxelSurfaceType::Grass: return 1.0f;
-	case EVoxelSurfaceType::Dirt:  return 0.9f;
-	case EVoxelSurfaceType::Stone: return 1.0f;
-	case EVoxelSurfaceType::Wood:  return 1.0f;
-	case EVoxelSurfaceType::Metal: return 0.9f;
-	case EVoxelSurfaceType::Water: return 0.5f;
+	case EVCSurfaceType::Ice:   return 0.2f;
+	case EVCSurfaceType::Mud:   return 0.6f;
+	case EVCSurfaceType::Sand:  return 0.8f;
+	case EVCSurfaceType::Snow:  return 0.7f;
+	case EVCSurfaceType::Grass: return 1.0f;
+	case EVCSurfaceType::Dirt:  return 0.9f;
+	case EVCSurfaceType::Stone: return 1.0f;
+	case EVCSurfaceType::Wood:  return 1.0f;
+	case EVCSurfaceType::Metal: return 0.9f;
+	case EVCSurfaceType::Water: return 0.5f;
 	default:                       return 1.0f;
 	}
 }
@@ -1163,7 +1163,7 @@ void UVCMovementComponent::TickBreath(float DeltaTime)
 	float HeadDepth = 0.f;
 	// The voxel holding the water line is flagged water top to bottom, so a head floating just above the line still
 	// lands in a water voxel: it is under only when it is also below the water level.
-	bHeadUnderwater = FVCVoxelNavigationHelper::IsPositionUnderwater(GetWorld(), Head, HeadDepth) && HeadDepth > 0.f;
+	bHeadUnderwater = FVCTerrainQueryHelper::IsPositionUnderwater(GetWorld(), Head, HeadDepth) && HeadDepth > 0.f;
 
 	const float Current = ASC->GetNumericAttribute(BreathAttribute);
 	const float Max = ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxBreathAttribute());

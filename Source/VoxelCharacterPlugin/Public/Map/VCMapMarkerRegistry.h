@@ -41,7 +41,7 @@ struct FVCMapMarker
  * around the point's XY (a map's view), on a planet the 3D distance (its view is not an XY box). Fired on the game thread;
  * sources must be cheap (called at map refresh cadence).
  */
-DECLARE_MULTICAST_DELEGATE_ThreeParams(FVCOnGatherMapMarkers, const FVector& /*Center*/, double /*Radius*/, TArray<FVCMapMarker>& /*InOutMarkers*/);
+DECLARE_MULTICAST_DELEGATE_ThreeParams(FOnVCGatherMapMarkers, const FVector& /*Center*/, double /*Radius*/, TArray<FVCMapMarker>& /*InOutMarkers*/);
 
 /**
  * Registration point between the map widgets and anything that wants markers on them.
@@ -58,7 +58,7 @@ class VOXELCHARACTERPLUGIN_API UVCMapMarkerRegistry : public UWorldSubsystem
 
 public:
 	/** Bind a source here (game thread). Keep the FDelegateHandle to unbind on teardown. */
-	FVCOnGatherMapMarkers OnGatherMarkers;
+	FOnVCGatherMapMarkers OnGatherMarkers;
 
 	/**
 	 * Collect markers within Radius of Center from every bound source (appended in bind order): on a heightmap world the

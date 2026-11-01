@@ -1,7 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Map/VCWorldMapWidget.h"
-#include "Map/VCPlanetMapProjection.h"
+#include "Map/VCMapSamplers.h"
 #include "Map/VCMapMarkerRegistry.h"
 #include "VoxelMapSubsystem.h"
 #include "VoxelCharacterPlugin.h"

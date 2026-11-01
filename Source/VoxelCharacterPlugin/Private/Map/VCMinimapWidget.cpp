@@ -2,7 +2,7 @@
 
 #include "Map/VCMinimapWidget.h"
 #include "Map/VCMapMarkerRegistry.h"
-#include "Map/VCPlanetMapProjection.h"
+#include "Map/VCMapSamplers.h"
 #include "VoxelMapSubsystem.h"
 #include "VoxelCharacterPlugin.h"
 #include "Blueprint/WidgetTree.h"

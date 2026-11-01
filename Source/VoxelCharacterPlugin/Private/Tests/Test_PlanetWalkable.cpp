@@ -10,7 +10,7 @@
 #include "AI/VCNPCAIController.h"
 #include "Movement/VCGravityFrame.h"
 #include "Movement/VCMovementComponent.h"
-#include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCTerrainQueryHelper.h"
 #include "Camera/VCThirdPersonCameraMode.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -314,7 +314,7 @@ bool FVCPlanet_SpawnByDirection::RunTest(const FString& Parameters)
 		FVector Out;
 		int32 Ring = 0;
 		const FVector Start = LatLon(25.0, 0.0); // 25 degrees north of the land's centre
-		const bool bFound = FVCVoxelNavigationHelper::FindPlanetSpawnPoint(FVector::ZeroVector, R, Start, 500.0, 6000.0, SurfaceAt, Sea, Out, Ring);
+		const bool bFound = FVCTerrainQueryHelper::FindPlanetSpawnPoint(FVector::ZeroVector, R, Start, 500.0, 6000.0, SurfaceAt, Sea, Out, Ring);
 		const double FromStart = AngleDeg(Out, Start);
 		AddInfo(FString::Printf(TEXT("Synthetic: found %d, ring %d, %.2f deg from the start, %.2f from the land's centre"), bFound ? 1 : 0, Ring,
 			FromStart, AngleDeg(Out, Land)));
@@ -325,7 +325,7 @@ bool FVCPlanet_SpawnByDirection::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Synthetic: that ring's arc from the start"), FMath::IsNearlyEqual(FromStart, FMath::RadiansToDegrees(Ring * 500.0 / R), 1.0e-6));
 		int32 NoRing = 0;
 		TestFalse(TEXT("Synthetic: no land within the search arc"),
-			FVCVoxelNavigationHelper::FindPlanetSpawnPoint(FVector::ZeroVector, R, -Land, 500.0, 6000.0, SurfaceAt, Sea, Out, NoRing));
+			FVCTerrainQueryHelper::FindPlanetSpawnPoint(FVector::ZeroVector, R, -Land, 500.0, 6000.0, SurfaceAt, Sea, Out, NoRing));
 	}
 
 	// The real planet: a sea at the datum, so some sites start wet.
@@ -338,7 +338,7 @@ bool FVCPlanet_SpawnByDirection::RunTest(const FString& Parameters)
 			const FVector Start = LatLon(Site.Lat, Site.Lon) * (PlanetRadius + 5000.0);
 			const bool bStartDry = Planet.Manager->GetSeaDepthAt(Planet.Manager->GetSurfacePointAt(Start).Position) < 0.0f;
 			FVector Out;
-			const bool bFound = FVCVoxelNavigationHelper::FindSpawnablePosition(Planet.World, Start, Out);
+			const bool bFound = FVCTerrainQueryHelper::FindSpawnablePosition(Planet.World, Start, Out);
 			TestTrue(FString::Printf(TEXT("%s: found land"), Site.Name), bFound);
 			if (!bFound)
 			{
@@ -370,7 +370,7 @@ bool FVCPlanet_SpawnByDirection::RunTest(const FString& Parameters)
 		FVoxelWorldHarness Plane(/*bPlanet=*/false);
 		Plane.Config->WaterLevel = -1.0e6f; // no sea in the way
 		FVector Out;
-		const bool bFound = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, FVector(1234.0, -5678.0, 9999.0), Out);
+		const bool bFound = FVCTerrainQueryHelper::FindSpawnablePosition(Plane.World, FVector(1234.0, -5678.0, 9999.0), Out);
 		TestTrue(TEXT("Plane: found"), bFound);
 		TestTrue(TEXT("Plane: (X, Y, generated height) as before"),
 			Out == FVector(1234.0, -5678.0, Plane.Manager->GetGeneratedSurfacePoint(FVector(1234.0, -5678.0, 0.0)).Z));
@@ -796,11 +796,11 @@ bool FVCPlanet_SpawnAtScale::RunTest(const FString& Parameters)
 		};
 		FVector Out;
 		int32 Ring = 0;
-		const bool bNear = FVCVoxelNavigationHelper::FindPlanetSpawnPoint(FVector::ZeroVector, Case.Radius, Start, 4800.0, 50000.0, SurfaceAt, Sea, Out, Ring);
+		const bool bNear = FVCTerrainQueryHelper::FindPlanetSpawnPoint(FVector::ZeroVector, Case.Radius, Start, 4800.0, 50000.0, SurfaceAt, Sea, Out, Ring);
 		const int32 NearCalls = Calls;
 		Calls = 0;
 		double Arc = 0.0;
-		const bool bFound = bNear || FVCVoxelNavigationHelper::FindPlanetSpawnPointAtScale(FVector::ZeroVector, Case.Radius, Start, 50000.0, SurfaceAt, Sea, Out, Arc);
+		const bool bFound = bNear || FVCTerrainQueryHelper::FindPlanetSpawnPointAtScale(FVector::ZeroVector, Case.Radius, Start, 50000.0, SurfaceAt, Sea, Out, Arc);
 		const double TrueArc = FMath::DegreesToRadians(FMath::Max(Case.CapFromStartDeg - Case.CapRadiusDeg, 0.0)) * Case.Radius;
 		AddInfo(FString::Printf(TEXT("%s: near search %d (%d samples); at scale found %d at %.0f of arc (the land's edge %.0f away), %.2f deg into the cap, %d samples"),
 			Case.Name, bNear ? 1 : 0, NearCalls, bFound ? 1 : 0, Arc, TrueArc, Case.CapRadiusDeg - AngleDeg(Out, Land), Calls));
@@ -823,7 +823,7 @@ bool FVCPlanet_SpawnAtScale::RunTest(const FString& Parameters)
 		};
 		FVector Out;
 		double Arc = 0.0;
-		TestFalse(TEXT("No land: nothing found"), FVCVoxelNavigationHelper::FindPlanetSpawnPointAtScale(FVector::ZeroVector, 1.0e8, Start, 50000.0, Flooded, Sea, Out, Arc));
+		TestFalse(TEXT("No land: nothing found"), FVCTerrainQueryHelper::FindPlanetSpawnPointAtScale(FVector::ZeroVector, 1.0e8, Start, 50000.0, Flooded, Sea, Out, Arc));
 		AddInfo(FString::Printf(TEXT("No land: %d samples to the antipode"), Calls));
 		TestTrue(TEXT("No land: at most the sample cap"), Calls <= 4096);
 	}
@@ -1010,8 +1010,8 @@ bool FVCPlane_SpawnAboveSeaWithOrigin::RunTest(const FString& Parameters)
 		}
 
 		FVector FromSeabed, FromLand;
-		const bool bFromSeabed = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, Seabed, FromSeabed, 20000.0f);
-		const bool bFromLand = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, Land, FromLand, 20000.0f);
+		const bool bFromSeabed = FVCTerrainQueryHelper::FindSpawnablePosition(Plane.World, Seabed, FromSeabed, 20000.0f);
+		const bool bFromLand = FVCTerrainQueryHelper::FindSpawnablePosition(Plane.World, Land, FromLand, 20000.0f);
 		AddInfo(FString::Printf(TEXT("%s: from the seabed at %.0f -> %s (ground %.0f); from land at %.0f -> %s"), *Name, Seabed.Z,
 			bFromSeabed ? *FromSeabed.ToString() : TEXT("none"), bFromSeabed ? FromSeabed.Z : 0.0, Land.Z,
 			bFromLand ? *FromLand.ToString() : TEXT("none")));
@@ -1075,9 +1075,9 @@ bool FVCPlane_SpawnPastRing::RunTest(const FString& Parameters)
 	}
 
 	FVector Before, Past, FromLand;
-	const bool bBefore = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, Start, Before, static_cast<float>(Ring), /*bSearchWholeWorld=*/false);
-	const bool bPast = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, Start, Past, static_cast<float>(Ring), /*bSearchWholeWorld=*/true);
-	const bool bFromLand = FVCVoxelNavigationHelper::FindSpawnablePosition(Plane.World, Land, FromLand, static_cast<float>(Ring), /*bSearchWholeWorld=*/true);
+	const bool bBefore = FVCTerrainQueryHelper::FindSpawnablePosition(Plane.World, Start, Before, static_cast<float>(Ring), /*bSearchWholeWorld=*/false);
+	const bool bPast = FVCTerrainQueryHelper::FindSpawnablePosition(Plane.World, Start, Past, static_cast<float>(Ring), /*bSearchWholeWorld=*/true);
+	const bool bFromLand = FVCTerrainQueryHelper::FindSpawnablePosition(Plane.World, Land, FromLand, static_cast<float>(Ring), /*bSearchWholeWorld=*/true);
 	const double Distance = bPast ? FVector2D::Distance(FVector2D(Past), FVector2D(Start)) : 0.0;
 	AddInfo(FString::Printf(TEXT("From the seabed at (%.0f, %.0f): the rule before %s; past the ring %s at (%.0f, %.0f) Z=%.0f, %.0f away (the ring %.0f); from land: %s"),
 		Start.X, Start.Y, bBefore ? TEXT("found land") : TEXT("found nothing"), bPast ? TEXT("found land") : TEXT("found nothing"),
@@ -1119,8 +1119,8 @@ bool FVCIsland_SpawnPastRing::RunTest(const FString& Parameters)
 	TestTrue(TEXT("The island is bounded"), Bounds.IsBounded());
 	const FVector Outside(Bounds.Center.X + 60000.0, Bounds.Center.Y, 0.0);
 	FVector Before, Past;
-	const bool bBefore = FVCVoxelNavigationHelper::FindSpawnablePosition(W.World, Outside, Before, Ring, /*bSearchWholeWorld=*/false);
-	const bool bPast = FVCVoxelNavigationHelper::FindSpawnablePosition(W.World, Outside, Past, Ring, /*bSearchWholeWorld=*/true);
+	const bool bBefore = FVCTerrainQueryHelper::FindSpawnablePosition(W.World, Outside, Before, Ring, /*bSearchWholeWorld=*/false);
+	const bool bPast = FVCTerrainQueryHelper::FindSpawnablePosition(W.World, Outside, Past, Ring, /*bSearchWholeWorld=*/true);
 	const float GroundAtPast = bPast ? W.Manager->GetGeneratedSurfacePoint(FVector(Past.X, Past.Y, 0.0)).Z : 0.0f;
 	AddInfo(FString::Printf(TEXT("From (%.0f, %.0f), outside the island: the rule before %s%s; past the ring %s at (%.0f, %.0f) Z=%.0f, %.0f from the centre"),
 		Outside.X, Outside.Y, bBefore ? TEXT("found land at ") : TEXT("found nothing"), bBefore ? *FString::Printf(TEXT("(%.0f, %.0f)"), Before.X, Before.Y) : TEXT(""),

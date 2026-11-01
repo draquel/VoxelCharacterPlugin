@@ -10,7 +10,7 @@
 #include "Camera/VCCameraManager.h"
 #include "Gathering/VCGatherTable.h"
 #include "Movement/VCMovementComponent.h"
-#include "Movement/VCVoxelNavigationHelper.h"
+#include "Movement/VCTerrainQueryHelper.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
