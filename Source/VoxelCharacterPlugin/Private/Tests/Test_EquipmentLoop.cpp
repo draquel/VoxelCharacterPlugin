@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Misc/AutomationTest.h"
+#include "Testing/VCTestWorld.h"
 
 #if WITH_AUTOMATION_TESTS
 
@@ -19,30 +20,10 @@
 
 namespace VCLoopTestHelpers
 {
-	struct FWorldHarness
+	/** A game world that has begun play (VCTesting::FPlayWorld), destroyed as it is. */
+	struct FWorldHarness : VCTesting::FPlayWorld
 	{
-		UWorld* World = nullptr;
-
-		FWorldHarness()
-		{
-			World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("VCEquipmentLoopTestWorld"));
-			FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-			Context.SetCurrentWorld(World);
-			World->InitializeActorsForPlay(FURL());
-			if (AWorldSettings* WorldSettings = World->GetWorldSettings())
-			{
-				WorldSettings->NotifyBeginPlay();
-			}
-		}
-
-		~FWorldHarness()
-		{
-			if (World)
-			{
-				GEngine->DestroyWorldContext(World);
-				World->DestroyWorld(false);
-			}
-		}
+		FWorldHarness() : VCTesting::FPlayWorld(TEXT("VCEquipmentLoopTestWorld"), /*bDestroyActorsFirst=*/false) {}
 	};
 
 	AVCNPCCharacterBase* SpawnCombatant(UWorld* World, float MaxHealth, float Defense)

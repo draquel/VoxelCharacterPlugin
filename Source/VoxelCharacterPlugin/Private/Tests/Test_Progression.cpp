@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Misc/AutomationTest.h"
+#include "Testing/VCTestWorld.h"
 
 #if WITH_AUTOMATION_TESTS
 
@@ -15,41 +16,12 @@
 
 namespace VCProgressionTestHelpers
 {
-	struct FWorldHarness
+	/** A game world that has begun play (VCTesting::FPlayWorld), its actors destroyed before it. */
+	struct FWorldHarness : VCTesting::FPlayWorld
 	{
-		UWorld* World = nullptr;
-
-		FWorldHarness()
-		{
-			World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("VCProgressionTestWorld"));
-			FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-			Context.SetCurrentWorld(World);
-			World->InitializeActorsForPlay(FURL());
-			if (AWorldSettings* WorldSettings = World->GetWorldSettings())
-			{
-				WorldSettings->NotifyBeginPlay();
-			}
-		}
-
-		~FWorldHarness()
-		{
-			if (World)
-			{
-				// Route EndPlay while the world still exists (see Test_EditMode.cpp for why).
-				TArray<AActor*> Actors;
-				for (TActorIterator<AActor> It(World); It; ++It)
-				{
-					Actors.Add(*It);
-				}
-				for (AActor* Actor : Actors)
-				{
-					World->DestroyActor(Actor);
-				}
-				GEngine->DestroyWorldContext(World);
-				World->DestroyWorld(false);
-			}
-		}
+		FWorldHarness() : VCTesting::FPlayWorld(TEXT("VCProgressionTestWorld"), /*bDestroyActorsFirst=*/true) {}
 	};
+
 }
 
 #define VC_PROGRESSION_FLAGS (EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
