@@ -15,20 +15,13 @@ struct FVCMapMarker
 {
 	GENERATED_BODY()
 
-	/** Marker position in world XY. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Map")
-	FVector2D WorldPosition = FVector2D::ZeroVector;
-
 	/**
-	 * Marker position in 3D, used when bHasWorldLocation (a planet's maps draw only such markers: XY means nothing on a
-	 * sphere; spherical Phase 4, WM-SY9).
+	 * Marker position in world space: a heightmap world's maps draw its X and Y (its Z is theirs to ignore), a planet's its
+	 * direction from the centre (XY means nothing on a sphere; spherical Phase 4, WM-SY9). One location for every kind of
+	 * world (code review CR2, VCP-21).
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Map")
 	FVector WorldLocation = FVector::ZeroVector;
-
-	/** WorldLocation is set. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Map")
-	bool bHasWorldLocation = false;
 
 	/** Label shown next to the marker on the world map (minimap draws dots only). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Map")
@@ -44,16 +37,11 @@ struct FVCMapMarker
 };
 
 /**
- * Marker sources append their markers for a queried world area.
- * Fired on the game thread; sources must be cheap (called at map refresh cadence).
+ * Marker sources append their markers within a distance of a point: on a heightmap world the square of that half extent
+ * around the point's XY (a map's view), on a planet the 3D distance (its view is not an XY box). Fired on the game thread;
+ * sources must be cheap (called at map refresh cadence).
  */
-DECLARE_MULTICAST_DELEGATE_TwoParams(FVCOnGatherMapMarkers, const FBox2D& /*WorldArea*/, TArray<FVCMapMarker>& /*InOutMarkers*/);
-
-/**
- * Marker sources append their markers within a distance of a point (a planet's maps: their view is not an XY box), with
- * WorldLocation set. Same rules as FVCOnGatherMapMarkers.
- */
-DECLARE_MULTICAST_DELEGATE_ThreeParams(FVCOnGatherMapMarkersNear, const FVector& /*Center*/, double /*Radius*/, TArray<FVCMapMarker>& /*InOutMarkers*/);
+DECLARE_MULTICAST_DELEGATE_ThreeParams(FVCOnGatherMapMarkers, const FVector& /*Center*/, double /*Radius*/, TArray<FVCMapMarker>& /*InOutMarkers*/);
 
 /**
  * Registration point between the map widgets and anything that wants markers on them.
@@ -72,33 +60,16 @@ public:
 	/** Bind a source here (game thread). Keep the FDelegateHandle to unbind on teardown. */
 	FVCOnGatherMapMarkers OnGatherMarkers;
 
-	/** Collect markers from every bound source for WorldArea (appended in bind order). */
-	void GatherMarkers(const FBox2D& WorldArea, TArray<FVCMapMarker>& OutMarkers) const
-	{
-		OnGatherMarkers.Broadcast(WorldArea, OutMarkers);
-	}
-
-	/** Planet sources bind here (spherical Phase 4): markers within a distance of a point, with WorldLocation set. */
-	FVCOnGatherMapMarkersNear OnGatherMarkersNear;
-
 	/**
-	 * Collect markers within Radius of Center from every OnGatherMarkersNear source (appended in bind order); markers
-	 * without bHasWorldLocation are dropped.
-	 * @param Center World point
-	 * @param Radius Distance (uu)
+	 * Collect markers within Radius of Center from every bound source (appended in bind order): on a heightmap world the
+	 * square of half extent Radius around Center's XY, on a planet the 3D distance.
+	 * @param Center World point (a map's view centre)
+	 * @param Radius Half extent or distance (uu)
 	 * @param OutMarkers Appended markers
 	 */
-	void GatherMarkersNear(const FVector& Center, double Radius, TArray<FVCMapMarker>& OutMarkers) const
+	void GatherMarkers(const FVector& Center, double Radius, TArray<FVCMapMarker>& OutMarkers) const
 	{
-		const int32 First = OutMarkers.Num();
-		OnGatherMarkersNear.Broadcast(Center, Radius, OutMarkers);
-		for (int32 i = OutMarkers.Num() - 1; i >= First; --i)
-		{
-			if (!OutMarkers[i].bHasWorldLocation)
-			{
-				OutMarkers.RemoveAt(i);
-			}
-		}
+		OnGatherMarkers.Broadcast(Center, Radius, OutMarkers);
 	}
 
 protected:

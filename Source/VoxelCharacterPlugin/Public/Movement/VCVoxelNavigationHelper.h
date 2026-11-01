@@ -75,6 +75,25 @@ public:
 		bool bSearchWholeWorld = false);
 
 	/**
+	 * Pure: the near spawn search on a heightmap world (the planet's FindPlanetSpawnPoint on a plane; code review CR2, VCP-17):
+	 * rings Step apart around Start, eight compass directions a ring (square rings: a diagonal sample lies a ring's radius
+	 * along each axis), out to MaxSearchRadius; the first sample inside Bounds whose generated surface is dry wins. The start
+	 * itself is the caller's to test.
+	 *
+	 * @param Start The start, in world XY
+	 * @param Step The ring spacing (a chunk)
+	 * @param MaxSearchRadius The farthest ring (world units)
+	 * @param Bounds The world's bounds (a sample outside them is skipped)
+	 * @param SurfaceHeightAt The generated surface height at a world (X, Y) (UVoxelChunkManager::GetGeneratedSurfaceHeight)
+	 * @param Sea The sea (disabled: everything is dry)
+	 * @param OutPosition Receives the surface point found
+	 * @param OutRing Receives the ring it was found on
+	 * @return True if dry land was found
+	 */
+	static bool FindPlaneSpawnPoint(const FVector2D& Start, float Step, float MaxSearchRadius, const FVoxelWorldBounds& Bounds,
+		TFunctionRef<float(float X, float Y)> SurfaceHeightAt, const FVoxelSeaSurface& Sea, FVector& OutPosition, int32& OutRing);
+
+	/**
 	 * Pure: the spawn search on a heightmap world past the ring search (world modes review WM-MP10; the plane's
 	 * FindPlanetSpawnPointAtScale). Rings around Start from FirstRadius outward, each a quarter of its radius past the
 	 * last (at least StepSize), with as many bearings as fit at that spacing (8 to 128), out to MaxRadius or MaxSamples
@@ -99,8 +118,8 @@ public:
 
 	/**
 	 * Pure: the spawn search on a planet (spherical SP-F4). The terrain surface along StartDirection, when it is above the
-	 * sea; else rings of directions around it, StepArc of arc apart along the datum sphere, in 8 bearings each (as the
-	 * heightmap search walks rings in X and Y), out to MaxSearchArc.
+	 * sea; else rings of directions around it, StepArc of arc apart along the datum sphere, in 8 bearings each (the ring
+	 * sequence FindPlaneSpawnPoint walks in X and Y), out to MaxSearchArc.
 	 *
 	 * @param Centre Planet centre
 	 * @param Radius Datum radius (arc lengths are measured on it)

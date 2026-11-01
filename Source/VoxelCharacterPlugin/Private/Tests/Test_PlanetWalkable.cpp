@@ -462,7 +462,7 @@ bool FVCPlanet_Fly::RunTest(const FString& Parameters)
 			if (Input)
 			{
 				// Across local up at the pawn, as vox.AutoRun feeds it.
-				const FVector Up = Move->GetLocalUp();
+				const FVector Up = FVCGravityFrame::GetUp(Move);
 				Move->GetPawnOwner()->AddMovementInput(FVector::CrossProduct(FVector::CrossProduct(Up, *Input), Up).GetSafeNormal(), 1.0f);
 			}
 			Move->TickComponent(Dt, LEVELTICK_All, nullptr);

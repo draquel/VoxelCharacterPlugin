@@ -213,8 +213,9 @@ On a planet (`UVoxelMapSubsystem::IsPlanetMap`) both widgets read the cube-spher
   opening on the player. Dragging brings what showed at −Δ to the centre; the wheel zooms at the plane map's scale (32
   tiles from the centre at zoom 1, the whole disc near `MinZoom` 0.25). Redrawn at most 30 times a second while tiles
   stream in. The footer shows the player's latitude and longitude.
-- **Markers** carry a 3D position (`FVCMapMarker::WorldLocation`, `bHasWorldLocation`); planet views gather them through
-  `UVCMapMarkerRegistry::OnGatherMarkersNear`. POIs reach planets in Phase 5, so no provider binds it yet.
+- **Markers** carry one 3D position (`FVCMapMarker::WorldLocation`; a plane's maps draw its X and Y, a planet's its
+  direction); every map gathers them through the one `UVCMapMarkerRegistry::OnGatherMarkers(Center, Radius)`, a square of
+  that half extent on a plane and the 3D distance on a planet (code review CR2, VCP-21). POIs bind it (Phase 5).
 
 Tests: `VoxelCharacter.Planet.MinimapFrame`, `.WorldMapProjection`, `.MapSampler`.
 

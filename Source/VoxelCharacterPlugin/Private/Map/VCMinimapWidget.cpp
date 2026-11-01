@@ -357,18 +357,10 @@ void UVCMinimapWidget::UpdateMarkers(const FVector& PlayerPos, float MapAngleDeg
 	TArray<FVCMapMarker> Markers;
 	if (UVCMapMarkerRegistry* Registry = MarkerRegistry.Get())
 	{
-		// Gather slightly beyond the visible radius so dots slide in smoothly at the rim.
-		const FVector2D Player2D(PlayerPos.X, PlayerPos.Y);
+		// Gather slightly beyond the visible radius so dots slide in smoothly at the rim: the square of that half extent on a
+		// plane, the 3D distance to its corners on a planet.
 		const float GatherRadius = MinimapWorldRadius * RotationOversize;
-		if (bPlanet)
-		{
-			Registry->GatherMarkersNear(PlayerPos, GatherRadius * UE_SQRT_2, Markers);
-		}
-		else
-		{
-			const FBox2D Area(Player2D - FVector2D(GatherRadius, GatherRadius), Player2D + FVector2D(GatherRadius, GatherRadius));
-			Registry->GatherMarkers(Area, Markers);
-		}
+		Registry->GatherMarkers(PlayerPos, bPlanet ? GatherRadius * UE_SQRT_2 : GatherRadius, Markers);
 	}
 	// Offsets on the plane the shown texture was drawn in, from the player (G64).
 	const FVCPlanetMapFrame PlanetFrame = bPlanet ? GetDisplayFrame(PlayerPos) : FVCPlanetMapFrame();
@@ -393,7 +385,7 @@ void UVCMinimapWidget::UpdateMarkers(const FVector& PlayerPos, float MapAngleDeg
 		// tangent plane, (north, east) as (X, Y) are on a plane.
 		const FVector2D PixelOffset = bPlanet
 			? (PlanetFrame.OffsetOf(Marker.WorldLocation) - PlayerOnFrame) * PixelsPerWorldUnit
-			: (Marker.WorldPosition - Player2D) * PixelsPerWorldUnit;
+			: (FVector2D(Marker.WorldLocation) - Player2D) * PixelsPerWorldUnit;
 		const FVector2D Rotated = PixelOffset.GetRotated(MapAngleDeg);
 		if (Rotated.SizeSquared() > VisibleRadiusPx * VisibleRadiusPx)
 		{

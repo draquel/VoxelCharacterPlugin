@@ -158,16 +158,36 @@ struct VOXELCHARACTERPLUGIN_API FVCPlanetMapSampler
 };
 
 /**
- * The minimap's texture on a plane (heightmap worlds; world modes review G64): texel (X, Y) is world (X, Y) WorldPerPixel
- * units per texel from the texture's corner, the texture centred on a position. Each texel shows the tile pixel just inside
- * its far corner, the pixel a blit of every tile pixel at its near corner wrote last, so the image is the same where tiles
- * are finer than texels and every texel is drawn where they are coarser (an overview image). Columns and rows are worked
- * out once, so a fill costs a few operations a texel.
+ * A map texture on a plane (heightmap worlds; world modes review G64): the texture centred on a position, WorldPerPixel
+ * units a texel, texel (X, Y) at world (X, Y) from the texture's corner, or with bNorthUp (the world map) texel X along
+ * world +Y (east right) and texel Y along world -X (north up). Each texel shows the tile pixel just inside its far corner
+ * (in +X, +Y), the pixel a blit of every tile pixel at its near corner wrote last, so the image is the same where tiles are
+ * finer than texels and every texel is drawn where they are coarser (an overview image). Columns and rows are worked out
+ * once, so a fill costs a few operations a texel. With bRequireExplored (the world map) only explored tiles draw, the fog
+ * colours cover the rest, and the explored tiles in view without the image asked for are requested
+ * (UVoxelMapSubsystem::RequestTileImage). The minimap and the world map share it (code review CR2, VCP-15).
  */
 struct VOXELCHARACTERPLUGIN_API FVCPlaneMapSampler
 {
-	/** Texel colour with no tile image. */
+	/** Texel colour with no tile image (bRequireExplored off). */
 	FColor Background = FColor(5, 5, 5, 255);
+
+	/** Texel colours for unexplored ground and for explored ground whose image has not been drawn yet (bRequireExplored). */
+	FColor Unexplored = FColor(10, 10, 10, 255);
+	FColor Undrawn = FColor(25, 25, 25, 255);
+
+	/**
+	 * Draw only explored tiles, Unexplored elsewhere and Undrawn where an explored tile has no image yet, and ask for the
+	 * images explored tiles lack (the world map); false: every tile with an image, Background elsewhere, nothing asked for
+	 * (the minimap, whose area is explored as it draws).
+	 */
+	bool bRequireExplored = false;
+
+	/** Ask for the tiles' detail images, not just an image (a view zoomed in far enough that the overview would show blurred). */
+	bool bWantDetail = false;
+
+	/** Texel X along world +Y and texel Y along world -X (the world map's north-up image); false: texel (X, Y) is world (X, Y). */
+	bool bNorthUp = false;
 
 	/** True: texel by texel; false: clear, then blit every pixel of every tile in view at its near corner (before G64). */
 	bool bTexelFill = true;
@@ -184,5 +204,5 @@ struct VOXELCHARACTERPLUGIN_API FVCPlaneMapSampler
 	 * @param WorldPerPixel World units per texel
 	 * @return Texels drawn from a tile image (the blit: tile pixels written)
 	 */
-	int32 Fill(const UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 TexSize, const FVector& Center, double WorldPerPixel) const;
+	int32 Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 TexSize, const FVector& Center, double WorldPerPixel) const;
 };

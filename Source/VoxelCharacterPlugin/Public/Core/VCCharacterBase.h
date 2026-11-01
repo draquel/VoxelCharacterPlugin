@@ -629,10 +629,6 @@ protected:
 	bool bHasLastSafeLocation = false;
 	float SafeLocationTimer = 0.f;
 
-	/** World Z below which the pawn has fallen out of the world (lowest terrain - OutOfWorldDepth); cached. */
-	float OutOfWorldZ = -UE_BIG_NUMBER;
-	bool bHasOutOfWorldZ = false;
-
 	/** FellOutOfWorld ran for this pawn (it is dying or has been moved back). */
 	bool bFellOutOfWorld = false;
 

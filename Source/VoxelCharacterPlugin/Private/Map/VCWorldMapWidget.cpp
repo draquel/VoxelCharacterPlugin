@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Map/VCWorldMapWidget.h"
+#include "Map/VCPlanetMapProjection.h"
 #include "Map/VCMapMarkerRegistry.h"
 #include "VoxelMapSubsystem.h"
 #include "VoxelCharacterPlugin.h"
@@ -396,106 +397,26 @@ void UVCWorldMapWidget::RebuildMapTexture()
 	}
 
 	uint8* PixelData = static_cast<uint8*>(TextureData);
-	const int32 TotalPixels = TexSize * TexSize;
 
-	// Clear to fog of war
-	FMemory::Memset(PixelData, 0, TotalPixels * 4);
-	for (int32 i = 0; i < TotalPixels; ++i)
-	{
-		PixelData[i * 4 + 0] = 10;  // B
-		PixelData[i * 4 + 1] = 10;  // G
-		PixelData[i * 4 + 2] = 10;  // R
-		PixelData[i * 4 + 3] = 255; // A
-	}
-
-	// The view center in world space
-	const float ViewCenterX = PanOffset.X;
-	const float ViewCenterY = PanOffset.Y;
-
-	// World bounds of the texture. NORTH-UP orientation: world +X (north) points up on the
-	// map (screen -Y), world +Y (east) points right (screen +X) — matching the minimap's
-	// compass convention.
-	const float WorldMaxX = ViewCenterX + ViewWorldExtent;
-	const float WorldMinY = ViewCenterY - ViewWorldExtent;
-
-	// The map keeps tile images under a budget (world modes review WM-E2): a tile may have only its overview, or no
-	// image at all, until asked for. Zoomed in far enough that the overview would show blurred (more texels per tile
-	// than half again its resolution), ask for detail; otherwise an image of any kind. Only the tiles in view ask.
+	// The image through the plane sampler, north up (world +X up, +Y right, the minimap's compass convention; world modes
+	// review G64's texel fill; code review CR2, VCP-15): each texel the tile pixel just inside its far corner, explored tiles
+	// only with the fog colours for the rest. The map keeps tile images under a budget (WM-E2): a tile may have only its
+	// overview, or no image at all, until asked for; zoomed in far enough that the overview would show blurred (more texels
+	// per tile than half again its resolution) the tiles in view ask for detail, otherwise for an image of any kind.
 	const float TexelsPerTile = TileWorldSize / FMath::Max(RenderedWorldPerPixel, KINDA_SMALL_NUMBER);
-	const bool bWantDetail = TexelsPerTile > 1.5f * Subsystem->GetTileOverviewResolution();
-
-	// Iterate visible tiles and blit them into the texture
-	for (int32 TY = -RenderedTileRadius; TY <= RenderedTileRadius; ++TY)
-	{
-		for (int32 TX = -RenderedTileRadius; TX <= RenderedTileRadius; ++TX)
-		{
-			const FIntPoint TileCoord(RenderedCenterTile.X + TX, RenderedCenterTile.Y + TY);
-
-			// Fog of war: skip unexplored
-			const bool bExplored = Subsystem->IsTileExplored(TileCoord);
-			const FVoxelMapTile* Tile = bExplored ? Subsystem->GetTile(TileCoord) : nullptr;
-
-			if (!bExplored)
-			{
-				continue;
-			}
-			if (!Tile || (bWantDetail && Tile->Resolution < TileResolution))
-			{
-				// Drawn again in the background; OnMapTileReady redraws the map when it lands.
-				Subsystem->RequestTileImage(TileCoord, bWantDetail);
-			}
-
-			// World origin of this tile
-			const FVector TileWorldOrigin = Subsystem->TileCoordToWorld(TileCoord);
-
-			// For each pixel in the tile source, compute where it lands in the texture
-			const int32 SrcRes = Tile ? Tile->Resolution : TileResolution;
-			const float PixelWorldSize = TileWorldSize / SrcRes;
-
-			for (int32 PY = 0; PY < SrcRes; ++PY)
-			{
-				for (int32 PX = 0; PX < SrcRes; ++PX)
-				{
-					const float PixWorldX = TileWorldOrigin.X + PX * PixelWorldSize;
-					const float PixWorldY = TileWorldOrigin.Y + PY * PixelWorldSize;
-
-					// Map to texture pixel (north-up: east right, north up)
-					const int32 DstX = FMath::FloorToInt((PixWorldY - WorldMinY) / RenderedWorldPerPixel);
-					const int32 DstY = FMath::FloorToInt((WorldMaxX - PixWorldX) / RenderedWorldPerPixel);
-
-					if (DstX < 0 || DstX >= TexSize || DstY < 0 || DstY >= TexSize)
-					{
-						continue;
-					}
-
-					const int32 DstIdx = (DstY * TexSize + DstX) * 4;
-
-					if (Tile)
-					{
-						const FColor& SrcColor = Tile->PixelData[PY * SrcRes + PX];
-						PixelData[DstIdx + 0] = SrcColor.B;
-						PixelData[DstIdx + 1] = SrcColor.G;
-						PixelData[DstIdx + 2] = SrcColor.R;
-						PixelData[DstIdx + 3] = SrcColor.A;
-					}
-					else
-					{
-						// Explored but not generated — slightly lighter fog
-						PixelData[DstIdx + 0] = 25;
-						PixelData[DstIdx + 1] = 25;
-						PixelData[DstIdx + 2] = 25;
-						PixelData[DstIdx + 3] = 255;
-					}
-				}
-			}
-		}
-	}
+	FVCPlaneMapSampler Sampler;
+	Sampler.bNorthUp = true;
+	Sampler.bRequireExplored = true;
+	Sampler.bWantDetail = TexelsPerTile > 1.5f * Subsystem->GetTileOverviewResolution();
+	Sampler.Unexplored = FColor(10, 10, 10, 255);
+	Sampler.Undrawn = FColor(25, 25, 25, 255);
+	Sampler.Background = Sampler.Unexplored;
+	Sampler.Fill(*Subsystem, PixelData, TexSize, FVector(PanOffset.X, PanOffset.Y, 0.0), RenderedWorldPerPixel);
 
 	Mip.BulkData.Unlock();
 	WorldMapTexture->UpdateResource();
 
-	MapImage->SetBrushFromTexture(WorldMapTexture);
-	MapImage->SetDesiredSizeOverride(FVector2D(TexSize, TexSize));
+	MapImage->SetBrushFromTexture(WorldMapTexture);	MapImage->SetDesiredSizeOverride(FVector2D(TexSize, TexSize));
 }
 
 double UVCWorldMapWidget::GetGlobeRadiusPx() const
@@ -651,15 +572,13 @@ void UVCWorldMapWidget::UpdateMarkers()
 		// The globe: markers within the visible cap (the view's centre on the datum sphere and the chord to the rim).
 		const double Radius = MapSubsystem->GetPlanetRadius();
 		const double VisibleAngle = FMath::Min(UE_DOUBLE_HALF_PI, 0.5 * RenderedTexSize * UE_SQRT_2 / RenderedGlobe.RadiusPx);
-		PlanetRegistry->GatherMarkersNear(MapSubsystem->GetPlanetCenter() + RenderedGlobe.View * Radius, 2.0 * Radius * FMath::Sin(0.5 * VisibleAngle), Markers);
+		PlanetRegistry->GatherMarkers(MapSubsystem->GetPlanetCenter() + RenderedGlobe.View * Radius, 2.0 * Radius * FMath::Sin(0.5 * VisibleAngle), Markers);
 	}
 	else if (UVCMapMarkerRegistry* Registry = MarkerRegistry.Get())
 	{
-		// The rendered view: PanOffset-centred, RenderedTexSize pixels at RenderedWorldPerPixel.
+		// The rendered view: PanOffset-centred, RenderedTexSize pixels at RenderedWorldPerPixel (the square of that half extent).
 		const float ViewWorldExtent = 0.5f * RenderedTexSize * RenderedWorldPerPixel;
-		const FBox2D Area(PanOffset - FVector2D(ViewWorldExtent, ViewWorldExtent),
-			PanOffset + FVector2D(ViewWorldExtent, ViewWorldExtent));
-		Registry->GatherMarkers(Area, Markers);
+		Registry->GatherMarkers(FVector(PanOffset.X, PanOffset.Y, 0.0), ViewWorldExtent, Markers);
 	}
 
 	Markers.Sort([](const FVCMapMarker& A, const FVCMapMarker& B) { return A.Priority > B.Priority; });
@@ -676,8 +595,8 @@ void UVCWorldMapWidget::UpdateMarkers()
 
 		// Same mapping as the player marker (north-up: east right, north up).
 		FVector2D PixelOffset(
-			(Marker.WorldPosition.Y - PanOffset.Y) / RenderedWorldPerPixel,
-			(PanOffset.X - Marker.WorldPosition.X) / RenderedWorldPerPixel);
+			(Marker.WorldLocation.Y - PanOffset.Y) / RenderedWorldPerPixel,
+			(PanOffset.X - Marker.WorldLocation.X) / RenderedWorldPerPixel);
 		if (bRenderedPlanet && (!MapSubsystem.IsValid() || !RenderedGlobe.DirectionToScreen(
 			(Marker.WorldLocation - MapSubsystem->GetPlanetCenter()).GetSafeNormal(), PixelOffset)))
 		{

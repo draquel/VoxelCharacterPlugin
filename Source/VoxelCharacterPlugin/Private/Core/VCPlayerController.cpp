@@ -1374,7 +1374,7 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 	}
 
 	// Convert voxel coordinate back to world position for distance validation
-	const FVector VoxelWorldPos = FVector(VoxelCoord) * Config->VoxelSize + Config->WorldOrigin;
+	const FVector VoxelWorldPos = VoxelCornerWorld(Config, VoxelCoord);
 
 	// Distance check: reject modifications beyond the edit reach (the block feedback shows nothing beyond it either)
 	if (!IsVoxelInEditReach(ControlledPawn->GetActorLocation(), VoxelCoord, Config))
@@ -1415,16 +1415,7 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 	// full-strength cube brush around that one voxel (density to 255), so one click is one block (a dig: DigVoxelAt).
 	// Smooth worlds keep the density brushes that build the surface gradually.
 	const bool bBlockEdit = Config->MeshingMode == EMeshingMode::Cubic;
-	// A cubic voxel's block spans [VoxelWorldPos, VoxelWorldPos + VoxelSize]; the single-voxel brush aims at its centre.
-	const FVector BlockCentre = VoxelWorldPos + FVector(Config->VoxelSize * 0.5f);
-	auto MakeBlockBrush = [&Config](FVoxelBrushParams& OutBrush)
-	{
-		OutBrush.Shape = EVoxelBrushShape::Cube;
-		OutBrush.Radius = Config->VoxelSize * 0.4f; // under half a voxel: the cube reaches no neighbour
-		OutBrush.Strength = 1.f;
-		OutBrush.FalloffType = EVoxelBrushFalloff::Sharp;
-		OutBrush.DensityDelta = 255;
-	};
+	const FVector BlockCentre = BlockCentreWorld(Config, VoxelCoord);
 
 	switch (ModType)
 	{
@@ -1446,7 +1437,7 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 
 		if (bBlockEdit)
 		{
-			MakeBlockBrush(Brush);
+			Brush = MakeBlockBrush(Config);
 		}
 		else
 		{
@@ -1476,13 +1467,35 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 	}
 }
 
+FVector AVCPlayerController::VoxelCornerWorld(const UVoxelWorldConfiguration* Config, const FIntVector& VoxelCoord)
+{
+	return FVector(VoxelCoord) * Config->VoxelSize + Config->WorldOrigin;
+}
+
+FVector AVCPlayerController::BlockCentreWorld(const UVoxelWorldConfiguration* Config, const FIntVector& VoxelCoord)
+{
+	// A cubic voxel's block spans [corner, corner + VoxelSize].
+	return VoxelCornerWorld(Config, VoxelCoord) + FVector(Config->VoxelSize * 0.5f);
+}
+
+FVoxelBrushParams AVCPlayerController::MakeBlockBrush(const UVoxelWorldConfiguration* Config)
+{
+	FVoxelBrushParams Brush;
+	Brush.Shape = EVoxelBrushShape::Cube;
+	Brush.Radius = Config->VoxelSize * 0.4f; // under half a voxel: the cube reaches no neighbour
+	Brush.Strength = 1.f;
+	Brush.FalloffType = EVoxelBrushFalloff::Sharp;
+	Brush.DensityDelta = 255;
+	return Brush;
+}
+
 bool AVCPlayerController::IsVoxelInEditReach(const FVector& PawnLocation, const FIntVector& VoxelCoord, const UVoxelWorldConfiguration* Config)
 {
 	if (!Config)
 	{
 		return false;
 	}
-	const FVector VoxelWorldPos = FVector(VoxelCoord) * Config->VoxelSize + Config->WorldOrigin;
+	const FVector VoxelWorldPos = VoxelCornerWorld(Config, VoxelCoord);
 	return FVector::Dist(PawnLocation, VoxelWorldPos) <= EditReach;
 }
 
@@ -1498,8 +1511,8 @@ bool AVCPlayerController::WouldPlaceTrapPawn(const UWorld* World, const UVoxelWo
 	// Cubic: the new block is exactly the voxel's cell, [sample, sample + VoxelSize]; a pawn only touching one of its
 	// faces is not inside it.
 	const bool bBlockEdit = Config->MeshingMode == EMeshingMode::Cubic;
-	const FVector VoxelWorldPos = FVector(VoxelCoord) * Config->VoxelSize + Config->WorldOrigin;
-	const FVector BoxCentre = bBlockEdit ? VoxelWorldPos + FVector(Config->VoxelSize * 0.5f) : VoxelWorldPos;
+	const FVector VoxelWorldPos = VoxelCornerWorld(Config, VoxelCoord);
+	const FVector BoxCentre = bBlockEdit ? BlockCentreWorld(Config, VoxelCoord) : VoxelWorldPos;
 	const float HalfExtent = bBlockEdit ? Config->VoxelSize * 0.5f - 2.f : Config->VoxelSize * 0.5f + 10.f;
 	const FCollisionObjectQueryParams PawnObjects(ECC_Pawn);
 	return World->OverlapAnyTestByObjectType(BoxCentre, FQuat::Identity, PawnObjects, FCollisionShape::MakeBox(FVector(HalfExtent)));
@@ -1524,21 +1537,16 @@ bool AVCPlayerController::DigVoxelAt(const FIntVector& VoxelCoord)
 	// Set edit source to Player so scatter is permanently removed
 	EditMgr->SetEditSource(EEditSource::Player);
 
-	const FVector VoxelWorldPos = FVector(VoxelCoord) * Config->VoxelSize + Config->WorldOrigin;
+	const FVector VoxelWorldPos = VoxelCornerWorld(Config, VoxelCoord);
 	// Cubic worlds edit whole blocks (world modes review WM-C2, KC5): a dig empties exactly the aimed voxel, a
 	// full-strength cube brush around that one voxel (density to 0), so one dig is one block. Smooth worlds keep the
 	// density brush that dents the surface gradually.
 	const bool bBlockEdit = Config->MeshingMode == EMeshingMode::Cubic;
-	// A cubic voxel's block spans [VoxelWorldPos, VoxelWorldPos + VoxelSize]; the single-voxel brush aims at its centre.
-	const FVector BlockCentre = VoxelWorldPos + FVector(Config->VoxelSize * 0.5f);
+	const FVector BlockCentre = BlockCentreWorld(Config, VoxelCoord);
 	FVoxelBrushParams Brush;
 	if (bBlockEdit)
 	{
-		Brush.Shape = EVoxelBrushShape::Cube;
-		Brush.Radius = Config->VoxelSize * 0.4f; // under half a voxel: the cube reaches no neighbour
-		Brush.Strength = 1.f;
-		Brush.FalloffType = EVoxelBrushFalloff::Sharp;
-		Brush.DensityDelta = 255;
+		Brush = MakeBlockBrush(Config);
 	}
 	else
 	{

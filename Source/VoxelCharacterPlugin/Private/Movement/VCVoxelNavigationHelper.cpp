@@ -61,16 +61,13 @@ FVoxelTerrainContext FVCVoxelNavigationHelper::QueryTerrainContext(const UWorld*
 		break;
 	}
 
-	// Water state — check the voxel water flag at character position; the depth is the sea's (SP-E1: under the WaterLevel
-	// plane generation floods, G19, or along the radius under WaterRadius on a planet)
-	if (Config->bEnableWaterLevel)
+	// Water state: the voxel water flag at the position and the sea's depth there (IsPositionUnderwater; SP-E1: the WaterLevel
+	// plane generation floods, G19, or the sphere of WaterRadius on a planet).
+	float WaterDepth = 0.f;
+	if (IsPositionUnderwater(World, Location, WaterDepth))
 	{
-		const FVoxelData VoxelAtLocation = ChunkMgr->GetVoxelAtWorldPosition(Location);
-		if (VoxelAtLocation.HasWaterFlag())
-		{
-			Context.bIsUnderwater = true;
-			Context.WaterDepth = FMath::Max(0.0, ChunkMgr->GetSeaSurface().GetDepth(Location));
-		}
+		Context.bIsUnderwater = true;
+		Context.WaterDepth = WaterDepth;
 	}
 
 	// Chunk coordinate
@@ -114,6 +111,34 @@ bool FVCVoxelNavigationHelper::IsPositionUnderwater(const UWorld* World, const F
 // ---------------------------------------------------------------------------
 // Find Spawnable Position
 // ---------------------------------------------------------------------------
+
+namespace
+{
+	/**
+	 * The near spawn search's rings (code review CR2, VCP-17): rings 1 to MaxRings outward from the start, eight bearings a
+	 * ring, the first dry sample wins. TryAt(Ring, Bearing, OutSurface) samples the surface there and says whether it is dry
+	 * land. Each kind of world keeps its sample geometry: the heightmap search's rings are squares a chunk apart in X and Y
+	 * (the eight compass directions, a diagonal a chunk along each axis), the planet's circles of arc on the datum sphere.
+	 */
+	template <typename TTryFn>
+	bool FirstDryInRings(int32 MaxRings, const TTryFn& TryAt, FVector& OutPosition, int32& OutRing)
+	{
+		for (int32 Ring = 1; Ring <= MaxRings; ++Ring)
+		{
+			for (int32 Bearing = 0; Bearing < 8; ++Bearing)
+			{
+				FVector Surface;
+				if (TryAt(Ring, Bearing, Surface))
+				{
+					OutPosition = Surface;
+					OutRing = Ring;
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+}
 
 bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 	const UWorld* World,
@@ -226,36 +251,18 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 		TEXT("FindSpawnablePosition: Position (%.0f, %.0f) is underwater (terrain Z=%.0f, water=%.0f). Searching outward..."),
 		Start.X, Start.Y, TerrainHeight, WaterLevel);
 
-	// Spiral search outward at ChunkWorldSize intervals in 8 directions
-	static const FVector2D Directions[] =
-	{
-		FVector2D( 1,  0), FVector2D( 1,  1), FVector2D( 0,  1), FVector2D(-1,  1),
-		FVector2D(-1,  0), FVector2D(-1, -1), FVector2D( 0, -1), FVector2D( 1, -1)
-	};
-
+	// Rings a chunk apart in the eight compass directions (FindPlaneSpawnPoint; the planet's FindPlanetSpawnPoint walks the
+	// same sequence on its sphere).
 	const float Step = ChunkWorldSize;
-	const int32 MaxRings = FMath::CeilToInt(MaxSearchRadius / Step);
-
-	for (int32 Ring = 1; Ring <= MaxRings; ++Ring)
+	auto HeightAtF = [ChunkMgr](float X, float Y) { return ChunkMgr->GetGeneratedSurfaceHeight(X, Y); };
+	int32 Ring = 0;
+	if (FindPlaneSpawnPoint(FVector2D(Start.X, Start.Y), Step, MaxSearchRadius, Bounds, HeightAtF, Sea, OutPosition, Ring))
 	{
-		const float Radius = Ring * Step;
-
-		for (const FVector2D& Dir : Directions)
-		{
-			const float SampleX = Start.X + Dir.X * Radius;
-			const float SampleY = Start.Y + Dir.Y * Radius;
-
-			if (IsAboveWater(SampleX, SampleY, TerrainHeight))
-			{
-				OutPosition = FVector(SampleX, SampleY, TerrainHeight);
-				UE_LOG(LogVoxelCharacter, Log,
-					TEXT("FindSpawnablePosition: Found land at (%.0f, %.0f) Z=%.0f, ring %d (%.0f units away)"),
-					SampleX, SampleY, TerrainHeight, Ring, Radius);
-				return true;
-			}
-		}
+		UE_LOG(LogVoxelCharacter, Log,
+			TEXT("FindSpawnablePosition: Found land at (%.0f, %.0f) Z=%.0f, ring %d (%.0f units away)"),
+			OutPosition.X, OutPosition.Y, OutPosition.Z, Ring, Ring * Step);
+		return true;
 	}
-
 	// The rest of the world (world modes review WM-MP10; the plane's G36): widening rings to the island's bounds, or a few
 	// hundred chunks out on a plane, so a seed whose spawn is open sea, or an island whose radius shrank, still lands.
 	if (bSearchWholeWorld)
@@ -287,6 +294,37 @@ bool FVCVoxelNavigationHelper::FindSpawnablePosition(
 		TEXT("FindSpawnablePosition: No land found within %.0f units of (%.0f, %.0f)%s"),
 		MaxSearchRadius, Start.X, Start.Y, bSearchWholeWorld ? TEXT(", nor in the rest of the world searched") : TEXT(""));
 	return false;
+}
+
+bool FVCVoxelNavigationHelper::FindPlaneSpawnPoint(const FVector2D& Start, float Step, float MaxSearchRadius, const FVoxelWorldBounds& Bounds,
+	TFunctionRef<float(float X, float Y)> SurfaceHeightAt, const FVoxelSeaSurface& Sea, FVector& OutPosition, int32& OutRing)
+{
+	OutRing = 0;
+	// The eight compass directions, a chunk per ring along each axis (square rings; the sample arithmetic in float, as the
+	// search has always run it).
+	static const FVector2D Directions[] =
+	{
+		FVector2D( 1,  0), FVector2D( 1,  1), FVector2D( 0,  1), FVector2D(-1,  1),
+		FVector2D(-1,  0), FVector2D(-1, -1), FVector2D( 0, -1), FVector2D( 1, -1)
+	};
+	const int32 MaxRings = FMath::CeilToInt(MaxSearchRadius / Step);
+	return FirstDryInRings(MaxRings, [&](int32 Ring, int32 Bearing, FVector& OutSurface)
+	{
+		const float Radius = Ring * Step;
+		const float SampleX = Start.X + Directions[Bearing].X * Radius;
+		const float SampleY = Start.Y + Directions[Bearing].Y * Radius;
+		if (!Bounds.ContainsXY(SampleX, SampleY))
+		{
+			return false;
+		}
+		const float Height = SurfaceHeightAt(SampleX, SampleY);
+		if (Sea.bEnabled && Sea.GetDepth(FVector(SampleX, SampleY, Height)) >= 0.0)
+		{
+			return false;
+		}
+		OutSurface = FVector(SampleX, SampleY, Height);
+		return true;
+	}, OutPosition, OutRing);
 }
 
 bool FVCVoxelNavigationHelper::FindPlaneSpawnPointAtScale(const FVector2D& Start, double FirstRadius, double StepSize, double MaxRadius,
@@ -362,23 +400,19 @@ bool FVCVoxelNavigationHelper::FindPlanetSpawnPoint(const FVector& Centre, doubl
 	const FVector T2 = FVector::CrossProduct(D, T1);
 	const double Step = FMath::Max(StepArc, 1.0);
 	const int32 MaxRings = FMath::Max(1, FMath::CeilToInt32(MaxSearchArc / Step));
-	for (int32 Ring = 1; Ring <= MaxRings; ++Ring)
+	return FirstDryInRings(MaxRings, [&](int32 Ring, int32 Bearing, FVector& OutSurface)
 	{
 		const double Angle = FMath::Min(Ring * Step / Radius, UE_DOUBLE_PI);
-		for (int32 Bearing = 0; Bearing < 8; ++Bearing)
+		const double B = Bearing * (UE_DOUBLE_PI / 4.0);
+		const FVector Direction = (D * FMath::Cos(Angle) + (T1 * FMath::Cos(B) + T2 * FMath::Sin(B)) * FMath::Sin(Angle)).GetSafeNormal();
+		const FVector Surface = SurfaceAt(Direction);
+		if (!IsDry(Surface))
 		{
-			const double B = Bearing * (UE_DOUBLE_PI / 4.0);
-			const FVector Direction = (D * FMath::Cos(Angle) + (T1 * FMath::Cos(B) + T2 * FMath::Sin(B)) * FMath::Sin(Angle)).GetSafeNormal();
-			const FVector Surface = SurfaceAt(Direction);
-			if (IsDry(Surface))
-			{
-				OutPosition = Surface;
-				OutRing = Ring;
-				return true;
-			}
+			return false;
 		}
-	}
-	return false;
+		OutSurface = Surface;
+		return true;
+	}, OutPosition, OutRing);
 }
 
 bool FVCVoxelNavigationHelper::FindPlanetSpawnPointAtScale(const FVector& Centre, double Radius, const FVector& StartDirection, double FirstArc,
