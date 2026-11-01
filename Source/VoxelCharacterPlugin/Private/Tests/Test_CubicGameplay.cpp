@@ -110,13 +110,11 @@ namespace VCCubicGameplayTestHelpers
 			Manager->RegisterComponent();
 			Renderer.Initialize(World, Config);
 			Manager->Initialize(Config, new FDistanceBandLODStrategy(), &Renderer);
-			FVCVoxelNavigationHelper::ClearCache();
 			Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
 		}
 
 		~FBoxWorld()
 		{
-			FVCVoxelNavigationHelper::ClearCache();
 			TArray<AActor*> Actors;
 			for (TActorIterator<AActor> It(World); It; ++It)
 			{
@@ -347,7 +345,6 @@ bool FVCCubic_FellVoxelTree::RunTest(const FString& Parameters)
 	W.Config->TreeDensity = 3.0f;
 	W.Config->TreeMode = EVoxelTreeMode::VoxelData;
 	W.StartManager();
-	FVCVoxelNavigationHelper::ClearCache();
 	W.SetViewer(FVector(0.0, 0.0, W.Manager->GetGeneratedSurfaceHeight(0.0, 0.0) + 300.0));
 	if (!TestTrue(TEXT("Streaming settles"), W.Settle()))
 	{

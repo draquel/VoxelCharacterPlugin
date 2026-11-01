@@ -123,12 +123,10 @@ namespace VCPlanetWalkableTestHelpers
 			Manager->RegisterComponent();
 			Renderer.Initialize(World, Config);
 			Manager->Initialize(Config, new FDistanceBandLODStrategy(), &Renderer);
-			FVCVoxelNavigationHelper::ClearCache();
 		}
 
 		~FVoxelWorldHarness()
 		{
-			FVCVoxelNavigationHelper::ClearCache();
 			TArray<AActor*> Actors;
 			for (TActorIterator<AActor> It(World); It; ++It)
 			{
@@ -1147,7 +1145,6 @@ bool FVCIsland_SpawnPastRing::RunTest(const FString& Parameters)
 	W.Config->bWorldBoundary = false;
 	W.Config->bIslandFarOcean = false;
 	W.StartManager();
-	FVCVoxelNavigationHelper::ClearCache();
 
 	const FVoxelWorldBounds Bounds = W.Manager->GetWorldBounds();
 	const float Ring = static_cast<float>(W.Config->GetChunkWorldSize());
@@ -1168,7 +1165,6 @@ bool FVCIsland_SpawnPastRing::RunTest(const FString& Parameters)
 		TestTrue(TEXT("The rule before, when it finds land, finds it inside the bounds too"), Bounds.ContainsXY(Before.X, Before.Y));
 	}
 
-	FVCVoxelNavigationHelper::ClearCache();
 	W.Stop();
 	return true;
 }

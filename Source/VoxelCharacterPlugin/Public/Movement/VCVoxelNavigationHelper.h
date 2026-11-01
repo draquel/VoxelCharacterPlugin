@@ -21,15 +21,6 @@ class VOXELCHARACTERPLUGIN_API FVCVoxelNavigationHelper
 {
 public:
 	/**
-	 * Find the VoxelChunkManager component in the world.
-	 * Caches the result internally for fast repeated lookups.
-	 *
-	 * @param World World context
-	 * @return Chunk manager or nullptr if not found
-	 */
-	static UVoxelChunkManager* FindChunkManager(const UWorld* World);
-
-	/**
 	 * Query full terrain context at a world position.
 	 * Populates surface type, friction, water state, and chunk coordinate. The water depth is the sea's
 	 * (UVoxelChunkManager::GetSeaSurface): along the radius on a planet (spherical SP-E1).
@@ -147,11 +138,4 @@ public:
 	static bool FindPlanetSpawnPointAtScale(const FVector& Centre, double Radius, const FVector& StartDirection, double FirstArc,
 		TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelSeaSurface& Sea, FVector& OutPosition, double& OutArc,
 		int32 MaxSamples = 4096);
-
-	/** Clear the cached chunk manager reference (call on world teardown). */
-	static void ClearCache();
-
-private:
-	/** Cached chunk manager (weak to avoid preventing GC). */
-	static TWeakObjectPtr<UVoxelChunkManager> CachedChunkManager;
 };

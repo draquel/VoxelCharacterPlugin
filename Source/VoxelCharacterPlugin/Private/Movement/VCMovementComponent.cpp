@@ -154,7 +154,7 @@ void UVCMovementComponent::BeginPlay()
 	BaseMaxAcceleration = MaxAcceleration;
 
 	// Subscribe to chunk edit events for terrain cache invalidation
-	if (UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld()))
+	if (UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld()))
 	{
 		if (UVoxelEditManager* EditMgr = ChunkMgr->GetEditManager())
 		{
@@ -247,7 +247,7 @@ void UVCMovementComponent::RefreshWorldBounds()
 	{
 		return;
 	}
-	if (const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld()))
+	if (const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld()))
 	{
 		CachedWorldBounds = ChunkMgr->GetWorldBounds();
 		bHasWorldBounds = true;
@@ -265,7 +265,7 @@ void UVCMovementComponent::RefreshBlockStepHeight()
 	{
 		return;
 	}
-	const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
 	if (!ChunkMgr || !ChunkMgr->IsInitialized() || !Config)
 	{
@@ -959,7 +959,7 @@ void UVCMovementComponent::OnVoxelChunkModified(const FIntVector& ChunkCoord, EE
 		// No centre: a batch of single-voxel edits (a POI's terraform, a campsite pad, a dungeon stamp), undo, a clear or
 		// a load. The box of the voxels the edit changed in this chunk, which the edit manager gives while it broadcasts;
 		// without it, the whole chunk. Chunks are world-aligned boxes on every world mode, a planet's too.
-		const UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(World);
+		const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
 		const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
 		if (Config)
 		{
@@ -1196,7 +1196,7 @@ void UVCMovementComponent::TryBindCollisionReady()
 	{
 		return;
 	}
-	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(GetWorld());
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	UVoxelCollisionManager* ColMgr = ChunkMgr ? ChunkMgr->GetCollisionManager() : nullptr;
 	if (ColMgr)
 	{
@@ -1220,7 +1220,7 @@ void UVCMovementComponent::OnVoxelCollisionReady(const FIntVector& ChunkCoord)
 	}
 
 	// Only the chunks the capsule can touch matter.
-	UVoxelChunkManager* ChunkMgr = FVCVoxelNavigationHelper::FindChunkManager(World);
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
 	if (!ChunkMgr)
 	{
 		return;
@@ -1242,7 +1242,7 @@ bool UVCMovementComponent::ResolveTerrainEmbedding()
 {
 	ACharacter* Character = GetCharacterOwner();
 	UWorld* World = GetWorld();
-	UVoxelChunkManager* ChunkMgr = World ? FVCVoxelNavigationHelper::FindChunkManager(World) : nullptr;
+	UVoxelChunkManager* ChunkMgr = World ? UVoxelChunkManager::Find(World) : nullptr;
 	const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
 	const UCapsuleComponent* Capsule = Character ? Character->GetCapsuleComponent() : nullptr;
 	if (!Character || !Character->HasAuthority() || !Config || !Capsule)
