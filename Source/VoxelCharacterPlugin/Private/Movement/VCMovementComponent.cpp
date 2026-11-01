@@ -8,6 +8,7 @@
 #include "VoxelChunkManager.h"
 #include "VoxelCollisionManager.h"
 #include "VoxelWorldConfiguration.h"
+#include "VoxelMaterialRegistry.h"
 #include "VoxelEditManager.h"
 #include "Components/CapsuleComponent.h"
 #include "Engine/World.h"
@@ -404,7 +405,7 @@ void UVCMovementComponent::PhysFlying(float DeltaTime, int32 Iterations)
 
 	// Across local up: the engine's flying velocity from the movement input; without input it stops at once, as the
 	// engine's cheat flying does (QA flight hovers where it is let go).
-	const FVector Up = GetLocalUp();
+	const FVector Up = FVCGravityFrame::GetUp(this);
 	Acceleration -= Up * FVector::DotProduct(Acceleration, Up);
 	if (Acceleration.IsNearlyZero())
 	{
@@ -532,7 +533,7 @@ void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
 	const bool bWantsDescent = CharacterOwner && !bWantsAscend && (CharacterOwner->bIsCrouched || IsCrouching() || bWantsToCrouch);
 	if (bWantsAscend)
 	{
-		Acceleration += GetLocalUp() * DiveAscendAcceleration;
+		Acceleration += FVCGravityFrame::GetUp(this) * DiveAscendAcceleration;
 		AnalogInputModifier = 1.f;
 	}
 	else if (bWantsDescent)
@@ -548,7 +549,7 @@ void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
 
 		if (!bHitFloor)
 		{
-			Acceleration -= GetLocalUp() * DiveDescendAcceleration;
+			Acceleration -= FVCGravityFrame::GetUp(this) * DiveDescendAcceleration;
 			AnalogInputModifier = 1.f;
 		}
 	}
@@ -570,7 +571,7 @@ void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
 		{
 			// Scale buoyancy with depth: strongest deep, zero at surface
 			const float DepthRatio = FMath::Clamp(CachedTerrainContext.WaterDepth / FMath::Max(SwimmingEntryDepth, 1.f), 0.f, 1.f);
-			Velocity += GetLocalUp() * (SurfaceBuoyancyStrength * DepthRatio * DeltaTime);
+			Velocity += FVCGravityFrame::GetUp(this) * (SurfaceBuoyancyStrength * DepthRatio * DeltaTime);
 		}
 
 		// --- Surface damping: decelerate upward motion near water surface ---
@@ -638,7 +639,7 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 	// Query voxel terrain at the character's feet position (along local down: radial on a planet)
 	const float HalfHeight = Owner->GetSimpleCollisionHalfHeight();
 	const FVector FeetPos = Owner->GetActorLocation() + GetGravityDirection() * HalfHeight;
-	CachedTerrainContext = FVCVoxelNavigationHelper::QueryTerrainContext(GetWorld(), FeetPos, GetLocalUp());
+	CachedTerrainContext = FVCVoxelNavigationHelper::QueryTerrainContext(GetWorld(), FeetPos, FVCGravityFrame::GetUp(this));
 
 	// If feet-level water check missed (feet on solid ocean floor), check at body center.
 	// When standing on the seabed, feet are in a solid voxel (no water flag) but the
@@ -684,7 +685,7 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 		// exiting. Skip this when water IS detected but shallow (genuine shore exit).
 		if (!CachedTerrainContext.bIsUnderwater)
 		{
-			const FVector UpperBodyPos = Owner->GetActorLocation() + GetLocalUp() * (HalfHeight * 0.5f);
+			const FVector UpperBodyPos = Owner->GetActorLocation() + FVCGravityFrame::GetUp(this) * (HalfHeight * 0.5f);
 			float UpperBodyWaterDepth = 0.f;
 			if (FVCVoxelNavigationHelper::IsPositionUnderwater(GetWorld(), UpperBodyPos, UpperBodyWaterDepth))
 			{
@@ -885,24 +886,24 @@ void UVCMovementComponent::OnMoveSpeedAttributeChanged(const FOnAttributeChangeD
 
 EVoxelSurfaceType UVCMovementComponent::MaterialIDToSurfaceType(uint8 MaterialID)
 {
-	// Maps EVoxelMaterial IDs to logical surface types.
-	// These constants match VoxelMaterialRegistry.h in VoxelCore.
+	// The registry's materials (EVoxelMaterial, VoxelMaterialRegistry.h) to the movement's surface types (code review CR2,
+	// VCP-14; a surface class on FVoxelMaterialDefinition would make this data).
 	switch (MaterialID)
 	{
-	case 0:  return EVoxelSurfaceType::Grass;   // Grass
-	case 1:  return EVoxelSurfaceType::Dirt;    // Dirt
-	case 2:  return EVoxelSurfaceType::Stone;   // Stone
-	case 3:  return EVoxelSurfaceType::Sand;    // Sand
-	case 4:  return EVoxelSurfaceType::Snow;    // Snow
-	case 5:  return EVoxelSurfaceType::Sand;    // Sandstone
-	case 6:  return EVoxelSurfaceType::Ice;     // FrozenDirt
-	case 10: return EVoxelSurfaceType::Stone;   // Coal
-	case 11: return EVoxelSurfaceType::Metal;   // Iron
-	case 12: return EVoxelSurfaceType::Metal;   // Gold
-	case 13: return EVoxelSurfaceType::Metal;   // Copper
-	case 14: return EVoxelSurfaceType::Stone;   // Diamond
-	case 20: return EVoxelSurfaceType::Wood;    // Wood
-	case 21: return EVoxelSurfaceType::Grass;   // Leaves
+	case EVoxelMaterial::Grass:      return EVoxelSurfaceType::Grass;
+	case EVoxelMaterial::Dirt:       return EVoxelSurfaceType::Dirt;
+	case EVoxelMaterial::Stone:      return EVoxelSurfaceType::Stone;
+	case EVoxelMaterial::Sand:       return EVoxelSurfaceType::Sand;
+	case EVoxelMaterial::Snow:       return EVoxelSurfaceType::Snow;
+	case EVoxelMaterial::Sandstone:  return EVoxelSurfaceType::Sand;
+	case EVoxelMaterial::FrozenDirt: return EVoxelSurfaceType::Ice;
+	case EVoxelMaterial::Coal:       return EVoxelSurfaceType::Stone;
+	case EVoxelMaterial::Iron:       return EVoxelSurfaceType::Metal;
+	case EVoxelMaterial::Gold:       return EVoxelSurfaceType::Metal;
+	case EVoxelMaterial::Copper:     return EVoxelSurfaceType::Metal;
+	case EVoxelMaterial::Diamond:    return EVoxelSurfaceType::Stone;
+	case EVoxelMaterial::Wood:       return EVoxelSurfaceType::Wood;
+	case EVoxelMaterial::Leaves:     return EVoxelSurfaceType::Grass;
 	default: return EVoxelSurfaceType::Default;
 	}
 }
@@ -1096,7 +1097,7 @@ bool UVCMovementComponent::TryClimbOutOfWater(const FHitResult& Hit)
 
 	// Only at the surface (head out or nearly), only into something steep, and only when trying to go that way. Heights
 	// and the horizontal are in the gravity frame (local up on a planet, WM-W2).
-	const FVector Up = GetLocalUp();
+	const FVector Up = FVCGravityFrame::GetUp(this);
 	const FVector Push = GetHorizontalDirection(Acceleration);
 	if (CachedTerrainContext.WaterDepth > HalfHeight * 1.5f || GetGravitySpaceZ(Hit.ImpactNormal) > 0.7f || Push.IsNearlyZero()
 		|| FVector::DotProduct(Push, -GetHorizontalDirection(Hit.ImpactNormal)) < 0.3f)
@@ -1158,7 +1159,7 @@ void UVCMovementComponent::TickBreath(float DeltaTime)
 	BreathTimer = 0.f;
 
 	const FVector Head = Character->GetActorLocation()
-		+ GetLocalUp() * (Character->GetSimpleCollisionHalfHeight() * HeadHeightFraction);
+		+ FVCGravityFrame::GetUp(this) * (Character->GetSimpleCollisionHalfHeight() * HeadHeightFraction);
 	float HeadDepth = 0.f;
 	// The voxel holding the water line is flagged water top to bottom, so a head floating just above the line still
 	// lands in a water voxel: it is under only when it is also below the water level.
@@ -1262,7 +1263,7 @@ bool UVCMovementComponent::ResolveTerrainEmbedding()
 		return ChunkMgr->GetEditMergedVoxelAtWorldPosition(P + FVector(VoxelSize * 0.5f)).IsSolid();
 	};
 	// Along local up (radial on a planet, WM-W2).
-	const FVector Up = GetLocalUp();
+	const FVector Up = FVCGravityFrame::GetUp(this);
 	if (!IsSolidAt(Center) || !IsSolidAt(Center + Up * (HalfHeight * 0.5f)))
 	{
 		return false;

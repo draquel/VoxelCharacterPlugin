@@ -18,6 +18,7 @@ class UVCMinimapWidget;
 class UVCWorldMapWidget;
 class UVoxelChunkManager;
 class UVoxelWorldConfiguration;
+struct FVoxelBrushParams;
 struct FVoxelTreeInstance;
 
 /** A voxel modification was (partially) blocked — RejectedVoxelCount voxels refused the edit. */
@@ -233,6 +234,18 @@ public:
 
 	/** How far a player edits: from the pawn to the voxel's corner (Server_RequestVoxelModification's rule since feature 8). */
 	static constexpr float EditReach = 800.f;
+
+	/** The world position of a voxel's min corner, VoxelCoord * VoxelSize + WorldOrigin (the edit reach's rule; CR2, VCP-13). */
+	static FVector VoxelCornerWorld(const UVoxelWorldConfiguration* Config, const FIntVector& VoxelCoord);
+
+	/** The centre of a cubic voxel's block, half a voxel past its corner: where the one-block brushes aim. */
+	static FVector BlockCentreWorld(const UVoxelWorldConfiguration* Config, const FIntVector& VoxelCoord);
+
+	/**
+	 * The one-block brush of a cubic world (world modes review WM-C2, KC5): a full-strength cube around one voxel, under half
+	 * a voxel wide so it reaches no neighbour, density all the way (to 0 on a dig, 255 on a place); one click is one block.
+	 */
+	static FVoxelBrushParams MakeBlockBrush(const UVoxelWorldConfiguration* Config);
 
 	/**
 	 * Whether a voxel is within a player's edit reach (world modes review WM-C12): the server's rule for digs, places and

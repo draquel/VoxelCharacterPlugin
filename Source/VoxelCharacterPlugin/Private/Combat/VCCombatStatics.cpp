@@ -3,7 +3,9 @@
 #include "Combat/VCCombatStatics.h"
 #include "Combat/VCDamageReceiverInterface.h"
 #include "Combat/VCCombatComponent.h"
+#include "Utilities/CGFCombatStatics.h"
 #include "GameFramework/Actor.h"
+#include "Engine/World.h"
 
 UVCCombatComponent* UVCCombatStatics::FindCombatComponent(AActor* Actor)
 {
@@ -34,4 +36,23 @@ FCGFDamageContext UVCCombatStatics::MakeDamageContext(AActor* Instigator, AActor
 	Context.DamageType = DamageType;
 	Context.bIgnoreFaction = bIgnoreFaction;
 	return Context;
+}
+
+FVCViewSweep UVCCombatStatics::SweepHostileUnderView(AActor* Viewer, float Range, float ProbeRadius, const FCollisionQueryParams& Params)
+{
+	FVCViewSweep Sweep;
+	UWorld* World = Viewer ? Viewer->GetWorld() : nullptr;
+	if (!World)
+	{
+		return Sweep;
+	}
+	Viewer->GetActorEyesViewPoint(Sweep.ViewLocation, Sweep.ViewRotation);
+	const FVector End = Sweep.ViewLocation + Sweep.ViewRotation.Vector() * Range;
+	Sweep.bHit = World->SweepSingleByChannel(Sweep.Hit, Sweep.ViewLocation, End, FQuat::Identity, ECC_Pawn, FCollisionShape::MakeSphere(ProbeRadius), Params);
+	AActor* HitActor = Sweep.bHit ? Sweep.Hit.GetActor() : nullptr;
+	if (HitActor && UCGFCombatStatics::FindDamageable(HitActor).GetObject() && UCGFCombatStatics::AreHostile(Viewer, HitActor))
+	{
+		Sweep.Hostile = HitActor;
+	}
+	return Sweep;
 }

@@ -546,38 +546,28 @@ bool AVCCharacterBase::IsIncapacitated() const
 
 AActor* AVCCharacterBase::FindMeleeTargetUnderCrosshair()
 {
-	UWorld* World = GetWorld();
-	if (!World)
+	if (!GetWorld())
 	{
 		return nullptr;
 	}
-	// Same view the server-side ability uses: eyes + control rotation, not the third-person camera
-	// (which sits metres behind the pawn and lags the control rotation by a frame).
-	// ECC_Pawn, not ECC_Visibility: the engine's Pawn and CharacterMesh profiles ignore Visibility,
-	// so a visibility trace passes straight through every character. Terrain still blocks Pawn.
-	// A thin sphere, not a ray: a ray exactly through a capsule's axis misses it (WM-C9, KC12).
-	FVector Start;
-	FRotator ViewRotation;
-	GetActorEyesViewPoint(Start, ViewRotation);
-	const FVector End = Start + ViewRotation.Vector() * AttackTargetRange;
+	// The same sweep the server-side ability runs (UVCCombatStatics::SweepHostileUnderView): eyes + control rotation, not the
+	// third-person camera (which sits metres behind the pawn and lags the control rotation by a frame).
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCMeleeTarget), false, this);
-	FHitResult Hit;
-	if (!World->SweepSingleByChannel(Hit, Start, End, FQuat::Identity, ECC_Pawn, FCollisionShape::MakeSphere(AttackTargetProbeRadius), Params))
+	const FVCViewSweep Sweep = UVCCombatStatics::SweepHostileUnderView(this, AttackTargetRange, AttackTargetProbeRadius, Params);
+	if (!Sweep.bHit)
 	{
 		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s melee target: nothing within %.0f uu from %s toward %s."), *GetName(), AttackTargetRange,
-			*Start.ToCompactString(), *ViewRotation.ToCompactString());
+			*Sweep.ViewLocation.ToCompactString(), *Sweep.ViewRotation.ToCompactString());
 		return nullptr;
 	}
-
-	AActor* HitActor = Hit.GetActor();
-	if (!HitActor || !UCGFCombatStatics::FindDamageable(HitActor).GetObject() || !UCGFCombatStatics::AreHostile(this, HitActor))
+	if (!Sweep.Hostile)
 	{
 		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s melee target: the crosshair's sweep met %s (%s) at %s, %.0f uu, from %s toward %s."), *GetName(),
-			*GetNameSafe(HitActor), *GetNameSafe(Hit.GetComponent()), *Hit.ImpactPoint.ToCompactString(), Hit.Distance, *Start.ToCompactString(),
-			*ViewRotation.ToCompactString());
+			*GetNameSafe(Sweep.Hit.GetActor()), *GetNameSafe(Sweep.Hit.GetComponent()), *Sweep.Hit.ImpactPoint.ToCompactString(), Sweep.Hit.Distance,
+			*Sweep.ViewLocation.ToCompactString(), *Sweep.ViewRotation.ToCompactString());
 		return nullptr;
 	}
-	return HitActor;
+	return Sweep.Hostile;
 }
 
 bool AVCCharacterBase::TryStartMeleeAttack()
@@ -918,35 +908,28 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 	const FVector RelPos = CharPos - Config->WorldOrigin;
 	const FIntVector CenterChunk = FVoxelCoordinates::WorldToChunk(RelPos, Config->ChunkSize, Config->VoxelSize);
 
-	// Build the grid of chunks we need to wait for (radius on X/Y, center chunk Z only). On a planet the grid lies in the
-	// tangent plane at the spawn point (plus the chunk under the feet along local down): at mid latitudes the surface
-	// crosses chunk layers diagonally, so an X/Y grid at one Z misses the ground (spherical SP-F4).
+	// The grid of chunks to wait for: TerrainWaitChunkRadius chunks either way across local up at the pawn's own chunk layer,
+	// in the tangent frame at the pawn. On a heightmap world up is +Z and the frame is the world's X and Y (the chunk grid
+	// around the centre chunk, in that order); on a planet the surface crosses chunk layers diagonally at mid latitudes, so
+	// an X/Y grid at one Z would miss the ground (spherical SP-F4). One loop for every up (code review CR2, VCP-18).
 	TArray<FIntVector> WaitChunks;
 	const FVoxelWorldBounds Bounds = ChunkMgr->GetWorldBounds();
+	const FVector Up = ChunkMgr->GetUpVectorAt(CharPos);
+	const FVector T2 = FVector::CrossProduct(Up, FMath::Abs(Up.Z) < 0.9 ? FVector::UpVector : FVector::ForwardVector).GetSafeNormal();
+	const FVector T1 = FVector::CrossProduct(T2, Up);
+	const float ChunkWorldSize = Config->GetChunkWorldSize();
+	for (int32 DX = -TerrainWaitChunkRadius; DX <= TerrainWaitChunkRadius; ++DX)
+	{
+		for (int32 DY = -TerrainWaitChunkRadius; DY <= TerrainWaitChunkRadius; ++DY)
+		{
+			WaitChunks.AddUnique(ChunkMgr->WorldToChunkCoord(CharPos + (T1 * DX + T2 * DY) * ChunkWorldSize));
+		}
+	}
 	if (Bounds.Shape == EVoxelWorldBoundsShape::Shell)
 	{
-		const FVector Up = ChunkMgr->GetUpVectorAt(CharPos);
-		const FVector T1 = FVector::CrossProduct(FMath::Abs(Up.Z) < 0.9 ? FVector::UpVector : FVector::ForwardVector, Up).GetSafeNormal();
-		const FVector T2 = FVector::CrossProduct(Up, T1);
-		const float ChunkWorldSize = Config->GetChunkWorldSize();
-		for (int32 DX = -TerrainWaitChunkRadius; DX <= TerrainWaitChunkRadius; ++DX)
-		{
-			for (int32 DY = -TerrainWaitChunkRadius; DY <= TerrainWaitChunkRadius; ++DY)
-			{
-				WaitChunks.AddUnique(ChunkMgr->WorldToChunkCoord(CharPos + (T1 * DX + T2 * DY) * ChunkWorldSize));
-			}
-		}
+		// The chunk under the feet along local down: a planet's ground may lie in the layer below. A heightmap pawn in the
+		// lower half of its chunk has the same gap and waits for no such chunk (G84, WORLD_MODES_REVIEW_PLAN.md); kept as it was.
 		WaitChunks.AddUnique(ChunkMgr->WorldToChunkCoord(CharPos - Up * (0.5f * ChunkWorldSize)));
-	}
-	else
-	{
-		for (int32 DX = -TerrainWaitChunkRadius; DX <= TerrainWaitChunkRadius; ++DX)
-		{
-			for (int32 DY = -TerrainWaitChunkRadius; DY <= TerrainWaitChunkRadius; ++DY)
-			{
-				WaitChunks.Add(FIntVector(CenterChunk.X + DX, CenterChunk.Y + DY, CenterChunk.Z));
-			}
-		}
 	}
 	TerrainWaitTotalChunks = WaitChunks.Num();
 	PendingTerrainChunks.Empty();
@@ -1311,34 +1294,21 @@ void AVCCharacterBase::TickWorldSafety(float DeltaSeconds)
 	}
 	const FVector Here = GetActorLocation();
 	const FVoxelWorldBounds WorldBounds = ChunkMgr->GetWorldBounds();
-	if (WorldBounds.Shape == EVoxelWorldBoundsShape::Shell)
+	if (IsOutOfWorld(WorldBounds, Here, OutOfWorldDepth) && !(CombatComponent && ICGFDamageableInterface::Execute_IsDead(CombatComponent)))
 	{
-		// A planet: below its terrain is toward the centre (SP-F5).
-		if (IsOutOfWorld(WorldBounds, Here, OutOfWorldDepth) && !(CombatComponent && ICGFDamageableInterface::Execute_IsDead(CombatComponent)))
+		// A planet: below its lowest terrain is toward the centre, and past its orbit ceiling is out too (SP-F5); a heightmap
+		// world: below its lowest terrain (IsOutOfWorld, from a real terrain range only).
+		if (WorldBounds.Shape == EVoxelWorldBoundsShape::Shell)
 		{
 			UE_LOG(LogVoxelCharacter, Warning, TEXT("%s is %.0f inside the planet's lowest terrain or past its orbit ceiling (%.0f from the centre): out of the world."),
 				*GetName(), OutOfWorldDepth, FVector::Dist(Here, WorldBounds.Center));
-			FellOutOfWorld(*GetDefault<UDamageType>());
-			return;
 		}
-	}
-	else
-	{
-		if (!bHasOutOfWorldZ && OutOfWorldDepth > 0.f)
-		{
-			// Only from a real terrain range (a mode without one reports about +-1e9).
-			if (WorldBounds.MinZ > -1.0e6f)
-			{
-				OutOfWorldZ = WorldBounds.MinZ - OutOfWorldDepth;
-				bHasOutOfWorldZ = true;
-			}
-		}
-		if (bHasOutOfWorldZ && Here.Z < OutOfWorldZ && !(CombatComponent && ICGFDamageableInterface::Execute_IsDead(CombatComponent)))
+		else
 		{
 			UE_LOG(LogVoxelCharacter, Warning, TEXT("%s is %.0f below the world's lowest terrain: out of the world."), *GetName(), OutOfWorldDepth);
-			FellOutOfWorld(*GetDefault<UDamageType>());
-			return;
 		}
+		FellOutOfWorld(*GetDefault<UDamageType>());
+		return;
 	}
 	if (Move->IsMovingOnGround() && ChunkMgr->IsInsideWorld(Here.X, Here.Y))
 	{

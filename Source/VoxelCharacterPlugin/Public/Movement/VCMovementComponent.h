@@ -189,10 +189,6 @@ public:
 	// and staying upright then run in the engine's gravity space; this component's own vertical code (swimming, the floor
 	// line traces, the shore climb, breath, the embed resolve) uses the same frame. Heightmap worlds never set it.
 
-	/** Local up: minus the gravity direction (radial on a planet, +Z elsewhere). */
-	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Gravity")
-	FVector GetLocalUp() const { return -GetGravityDirection(); }
-
 	/** True when the voxel world is a planet, so gravity points at its centre. */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Gravity")
 	bool HasPlanetGravity() const { return bPlanetGravity; }

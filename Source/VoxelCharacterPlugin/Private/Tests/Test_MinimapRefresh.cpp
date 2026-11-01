@@ -20,6 +20,10 @@
 // - MinimapShift: on a planet, a texture filled two texels away and shifted, with the heading taken on the plane it was
 //   drawn in, shows the terrain where a fresh fill would, to a fraction of a texel, at every latitude short of the pole
 //   (the heading taken on the player's own plane would be off by over a texel at the rim near a pole).
+// - WorldMapFill (code review CR2, VCP-15): the world map's image through the plane sampler (north up, explored tiles
+//   only, the fog colours) against the blit the widget ran before, kept here as the reference: the same fog, and in the
+//   explored tiles the blit's texels where tiles are finer than texels (texels at a tile pixel's boundary rounded either
+//   way, as PlaneMapSampler allows), every texel drawn where they are coarser.
 // ---------------------------------------------------------------------------
 
 #define VC_MINIMAP_FLAGS (EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
@@ -130,6 +134,169 @@ bool FVCMap_PlaneMapSampler::RunTest(const FString& Parameters)
 				// Tile pixels coarser than texels: the blit wrote one texel per tile pixel and left the rest as background (a
 				// third of them here); the texel fill draws them all.
 				TestTrue(TEXT("Coarser tile pixels: the blit left gaps"), BlitGaps > Total / 10);
+			}
+		}
+	}
+	W.Stop();
+	return true;
+}
+
+namespace
+{
+	/**
+	 * The world map's plane fill as UVCWorldMapWidget ran it before code review CR2 (VCP-15), verbatim but for the image
+	 * requests: fog (10) everywhere, then every pixel of every explored tile in view blitted at its near corner, north up
+	 * (world +X up, +Y right), an explored tile without an image blitting the lighter fog (25) over its pixels' places.
+	 */
+	void ReferenceWorldMapBlit(UVoxelMapSubsystem& Subsystem, uint8* PixelData, int32 TexSize, const FVector2D& PanOffset, float ViewWorldExtent)
+	{
+		const float TileWorldSize = Subsystem.GetTileWorldSize();
+		const int32 TileResolution = Subsystem.GetTileResolution();
+		const float RenderedWorldPerPixel = (ViewWorldExtent * 2.0f) / static_cast<float>(TexSize);
+		const int32 RenderedTileRadius = FMath::CeilToInt(ViewWorldExtent / TileWorldSize);
+		const FIntPoint RenderedCenterTile = Subsystem.WorldToTileCoord(FVector(PanOffset.X, PanOffset.Y, 0.0f));
+		const int32 TotalPixels = TexSize * TexSize;
+		for (int32 i = 0; i < TotalPixels; ++i)
+		{
+			PixelData[i * 4 + 0] = 10;
+			PixelData[i * 4 + 1] = 10;
+			PixelData[i * 4 + 2] = 10;
+			PixelData[i * 4 + 3] = 255;
+		}
+		const float ViewCenterX = PanOffset.X;
+		const float ViewCenterY = PanOffset.Y;
+		const float WorldMaxX = ViewCenterX + ViewWorldExtent;
+		const float WorldMinY = ViewCenterY - ViewWorldExtent;
+		for (int32 TY = -RenderedTileRadius; TY <= RenderedTileRadius; ++TY)
+		{
+			for (int32 TX = -RenderedTileRadius; TX <= RenderedTileRadius; ++TX)
+			{
+				const FIntPoint TileCoord(RenderedCenterTile.X + TX, RenderedCenterTile.Y + TY);
+				const bool bExplored = Subsystem.IsTileExplored(TileCoord);
+				const FVoxelMapTile* Tile = bExplored ? Subsystem.GetTile(TileCoord) : nullptr;
+				if (!bExplored)
+				{
+					continue;
+				}
+				const FVector TileWorldOrigin = Subsystem.TileCoordToWorld(TileCoord);
+				const int32 SrcRes = Tile ? Tile->Resolution : TileResolution;
+				const float PixelWorldSize = TileWorldSize / SrcRes;
+				for (int32 PY = 0; PY < SrcRes; ++PY)
+				{
+					for (int32 PX = 0; PX < SrcRes; ++PX)
+					{
+						const float PixWorldX = TileWorldOrigin.X + PX * PixelWorldSize;
+						const float PixWorldY = TileWorldOrigin.Y + PY * PixelWorldSize;
+						const int32 DstX = FMath::FloorToInt((PixWorldY - WorldMinY) / RenderedWorldPerPixel);
+						const int32 DstY = FMath::FloorToInt((WorldMaxX - PixWorldX) / RenderedWorldPerPixel);
+						if (DstX < 0 || DstX >= TexSize || DstY < 0 || DstY >= TexSize)
+						{
+							continue;
+						}
+						const int32 DstIdx = (DstY * TexSize + DstX) * 4;
+						if (Tile)
+						{
+							const FColor& SrcColor = Tile->PixelData[PY * SrcRes + PX];
+							PixelData[DstIdx + 0] = SrcColor.B;
+							PixelData[DstIdx + 1] = SrcColor.G;
+							PixelData[DstIdx + 2] = SrcColor.R;
+							PixelData[DstIdx + 3] = SrcColor.A;
+						}
+						else
+						{
+							PixelData[DstIdx + 0] = 25;
+							PixelData[DstIdx + 1] = 25;
+							PixelData[DstIdx + 2] = 25;
+							PixelData[DstIdx + 3] = 255;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCMap_WorldMapFill, "VoxelCharacter.Map.WorldMapFill", VC_MINIMAP_FLAGS)
+bool FVCMap_WorldMapFill::RunTest(const FString& Parameters)
+{
+	VoxelTesting::FTestChunkWorld W;
+	W.Create(TEXT("VCWorldMapFill"));
+	W.ConfigureSmallPlane();
+	W.StartManager();
+	UVoxelMapSubsystem* Map = W.World->GetSubsystem<UVoxelMapSubsystem>();
+	if (TestNotNull(TEXT("The game world has a map"), Map))
+	{
+		const double TileSize = Map->GetTileWorldSize();
+		// A pan off the tile grid, as a player's position is; explored out to 2.5 tiles, so a 6-tile view holds fog too.
+		const FVector Center = W.Config->WorldOrigin + FVector(TileSize * 0.37, -TileSize * 0.61, 0.0);
+		const FVector2D Pan(Center.X, Center.Y);
+		constexpr int32 TexSize = 128;
+		Map->RequestTilesInRadius(Center, static_cast<float>(TileSize * 2.5));
+		const double Deadline = FPlatformTime::Seconds() + 60.0;
+		while (!Map->GetDebugStats().Contains(TEXT("waiting=0 drawing=0")) && FPlatformTime::Seconds() < Deadline)
+		{
+			FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+			FPlatformProcess::Sleep(0.005f);
+		}
+		TestTrue(TEXT("The explored tiles drew"), Map->GetDebugStats().Contains(TEXT("waiting=0 drawing=0")));
+
+		// The world map's own numbers: the view's half extent in tiles, the world per texel from it (float, as the widget).
+		for (const float ViewTiles : { 6.0f, 0.75f })
+		{
+			const float ViewWorldExtent = ViewTiles * static_cast<float>(TileSize);
+			const float WorldPerPixel = (ViewWorldExtent * 2.0f) / static_cast<float>(TexSize);
+			TArray<uint8> Reference, Texels;
+			Reference.SetNumZeroed(TexSize * TexSize * 4);
+			Texels.SetNumZeroed(TexSize * TexSize * 4);
+			ReferenceWorldMapBlit(*Map, Reference.GetData(), TexSize, Pan, ViewWorldExtent);
+			FVCPlaneMapSampler Sampler;
+			Sampler.bNorthUp = true;
+			Sampler.bRequireExplored = true;
+			Sampler.Unexplored = FColor(10, 10, 10, 255);
+			Sampler.Undrawn = FColor(25, 25, 25, 255);
+			Sampler.Background = Sampler.Unexplored;
+			const int32 Drawn = Sampler.Fill(*Map, Texels.GetData(), TexSize, FVector(Pan.X, Pan.Y, 0.0), WorldPerPixel);
+
+			auto IsGrey = [](const uint8* T, uint8 V) { return T[0] == V && T[1] == V && T[2] == V; };
+			int32 Same = 0, FogRef = 0, FogNew = 0, FogBoth = 0, ExploredTexels = 0, SameExplored = 0, GapsRef = 0;
+			for (int32 I = 0; I < TexSize * TexSize; ++I)
+			{
+				const uint8* A = Reference.GetData() + I * 4;
+				const uint8* B = Texels.GetData() + I * 4;
+				const bool bSame = A[0] == B[0] && A[1] == B[1] && A[2] == B[2] && A[3] == B[3];
+				const bool bFogA = IsGrey(A, 10);
+				const bool bFogB = IsGrey(B, 10);
+				Same += bSame ? 1 : 0;
+				FogRef += bFogA ? 1 : 0;
+				FogNew += bFogB ? 1 : 0;
+				FogBoth += (bFogA && bFogB) ? 1 : 0;
+				if (!bFogB)
+				{
+					++ExploredTexels;
+					SameExplored += bSame ? 1 : 0;
+				}
+			}
+			const int32 Total = TexSize * TexSize;
+			AddInfo(FString::Printf(TEXT("%.2f tiles of half extent (%.1f texels a tile): %d of %d texels drawn; the same as the blit %d (%.2f%%); fog: blit %d, sampler %d, both %d; of the %d explored texels %d the blit's (%.2f%%)"),
+				ViewTiles, static_cast<float>(TileSize) / WorldPerPixel, Drawn, Total, Same, 100.0 * Same / Total, FogRef, FogNew, FogBoth,
+				ExploredTexels, SameExplored, ExploredTexels > 0 ? 100.0 * SameExplored / ExploredTexels : 0.0));
+			TestTrue(TEXT("The view holds explored ground"), ExploredTexels > 0);
+			if (ViewTiles > 1.0f)
+			{
+				TestTrue(TEXT("The wide view holds fog"), FogNew > 0);
+				// Tiles finer than texels: the blit's fog, texel for texel, plus the one texel along the exploration border where
+				// the far-corner rule reads the unexplored tile the blit's near-corner rule did not (0.4% of the texels here);
+				// in the explored ground the blit's image but texels at a pixel boundary.
+				TestEqual(TEXT("Finer tiles: the blit's fog is the sampler's"), FogBoth, FogRef);
+				TestTrue(TEXT("Finer tiles: fog beyond the blit's only along the exploration border (under 1% of the texels)"), FogNew - FogRef <= Total / 100);
+				TestTrue(TEXT("Finer tiles: at least 98% of the explored texels are the blit's"), SameExplored >= ExploredTexels * 98 / 100);
+			}
+			else
+			{
+				// Texels finer than tile pixels (zoomed in): the blit wrote one texel per tile pixel and left the rest as fog;
+				// the sampler draws every explored texel.
+				TestTrue(TEXT("Coarser tiles: the blit left gaps in the explored ground"), FogRef > FogNew);
+				TestEqual(TEXT("Coarser tiles: the sampler drew every explored texel"), Drawn, ExploredTexels);
 			}
 		}
 	}

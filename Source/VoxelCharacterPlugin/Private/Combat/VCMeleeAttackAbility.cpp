@@ -152,27 +152,18 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 	}
 	LastAttackTimeSeconds = Now;
 
-	// Server-side view: eye location + control rotation (replicated to the server), so the sweep
-	// does not depend on a client-only camera.
-	FVector ViewLocation;
-	FRotator ViewRotation;
-	Avatar->GetActorEyesViewPoint(ViewLocation, ViewRotation);
-	const FVector End = ViewLocation + ViewRotation.Vector() * MeleeRange;
-
-	// ECC_Pawn: the engine's Pawn / CharacterMesh profiles ignore Visibility, so a visibility sweep
-	// would pass through every character. Terrain and props still block the Pawn channel.
+	// The same sweep the client's target check runs (UVCCombatStatics::SweepHostileUnderView): eye location + control
+	// rotation (replicated to the server), so the sweep does not depend on a client-only camera.
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCMeleeAttack), /*bTraceComplex*/ false, Avatar);
-	FHitResult Hit;
-	const bool bHit = World->SweepSingleByChannel(Hit, ViewLocation, End, FQuat::Identity, ECC_Pawn,
-		FCollisionShape::MakeSphere(MeleeRadius), Params);
-
-	AActor* HitActor = bHit ? Hit.GetActor() : nullptr;
-	if (!HitActor || !UCGFCombatStatics::FindDamageable(HitActor).GetObject() || !UCGFCombatStatics::AreHostile(Avatar, HitActor))
+	const FVCViewSweep Sweep = UVCCombatStatics::SweepHostileUnderView(Avatar, MeleeRange, MeleeRadius, Params);
+	AActor* HitActor = Sweep.Hostile;
+	if (!HitActor)
 	{
 		// Swung at nothing hostile. Still a valid activation (the swing happened), just no hit.
+		AActor* Met = Sweep.bHit ? Sweep.Hit.GetActor() : nullptr;
 		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s melee missed: hit %s (%s) at (%.0f, %.0f, %.0f) dist %.0f, from (%.0f, %.0f, %.0f) toward %s"), *GetNameSafe(Avatar),
-			*GetNameSafe(HitActor), HitActor ? *GetNameSafe(Hit.GetComponent()) : TEXT("-"), Hit.ImpactPoint.X, Hit.ImpactPoint.Y, Hit.ImpactPoint.Z, Hit.Distance,
-			ViewLocation.X, ViewLocation.Y, ViewLocation.Z, *ViewRotation.ToCompactString());
+			*GetNameSafe(Met), Met ? *GetNameSafe(Sweep.Hit.GetComponent()) : TEXT("-"), Sweep.Hit.ImpactPoint.X, Sweep.Hit.ImpactPoint.Y, Sweep.Hit.ImpactPoint.Z, Sweep.Hit.Distance,
+			Sweep.ViewLocation.X, Sweep.ViewLocation.Y, Sweep.ViewLocation.Z, *Sweep.ViewRotation.ToCompactString());
 		EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 		return;
 	}
@@ -187,8 +178,8 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 	}
 
 	FCGFDamageContext Context = UVCCombatStatics::MakeDamageContext(Avatar, Avatar, Damage, Attack.DamageType);
-	Context.HitLocation = Hit.ImpactPoint;
-	Context.HitNormal = Hit.ImpactNormal;
+	Context.HitLocation = Sweep.Hit.ImpactPoint;
+	Context.HitNormal = Sweep.Hit.ImpactNormal;
 	Context.SourceItemInstanceId = Attack.ItemInstanceId;
 	if (bCritical)
 	{
