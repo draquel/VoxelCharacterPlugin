@@ -11,6 +11,7 @@ public class VoxelCharacterPlugin : ModuleRules
 			new string[]
 			{
 				"Core",
+				"DeveloperSettings", // UVCSettings
 				"CoreUObject",
 				"Engine",
 				"InputCore",
