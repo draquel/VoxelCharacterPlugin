@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Core/VCCharacterBase.h"
+#include "VoxelWorldModeTypes.h"
 #include "HAL/IConsoleManager.h"
 #include "Core/VCPlayerState.h"
 #include "Core/VCCharacterAttributeSet.h"

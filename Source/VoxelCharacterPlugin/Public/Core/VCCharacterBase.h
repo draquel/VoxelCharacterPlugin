@@ -9,7 +9,6 @@
 #include "Types/CGFItemTypes.h"
 #include "Interfaces/CGFInventoryInterface.h"
 #include "Interfaces/CGFLightBearerInterface.h"
-#include "VoxelWorldModeTypes.h"
 #include "VCCharacterBase.generated.h"
 
 class UVCCameraManager;
@@ -22,6 +21,7 @@ class UVoxelWorldConfiguration;
 class UVCCombatComponent;
 class UVCBlockInteractionComponent;
 struct FInputActionValue;
+struct FVoxelWorldBounds;
 
 #if WITH_INTERACTION_PLUGIN
 class UInteractionComponent;
