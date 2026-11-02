@@ -398,7 +398,6 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCBlock_Break, "VoxelCharacter.Cubic.BlockBrea
 bool FVCBlock_Break::RunTest(const FString& Parameters)
 {
 	using namespace VCBlockFeedbackTestHelpers;
-	FCVarScope Times(TEXT("vc.Dig.BreakTimes"), TEXT("1"));
 	FCVarScope Scale(TEXT("vc.Dig.BreakTimeScale"), TEXT("1"));
 	FCVarScope PlayerInputs(TEXT("voxel.Edit.PlayerInputs"), TEXT("1"));
 	FBlockWorld B;
@@ -494,12 +493,6 @@ bool FVCBlock_Break::RunTest(const FString& Parameters)
 	AddExpectedMessage(TEXT("refused a dig"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 	B.PC->Server_RequestVoxelModification(A, EVCVoxelModificationType::Destroy, 0);
 	TestTrue(TEXT("Server_RequestVoxelModification(Destroy) breaks nothing in a timed world"), B.Voxel(A).IsSolid());
-	{
-		// vc.Dig.BreakTimes 0: the request digs at once, as before.
-		FCVarScope Instant(TEXT("vc.Dig.BreakTimes"), TEXT("0"));
-		B.PC->Server_RequestVoxelModification(A, EVCVoxelModificationType::Destroy, 0);
-		TestTrue(TEXT("vc.Dig.BreakTimes 0: the request digs at once"), B.Voxel(A).IsAir());
-	}
 
 	// The client's hold, as the input drives it: press on the block, frames, the break, then on to the next block.
 	B.SetVoxel(A, EVoxelMaterial::Stone, true);

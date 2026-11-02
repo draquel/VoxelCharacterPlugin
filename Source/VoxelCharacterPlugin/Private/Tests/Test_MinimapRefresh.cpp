@@ -14,9 +14,9 @@
 // ---------------------------------------------------------------------------
 // The minimap's refresh (VoxelWorlds WORLD_MODES_REVIEW_PLAN.md §14.1 G64): the texture is filled again only when what it
 // shows changed, and shifted by the player's movement in between; a plane's texture is filled texel by texel.
-// - PlaneMapSampler: on a small plane's tiles the texel fill draws the image the per-tile-pixel blit did where tiles are
-//   finer than texels (but texels at a pixel boundary, rounded either way), and draws every texel where the blit left
-//   gaps (tiles coarser than texels).
+// - PlaneMapSampler: on a small plane's tiles the texel fill draws every texel from a tile image, where tiles are finer
+//   than texels and where they are coarser (the per-tile-pixel blit it replaced left gaps there; WorldMapFill keeps that
+//   blit as its reference).
 // - MinimapShift: on a planet, a texture filled two texels away and shifted, with the heading taken on the plane it was
 //   drawn in, shows the terrain where a fresh fill would, to a fraction of a texel, at every latitude short of the pole
 //   (the heading taken on the player's own plane would be off by over a texel at the rim near a pole).
@@ -96,12 +96,8 @@ bool FVCMap_PlaneMapSampler::RunTest(const FString& Parameters)
 			}
 			TestTrue(TEXT("The tiles drew"), Map->GetDebugStats().Contains(TEXT("waiting=0 drawing=0")));
 
-			TArray<uint8> Blit, Texels;
-			Blit.SetNumZeroed(TexSize * TexSize * 4);
+			TArray<uint8> Texels;
 			Texels.SetNumZeroed(TexSize * TexSize * 4);
-			FVCPlaneMapSampler Old;
-			Old.bTexelFill = false;
-			Old.Fill(*Map, Blit.GetData(), TexSize, Center, WorldPerPixel);
 			FVCPlaneMapSampler New;
 			TSet<FIntPoint> Visited;
 			New.VisitedTiles = &Visited;
@@ -109,32 +105,17 @@ bool FVCMap_PlaneMapSampler::RunTest(const FString& Parameters)
 
 			const FColor Background = New.Background;
 			auto IsBackground = [&Background](const uint8* T) { return T[0] == Background.B && T[1] == Background.G && T[2] == Background.R; };
-			int32 Same = 0, BlitGaps = 0, NewGaps = 0;
+			int32 NewGaps = 0;
 			for (int32 I = 0; I < TexSize * TexSize; ++I)
 			{
-				const uint8* A = Blit.GetData() + I * 4;
-				const uint8* B = Texels.GetData() + I * 4;
-				Same += (A[0] == B[0] && A[1] == B[1] && A[2] == B[2] && A[3] == B[3]) ? 1 : 0;
-				BlitGaps += IsBackground(A) ? 1 : 0;
-				NewGaps += IsBackground(B) ? 1 : 0;
+				NewGaps += IsBackground(Texels.GetData() + I * 4) ? 1 : 0;
 			}
 			const int32 Total = TexSize * TexSize;
-			AddInfo(FString::Printf(TEXT("%.2f tile pixels a texel: %d of %d texels drawn, %d the blit's (%.2f%%); background: blit %d, texel fill %d; %d tiles read"),
-				SourcePixelsPerTexel, Drawn, Total, Same, 100.0 * Same / Total, BlitGaps, NewGaps, Visited.Num()));
+			AddInfo(FString::Printf(TEXT("%.2f tile pixels a texel: %d of %d texels drawn; background %d; %d tiles read"),
+				SourcePixelsPerTexel, Drawn, Total, NewGaps, Visited.Num()));
 			TestEqual(TEXT("Every texel is drawn from a tile image"), Drawn, Total);
 			TestEqual(TEXT("No texel is left as background"), NewGaps, 0);
 			TestTrue(TEXT("The tiles read are reported"), Visited.Num() > 0);
-			if (SourcePixelsPerTexel > 1.0)
-			{
-				// Finer tiles: the same image but texels at a tile pixel's boundary.
-				TestTrue(TEXT("Finer tiles: at least 98% of the texels are the blit's"), Same >= Total * 98 / 100);
-			}
-			else
-			{
-				// Tile pixels coarser than texels: the blit wrote one texel per tile pixel and left the rest as background (a
-				// third of them here); the texel fill draws them all.
-				TestTrue(TEXT("Coarser tile pixels: the blit left gaps"), BlitGaps > Total / 10);
-			}
 		}
 	}
 	W.Stop();

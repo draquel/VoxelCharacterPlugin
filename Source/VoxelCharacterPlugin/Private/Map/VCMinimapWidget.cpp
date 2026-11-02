@@ -61,20 +61,6 @@ namespace VCMinimapStats
 	};
 }
 
-static TAutoConsoleVariable<int32> CVarMinimapSkipUnchanged(
-	TEXT("vc.Minimap.SkipUnchanged"),
-	1,
-	TEXT("Minimap (world modes review G64): 1 = fill the texture again only when the player moved RefillShiftTexels, a tile it "
-	     "shows changed or MaxRefillSeconds passed, shifting the image in between; 0 = fill it every refresh, as before."),
-	ECVF_Default);
-
-static TAutoConsoleVariable<int32> CVarMinimapTexelFill(
-	TEXT("vc.Minimap.TexelFill"),
-	1,
-	TEXT("Minimap on a plane (G64): 1 = fill texel by texel (columns and rows worked out once); 0 = blit every pixel of every "
-	     "tile in view, as before."),
-	ECVF_Default);
-
 // Console: vc.Minimap.Stats [reset]
 static FAutoConsoleCommand GVCMinimapStatsCmd(
 	TEXT("vc.Minimap.Stats"),
@@ -507,10 +493,6 @@ uint64 UVCMinimapWidget::ComputeTileSignature() const
 
 bool UVCMinimapWidget::NeedsRefill(const FVector& PlayerPos, double Now) const
 {
-	if (CVarMinimapSkipUnchanged.GetValueOnGameThread() == 0)
-	{
-		return true;
-	}
 	if (!bHasFill || !MapTexture || CurrentTextureSize != GetTextureSize())
 	{
 		return true;
@@ -583,9 +565,8 @@ void UVCMinimapWidget::RefreshMapTexture(const FVector& Center)
 	}
 	else
 	{
-		// A plane: texel by texel (FVCPlaneMapSampler, G64), or the blit of every tile pixel as before.
+		// A plane: texel by texel (FVCPlaneMapSampler, G64).
 		FVCPlaneMapSampler Sampler;
-		Sampler.bTexelFill = CVarMinimapTexelFill.GetValueOnGameThread() != 0;
 		Sampler.VisitedTiles = &Visited;
 		Sampler.Fill(*Subsystem, PixelData, TexSize, Center, WorldPerPixel);
 	}

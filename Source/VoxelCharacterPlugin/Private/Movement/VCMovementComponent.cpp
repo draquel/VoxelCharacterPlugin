@@ -17,14 +17,6 @@
 #include "AbilitySystemInterface.h"
 #include "Combat/VCCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
-#include "HAL/IConsoleManager.h"
-
-static TAutoConsoleVariable<int32> CVarStepUpBlocks(
-	TEXT("vc.Move.StepUpBlocks"),
-	1,
-	TEXT("Cubic worlds: players and NPCs step up one block without a jump (1, world modes review WM-C7, D29), or keep the ")
-	TEXT("smooth step so every block is a jump (0, as before). Read when a walker first sees the voxel world."),
-	ECVF_Default);
 
 namespace
 {
@@ -274,7 +266,7 @@ void UVCMovementComponent::RefreshBlockStepHeight()
 	}
 	bBlockStepResolved = true;
 	// A cubic world's ground is blocks a voxel high: step one, as the surface navigation does, and leave two to be a wall.
-	if (bStepUpOneBlock && CVarStepUpBlocks.GetValueOnGameThread() != 0 && ChunkMgr->IsBlockSurface())
+	if (bStepUpOneBlock && ChunkMgr->IsBlockSurface())
 	{
 		MaxStepHeight = GetBlockStepHeight(Config->VoxelSize, BlockStepMargin);
 		bSteppingBlocks = true;

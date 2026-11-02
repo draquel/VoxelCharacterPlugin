@@ -13,13 +13,6 @@
 #include "HAL/IConsoleManager.h"
 #include "Math/RandomStream.h"
 
-static TAutoConsoleVariable<int32> CVarVCDigBreakTimes(
-	TEXT("vc.Dig.BreakTimes"),
-	1,
-	TEXT("Cubic worlds: 1 = a block breaks after its material's hardness / MiningSpeed while the primary action is held (world modes review WM-C15); ")
-	TEXT("0 = a press breaks it at once, as before."),
-	ECVF_Default);
-
 static TAutoConsoleVariable<int32> CVarVCDigHighlight(
 	TEXT("vc.Dig.Highlight"),
 	1,
@@ -70,7 +63,7 @@ UVCBlockInteractionComponent::UVCBlockInteractionComponent()
 
 bool UVCBlockInteractionComponent::UsesTimedBreaks(const UVoxelWorldConfiguration* Config)
 {
-	return ShowsBlockFeedback(Config) && CVarVCDigBreakTimes.GetValueOnGameThread() != 0;
+	return ShowsBlockFeedback(Config);
 }
 
 bool UVCBlockInteractionComponent::ShowsBlockFeedback(const UVoxelWorldConfiguration* Config)

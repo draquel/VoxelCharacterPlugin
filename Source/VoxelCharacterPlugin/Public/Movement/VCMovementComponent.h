@@ -67,7 +67,7 @@ public:
 	/**
 	 * In a cubic world, walk up a one-block rise without a jump: the step height becomes one block (voxel size plus
 	 * BlockStepMargin), for players and NPCs alike, so two blocks stay a wall (the jump's apex is about 113 uu). The
-	 * surface navigation uses the same rule (voxel.Nav.BlockSteps). Smooth worlds keep MaxStepHeight as set.
+	 * surface navigation uses the same rule (FVoxelSurfaceNavParams::bBlockSteps). Smooth worlds keep MaxStepHeight as set.
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
 	bool bStepUpOneBlock = true;
@@ -421,7 +421,7 @@ protected:
 
 	/**
 	 * Once the voxel world is initialized, set the step height for its surface: one block in a cubic world when
-	 * bStepUpOneBlock and vc.Move.StepUpBlocks are on (world modes review WM-C7, D29), else the smooth step left as it is.
+	 * bStepUpOneBlock is on (world modes review WM-C7, D29), else the smooth step left as it is.
 	 */
 	void RefreshBlockStepHeight();
 

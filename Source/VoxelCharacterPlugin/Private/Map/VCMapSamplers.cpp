@@ -301,72 +301,7 @@ int32 FVCPlaneMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 Te
 		}
 		return Tile;
 	};
-	// Where a tile pixel at world (X, Y) lands: texel (X, Y) from the texture's min corner, or north up.
-	auto TexelOf = [&](double X, double Y, int32& OutTX, int32& OutTY)
-	{
-		if (bNorthUp)
-		{
-			OutTX = FMath::FloorToInt32((Y - WorldMinY) / WorldPerPixel);
-			OutTY = FMath::FloorToInt32((WorldMaxX - X) / WorldPerPixel);
-		}
-		else
-		{
-			OutTX = FMath::FloorToInt32((X - WorldMinX) / WorldPerPixel);
-			OutTY = FMath::FloorToInt32((Y - WorldMinY) / WorldPerPixel);
-		}
-	};
 	int32 Drawn = 0;
-
-	if (!bTexelFill)
-	{
-		// As before G64: clear to the background, then blit every pixel of every tile in view at its near corner (an explored
-		// tile without an image blits Undrawn over its pixels' places).
-		for (int32 I = 0; I < TexSize * TexSize; ++I)
-		{
-			Write(OutBGRA + static_cast<int64>(I) * 4, bRequireExplored ? Unexplored : Background);
-		}
-		const FIntPoint CenterTile = Map.WorldToTileCoord(Center);
-		const int32 TileRadius = FMath::CeilToInt(Extent / TileSize);
-		for (int32 TY = -TileRadius; TY <= TileRadius; ++TY)
-		{
-			for (int32 TX = -TileRadius; TX <= TileRadius; ++TX)
-			{
-				const FIntPoint TileCoord(CenterTile.X + TX, CenterTile.Y + TY);
-				bool bExplored = false;
-				const FVoxelMapTile* Tile = Resolve(TileCoord, bExplored);
-				if (!Tile && !(bRequireExplored && bExplored))
-				{
-					continue;
-				}
-				const FVector TileWorldOrigin = Map.TileCoordToWorld(TileCoord);
-				const int32 SrcRes = Tile ? Tile->Resolution : TileResolution;
-				const double SrcPixelWorldSize = TileSize / SrcRes;
-				for (int32 PY = 0; PY < SrcRes; ++PY)
-				{
-					for (int32 PX = 0; PX < SrcRes; ++PX)
-					{
-						int32 DstX, DstY;
-						TexelOf(TileWorldOrigin.X + PX * SrcPixelWorldSize, TileWorldOrigin.Y + PY * SrcPixelWorldSize, DstX, DstY);
-						if (DstX < 0 || DstX >= TexSize || DstY < 0 || DstY >= TexSize)
-						{
-							continue;
-						}
-						uint8* Texel = OutBGRA + (static_cast<int64>(DstY) * TexSize + DstX) * 4;
-						if (Tile)
-						{
-							Write(Texel, Tile->PixelData[PY * SrcRes + PX]);
-							++Drawn;
-						}
-						else
-						{
-							Write(Texel, Undrawn);
-						}
-					}
-				}
-			}
-		}
-		return Drawn;
-	}
 
 	// Texel by texel: along each texture axis the tile and the position in it, worked out once per column and row. The
 	// sample point is just inside the texel's far corner in world +X and +Y: texel X runs along world +X (or +Y north up),
