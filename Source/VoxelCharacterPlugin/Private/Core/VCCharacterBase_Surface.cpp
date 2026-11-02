@@ -33,6 +33,7 @@
 #include "VoxelCoordinates.h"
 #include "VoxelWorldConfiguration.h"
 #include "VoxelChunkManager.h"
+#include "VoxelTreeInjector.h"
 #include "VoxelSeaSurface.h"
 #include "VoxelScatterManager.h"
 #include "VoxelCollisionManager.h"
