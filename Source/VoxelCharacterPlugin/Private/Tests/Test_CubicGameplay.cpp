@@ -20,6 +20,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/WorldSettings.h"
 #include "VoxelChunkManager.h"
+#include "VoxelTreeInjector.h"
 #include "VoxelWorldConfiguration.h"
 #include "DistanceBandLODStrategy.h"
 #include "IVoxelMeshRenderer.h"
