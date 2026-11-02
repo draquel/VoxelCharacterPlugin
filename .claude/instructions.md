@@ -13,7 +13,7 @@ AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; one runtime mo
 2. `Documentation/MAP_UI_WIDGETS.md` — the minimap and world map, on planes and planets.
 3. `Documentation/EDITOR_CONSOLE_GUIDE.md` at the project root, §4 — every `vc.*` cvar and Exec function; the game
    module's `vox.*` commands drive this plugin's pawn for QA.
-4. `Documentation/FINDINGS.md` at the project root — open findings in this plugin (G75, G84, G86).
+4. `Documentation/FINDINGS.md` at the project root — open findings in this plugin (G75).
 5. History only: `Documentation/CharacterController_Design.md` (the February design, frozen),
    `COMBAT_FOUNDATION_PLAN.md` and `EQUIPMENT_LOOP_PLAN.md` (frozen), `Documentation/Archive/ImplementationPlan.md`.
 

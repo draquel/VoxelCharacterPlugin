@@ -416,7 +416,6 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 void AVCCharacterBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(AVCCharacterBase, CurrentViewMode);
 	DOREPLIFETIME(AVCCharacterBase, bIsCorpse);
 }
 
@@ -794,21 +793,6 @@ void AVCCharacterBase::SetViewMode(EVCViewMode NewMode)
 
 	// 5. Broadcast
 	OnViewModeChanged.Broadcast(OldMode, NewMode);
-
-	if (HasAuthority())
-	{
-		OnRep_ViewMode();
-	}
-}
-
-void AVCCharacterBase::OnRep_ViewMode()
-{
-	// Skip immediate mesh hide if we're deferring it for the FP camera blend
-	if (!bPendingFPMeshHide)
-	{
-		UpdateMeshVisibility();
-	}
-	UpdateEquipmentAttachments();
 }
 
 void AVCCharacterBase::UpdateMeshVisibility()

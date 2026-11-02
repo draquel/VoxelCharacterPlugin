@@ -261,11 +261,19 @@ public:
 	// View Mode
 	// =================================================================
 
-	/** Current view perspective. */
-	UPROPERTY(ReplicatedUsing = OnRep_ViewMode, BlueprintReadOnly, Category = "VoxelCharacter|Camera")
+	/**
+	 * Current view perspective, local to the machine that set it (the owning player's toggle). Not replicated (G87): only the
+	 * locally controlled pawn hides its body and holds items on the first-person arms; every other machine draws the pawn
+	 * in third person (its body and the body sockets).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Camera")
 	EVCViewMode CurrentViewMode = EVCViewMode::ThirdPerson;
 
-	/** Switch between first and third person. */
+	/**
+	 * Switch between first and third person on this machine: the camera, the rotation rule, mesh visibility, equipment
+	 * attachment, the interaction range, then OnViewModeChanged. No request goes to the server (nothing there reads it).
+	 * @param NewMode The perspective to switch to
+	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Camera")
 	void SetViewMode(EVCViewMode NewMode);
 
@@ -558,9 +566,6 @@ protected:
 	double CorpseStartTime = 0.0;
 	virtual void OnRep_PlayerState() override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
-
-	UFUNCTION()
-	void OnRep_ViewMode();
 
 	/** Update body / arms mesh visibility based on current view mode. */
 	void UpdateMeshVisibility();

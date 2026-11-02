@@ -33,8 +33,9 @@ public:
 	static FVCTerrainContext QueryTerrainContext(const UWorld* World, const FVector& Location, const FVector& Up = FVector::UpVector);
 
 	/**
-	 * Check if a world position is underwater: in a water-flagged voxel, with its depth below the sea
-	 * (UVoxelChunkManager::GetSeaSurface: the WaterLevel plane, or the sphere of WaterRadius on a planet, SP-E1).
+	 * Check if a world position is underwater: in a water-flagged voxel, edits included (a flooded dig is water, G86), with
+	 * its depth below the sea (UVoxelChunkManager::GetSeaSurface: the WaterLevel plane, or the sphere of WaterRadius on a
+	 * planet, SP-E1).
 	 *
 	 * @param World World context
 	 * @param Location World-space position
@@ -42,6 +43,20 @@ public:
 	 * @return True if position is in water
 	 */
 	static bool IsPositionUnderwater(const UWorld* World, const FVector& Location, float& OutWaterDepth);
+
+	/**
+	 * The chunks a pawn's terrain wait needs collision in before it is placed (AVCCharacterBase::InitiateChunkBasedWait):
+	 * ChunkRadius chunks either way across local up at the pawn's own chunk layer, in the tangent frame at the pawn (on a
+	 * heightmap world the X/Y grid around its chunk; on a planet the surface crosses chunk layers diagonally, spherical
+	 * SP-F4), and the chunk half a chunk under it along local down: a pawn in the lower half of its chunk may stand on the
+	 * layer below, in every kind of world (G84).
+	 *
+	 * @param ChunkMgr The world's chunk manager (its configuration, frames and chunk grid)
+	 * @param Location The pawn's location, on the surface
+	 * @param ChunkRadius Chunks either way across local up (AVCCharacterBase::TerrainWaitChunkRadius)
+	 * @return The chunk coordinates, each once
+	 */
+	static TArray<FIntVector> GetTerrainWaitChunks(const UVoxelChunkManager& ChunkMgr, const FVector& Location, int32 ChunkRadius);
 
 	/**
 	 * Find a valid spawn position on terrain above water level.

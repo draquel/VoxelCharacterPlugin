@@ -133,29 +133,10 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 	const FVector RelPos = CharPos - Config->WorldOrigin;
 	const FIntVector CenterChunk = FVoxelCoordinates::WorldToChunk(RelPos, Config->ChunkSize, Config->VoxelSize);
 
-	// The grid of chunks to wait for: TerrainWaitChunkRadius chunks either way across local up at the pawn's own chunk layer,
-	// in the tangent frame at the pawn. On a heightmap world up is +Z and the frame is the world's X and Y (the chunk grid
-	// around the centre chunk, in that order); on a planet the surface crosses chunk layers diagonally at mid latitudes, so
-	// an X/Y grid at one Z would miss the ground (spherical SP-F4). One loop for every up (code review CR2, VCP-18).
-	TArray<FIntVector> WaitChunks;
+	// The chunks to wait for: the grid across local up at the pawn's chunk layer and the chunk under its feet, in every kind
+	// of world (G84).
 	const FVoxelWorldBounds Bounds = ChunkMgr->GetWorldBounds();
-	const FVector Up = ChunkMgr->GetUpVectorAt(CharPos);
-	const FVector T2 = FVector::CrossProduct(Up, FMath::Abs(Up.Z) < 0.9 ? FVector::UpVector : FVector::ForwardVector).GetSafeNormal();
-	const FVector T1 = FVector::CrossProduct(T2, Up);
-	const float ChunkWorldSize = Config->GetChunkWorldSize();
-	for (int32 DX = -TerrainWaitChunkRadius; DX <= TerrainWaitChunkRadius; ++DX)
-	{
-		for (int32 DY = -TerrainWaitChunkRadius; DY <= TerrainWaitChunkRadius; ++DY)
-		{
-			WaitChunks.AddUnique(ChunkMgr->WorldToChunkCoord(CharPos + (T1 * DX + T2 * DY) * ChunkWorldSize));
-		}
-	}
-	if (Bounds.Shape == EVoxelWorldBoundsShape::Shell)
-	{
-		// The chunk under the feet along local down: a planet's ground may lie in the layer below. A heightmap pawn in the
-		// lower half of its chunk has the same gap and waits for no such chunk (G84, WORLD_MODES_REVIEW_PLAN.md); kept as it was.
-		WaitChunks.AddUnique(ChunkMgr->WorldToChunkCoord(CharPos - Up * (0.5f * ChunkWorldSize)));
-	}
+	const TArray<FIntVector> WaitChunks = FVCTerrainQueryHelper::GetTerrainWaitChunks(*ChunkMgr, CharPos, TerrainWaitChunkRadius);
 	TerrainWaitTotalChunks = WaitChunks.Num();
 	PendingTerrainChunks.Empty();
 	for (const FIntVector& ChunkCoord : WaitChunks)
@@ -173,9 +154,9 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 	}
 
 	UE_LOG(LogVoxelCharacter, Log,
-		TEXT("InitiateChunkBasedWait: Center chunk (%d,%d,%d), waiting for %d chunks in %dx%d grid%s"),
+		TEXT("InitiateChunkBasedWait: Center chunk (%d,%d,%d), waiting for %d of %d chunks (a %dx%d grid and the chunk under the feet)%s"),
 		CenterChunk.X, CenterChunk.Y, CenterChunk.Z,
-		PendingTerrainChunks.Num(),
+		PendingTerrainChunks.Num(), TerrainWaitTotalChunks,
 		2 * TerrainWaitChunkRadius + 1, 2 * TerrainWaitChunkRadius + 1,
 		Bounds.Shape == EVoxelWorldBoundsShape::Shell ? TEXT(" (tangent plane)") : TEXT(""));
 

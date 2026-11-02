@@ -30,9 +30,10 @@ FVCTerrainContext FVCTerrainQueryHelper::QueryTerrainContext(const UWorld* World
 		return Context;
 	}
 
-	// Get voxel data at feet position (sample slightly below, along local down, to catch surface)
+	// Get voxel data at feet position (sample slightly below, along local down, to catch surface). The voxel as it is, edits
+	// included: a placed block's material, a dug floor (G86).
 	const FVector SamplePos = Location - Up * 10.f;
-	const FVoxelData VoxelAtFeet = ChunkMgr->GetGeneratedVoxelAt(SamplePos);
+	const FVoxelData VoxelAtFeet = ChunkMgr->GetVoxelAt(SamplePos);
 
 	// Material and surface type
 	Context.VoxelMaterialID = VoxelAtFeet.MaterialID;
@@ -99,7 +100,9 @@ bool FVCTerrainQueryHelper::IsPositionUnderwater(const UWorld* World, const FVec
 		return false;
 	}
 
-	const FVoxelData VoxelAtLocation = ChunkMgr->GetGeneratedVoxelAt(Location);
+	// The voxel with its edits (G86): a flood an edit caused (a dig under the sea) sets its flags in the edit layer (G58, G59),
+	// so the generated voxel there still reads dry rock.
+	const FVoxelData VoxelAtLocation = ChunkMgr->GetVoxelAt(Location);
 	if (VoxelAtLocation.HasWaterFlag())
 	{
 		OutWaterDepth = FMath::Max(0.0, ChunkMgr->GetSeaSurface().GetDepth(Location));
@@ -107,6 +110,36 @@ bool FVCTerrainQueryHelper::IsPositionUnderwater(const UWorld* World, const FVec
 	}
 
 	return false;
+}
+
+// ---------------------------------------------------------------------------
+// Terrain Wait Chunks
+// ---------------------------------------------------------------------------
+
+TArray<FIntVector> FVCTerrainQueryHelper::GetTerrainWaitChunks(const UVoxelChunkManager& ChunkMgr, const FVector& Location, int32 ChunkRadius)
+{
+	TArray<FIntVector> Chunks;
+	const UVoxelWorldConfiguration* Config = ChunkMgr.GetConfiguration();
+	if (!Config)
+	{
+		return Chunks;
+	}
+	// One loop for every up (code review CR2, VCP-18): on a heightmap world up is +Z and the frame is the world's X and Y.
+	const FVector Up = ChunkMgr.GetUpVectorAt(Location);
+	const FVector T2 = FVector::CrossProduct(Up, FMath::Abs(Up.Z) < 0.9 ? FVector::UpVector : FVector::ForwardVector).GetSafeNormal();
+	const FVector T1 = FVector::CrossProduct(T2, Up);
+	const float ChunkWorldSize = Config->GetChunkWorldSize();
+	for (int32 DX = -ChunkRadius; DX <= ChunkRadius; ++DX)
+	{
+		for (int32 DY = -ChunkRadius; DY <= ChunkRadius; ++DY)
+		{
+			Chunks.AddUnique(ChunkMgr.WorldToChunkCoord(Location + (T1 * DX + T2 * DY) * ChunkWorldSize));
+		}
+	}
+	// The chunk under the feet along local down: the ground of a pawn in the lower half of its chunk may lie in the layer
+	// below (G84: a heightmap pawn waited for its own layer only and could be released before that chunk had collision).
+	Chunks.AddUnique(ChunkMgr.WorldToChunkCoord(Location - Up * (0.5f * ChunkWorldSize)));
+	return Chunks;
 }
 
 // ---------------------------------------------------------------------------
