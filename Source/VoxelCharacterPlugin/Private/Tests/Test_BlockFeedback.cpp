@@ -566,4 +566,154 @@ bool FVCBlock_Break::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// G75: after a dig the ghost stays out of the dug cell until the aim moves (vc.Dig.GhostRearmDegrees or a quarter of a
+// block of travel); not in front of the hole while the dug block's collision lingers; a place still fills the cell; a
+// held dig goes on to the next block with the ghost still out of the way.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCBlock_GhostAfterDig, "VoxelCharacter.Cubic.GhostAfterDig", VC_BLOCK_FLAGS)
+bool FVCBlock_GhostAfterDig::RunTest(const FString& Parameters)
+{
+	using namespace VCBlockFeedbackTestHelpers;
+	FCVarScope Highlight(TEXT("vc.Dig.Highlight"), TEXT("1"));
+	FCVarScope Rearm(TEXT("vc.Dig.GhostRearmDegrees"), TEXT("2"));
+	FCVarScope Scale(TEXT("vc.Dig.BreakTimeScale"), TEXT("1"));
+	FCVarScope PlayerInputs(TEXT("voxel.Edit.PlayerInputs"), TEXT("1"));
+
+	// The rule alone.
+	const FVector Forward = FVector::ForwardVector;
+	auto Turned = [](double Degrees) { return FRotator(0.0, Degrees, 0.0).Vector(); };
+	TestFalse(TEXT("Rule: a still aim has not moved"), UVCBlockInteractionComponent::HasAimMoved(FVector::ZeroVector, Forward, FVector::ZeroVector, Forward, 100.f));
+	TestFalse(TEXT("Rule: 1 degree is under the threshold"), UVCBlockInteractionComponent::HasAimMoved(FVector::ZeroVector, Forward, FVector::ZeroVector, Turned(1.0), 100.f));
+	TestTrue(TEXT("Rule: 3 degrees is past it"), UVCBlockInteractionComponent::HasAimMoved(FVector::ZeroVector, Forward, FVector::ZeroVector, Turned(3.0), 100.f));
+	TestFalse(TEXT("Rule: 20 uu of travel (a fifth of a block) is under it"), UVCBlockInteractionComponent::HasAimMoved(FVector::ZeroVector, Forward, FVector(20.0, 0.0, 0.0), Forward, 100.f));
+	TestTrue(TEXT("Rule: 30 uu of travel is past it"), UVCBlockInteractionComponent::HasAimMoved(FVector::ZeroVector, Forward, FVector(0.0, 30.0, 0.0), Forward, 100.f));
+
+	FBlockWorld B;
+	if (!TestTrue(TEXT("The cubic world streams"), B.Start(/*bCubic=*/true, TEXT("VCBlockGhostAfterDig"))))
+	{
+		B.Stop();
+		return false;
+	}
+	// A column of three stone blocks, each with its collider; the crosshair on the top one's top face, nearly from above.
+	const FIntVector Bottom = B.FloatingBlock(EVoxelMaterial::Stone, 4);
+	const FIntVector Middle = Bottom + FIntVector(0, 0, 1);
+	const FIntVector Top = Bottom + FIntVector(0, 0, 2);
+	B.SetVoxel(Middle, EVoxelMaterial::Stone, true);
+	B.SetVoxel(Top, EVoxelMaterial::Stone, true);
+	AStaticMeshActor* MiddleCollider = B.Collider(Middle);
+	AStaticMeshActor* TopCollider = B.Collider(Top);
+	B.SpawnPlayer(B.Centre(Middle) + FVector(-250.0, 0.0, 0.0));
+	B.Character->SetEditModeEnabled(true);
+	const FVector TopFace = B.Centre(Top) + FVector(0.0, 0.0, B.VoxelSize * 0.5);
+	const FVector Eye = TopFace + FVector(-30.0, 0.0, 260.0);
+	B.Aim(Eye, TopFace);
+
+	constexpr float Dt = 1.0f / 60.0f;
+	const int32 StoneFrames = FMath::CeilToInt(UVCBlockInteractionComponent::GetBreakSeconds(EVoxelMaterial::Stone, B.Character->GetMiningSpeed()) / Dt);
+	FBox Box;
+	bool bBlocked = false;
+	FIntVector Held;
+	B.Frame(Dt);
+	TestTrue(TEXT("Before: the ghost sits on the top block"), B.Block->IsGhostShown(Box, bBlocked) && Box.Equals(B.Cell(Top + FIntVector(0, 0, 1)), 0.01));
+
+	// Dig the top block with a hold, release once it breaks.
+	B.Block->StartHold();
+	for (int32 Frame = 0; Frame < StoneFrames + 2 && B.Voxel(Top).IsSolid(); ++Frame)
+	{
+		B.Frame(Dt);
+	}
+	B.Block->StopHold();
+	TestTrue(TEXT("The top block broke"), B.Voxel(Top).IsAir());
+	TestTrue(TEXT("The dig is noted: the ghost is held off the dug cell"), B.Block->GetGhostHoldOff(Held) && Held == Top);
+
+	// Its collision lingers (not rebuilt yet): the trace hits the dug block, the place cell is in front of the hole.
+	B.Frame(Dt);
+	TestTrue(TEXT("Stale collision: the trace still hits the dug block"), B.Block->GetTargets().bHasHit && B.Block->GetTargets().HitVoxel == Top);
+	TestFalse(TEXT("Stale collision: no ghost in front of the hole"), B.Block->IsGhostShown(Box, bBlocked));
+
+	// The collision rebuilt: the trace reaches the block below, whose place cell is the dug one.
+	TopCollider->Destroy();
+	B.Frame(Dt);
+	TestTrue(TEXT("After: the outline is on the block below"), B.Block->IsOutlineShown(Box) && Box.Equals(B.Cell(Middle), 0.01));
+	TestTrue(TEXT("After: a place would fill the dug cell"), B.Block->GetTargets().bHasPlace && B.Block->GetTargets().PlaceVoxel == Top);
+	TestFalse(TEXT("After: no ghost in the dug cell"), B.Block->IsGhostShown(Box, bBlocked));
+	for (int32 Frame = 0; Frame < 120; ++Frame)
+	{
+		B.Frame(Dt);
+	}
+	TestFalse(TEXT("Two seconds later, the aim still: still none"), B.Block->IsGhostShown(Box, bBlocked));
+
+	// A tremor of the aim (1 degree) keeps it hidden; a turn of 4 degrees shows it, in the dug cell.
+	const FVector MiddleFace = B.Centre(Middle) + FVector(0.0, 0.0, B.VoxelSize * 0.5);
+	const FVector Down = (TopFace - Eye).GetSafeNormal();
+	auto AimTurned = [&](double Degrees)
+	{
+		const FVector Direction = Down.RotateAngleAxis(Degrees, FVector::RightVector);
+		B.Character->CameraManager->SetCurrentView(Eye, Direction.Rotation());
+	};
+	AimTurned(1.0);
+	B.Frame(Dt);
+	TestFalse(TEXT("1 degree: still no ghost"), B.Block->IsGhostShown(Box, bBlocked));
+	AimTurned(4.0);
+	B.Frame(Dt);
+	TestTrue(TEXT("4 degrees: the hold-off ends"), !B.Block->GetGhostHoldOff(Held));
+	TestTrue(TEXT("4 degrees: the ghost shows in the dug cell"), B.Block->IsGhostShown(Box, bBlocked) && Box.Equals(B.Cell(Top), 0.01));
+	AddInfo(FString::Printf(TEXT("Aim 4 degrees off: the trace hits %s (the middle block's top face at %s)"),
+		*B.Block->GetTargets().HitVoxel.ToString(), *MiddleFace.ToCompactString()));
+
+	// Placing works as before: the place fills the dug cell, and the ghost moves on top of the new block.
+	FHitResult Hit;
+	FIntVector DigVoxel, PlaceVoxel;
+	TestTrue(TEXT("Place: the edit target is the dug cell"), B.Character->FindEditTarget(Hit, DigVoxel, PlaceVoxel) && PlaceVoxel == Top);
+	B.PC->Server_RequestVoxelModification(PlaceVoxel, EVCVoxelModificationType::Place, EVoxelMaterial::Stone);
+	TestTrue(TEXT("Place: the dug cell is filled again"), B.Voxel(Top).IsSolid());
+	TopCollider = B.Collider(Top);
+	B.Frame(Dt);
+	TestTrue(TEXT("Place: the ghost is on the placed block"), B.Block->IsGhostShown(Box, bBlocked) && Box.Equals(B.Cell(Top + FIntVector(0, 0, 1)), 0.01));
+
+	// A dig noted and the cell filled again without the aim moving: nothing left to hide, the hold-off ends.
+	B.Block->NoteDug(Top);
+	B.Frame(Dt);
+	TestFalse(TEXT("The dug cell solid again: the hold-off ends"), B.Block->GetGhostHoldOff(Held));
+
+	// Rapid digs: one hold breaks the top block, then the one below it; the ghost never shows in a dug cell on the way.
+	B.Aim(Eye, TopFace);
+	B.Block->StartHold();
+	bool bGhostInDug = false;
+	int32 Frames = 0;
+	for (; Frames < StoneFrames * 3 && B.Voxel(Middle).IsSolid(); ++Frames)
+	{
+		if (B.Voxel(Top).IsAir() && TopCollider)
+		{
+			// The top block's collision rebuilt a few frames after its break.
+			TopCollider->Destroy();
+			TopCollider = nullptr;
+		}
+		B.Frame(Dt);
+		bGhostInDug |= B.Block->IsGhostShown(Box, bBlocked) && (Box.Equals(B.Cell(Top), 0.01) || Box.Equals(B.Cell(Middle), 0.01));
+	}
+	TestTrue(TEXT("Held: both blocks broke in one hold"), B.Voxel(Top).IsAir() && B.Voxel(Middle).IsAir());
+	// Released here, before the hold takes the bottom block too.
+	B.Block->StopHold();
+	MiddleCollider->Destroy();
+	for (int32 Frame = 0; Frame < 10; ++Frame)
+	{
+		B.Frame(Dt);
+		bGhostInDug |= B.Block->IsGhostShown(Box, bBlocked) && (Box.Equals(B.Cell(Top), 0.01) || Box.Equals(B.Cell(Middle), 0.01));
+	}
+	AddInfo(FString::Printf(TEXT("Two blocks in one hold: %d frames (stone %d each); held off %s"), Frames, StoneFrames,
+		B.Block->GetGhostHoldOff(Held) ? *Held.ToString() : TEXT("nothing")));
+	TestFalse(TEXT("Held: no ghost in a dug cell while digging on"), bGhostInDug);
+	TestTrue(TEXT("Held: the last dig is the one held off"), B.Block->GetGhostHoldOff(Held) && Held == Middle);
+	TestFalse(TEXT("Held: no ghost in the second dug cell"), B.Block->IsGhostShown(Box, bBlocked) && Box.Equals(B.Cell(Middle), 0.01));
+
+	// Walking a third of a block shows it again.
+	B.Character->CameraManager->SetCurrentView(Eye + FVector(0.0, 35.0, 0.0), Down.Rotation());
+	B.Frame(Dt);
+	TestFalse(TEXT("A third of a block of travel: the hold-off ends"), B.Block->GetGhostHoldOff(Held));
+	B.Stop();
+	return true;
+}
+
 #endif // WITH_AUTOMATION_TESTS

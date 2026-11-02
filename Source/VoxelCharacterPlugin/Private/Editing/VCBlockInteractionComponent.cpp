@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Editing/VCBlockInteractionComponent.h"
+#include "Camera/VCCameraManager.h"
 #include "Core/VCCharacterBase.h"
 #include "Core/VCPlayerController.h"
 #include "Movement/VCTerrainQueryHelper.h"
@@ -24,6 +25,12 @@ static TAutoConsoleVariable<float> CVarVCDigBreakTimeScale(
 	1.f,
 	TEXT("QA: multiply every block's break time (10 = ten times slower, to look at a break's cracks). The server and the client read the same value."),
 	ECVF_Cheat);
+
+static TAutoConsoleVariable<float> CVarVCDigGhostRearmDegrees(
+	TEXT("vc.Dig.GhostRearmDegrees"),
+	2.f,
+	TEXT("Cubic worlds: after a dig the placement ghost stays out of the dug cell until the camera turns more than this many degrees (or moves a quarter of a block) from where it was at the dig (G75). 0 = any turn shows it."),
+	ECVF_Default);
 
 namespace
 {
@@ -80,6 +87,17 @@ float UVCBlockInteractionComponent::GetBreakSeconds(uint8 MaterialId, float Mini
 uint32 UVCBlockInteractionComponent::HashVoxel(const FIntVector& VoxelCoord)
 {
 	return HashCombineFast(GetTypeHash(VoxelCoord), 0x9E3779B9u);
+}
+
+bool UVCBlockInteractionComponent::HasAimMoved(const FVector& OriginThen, const FVector& DirectionThen, const FVector& OriginNow, const FVector& DirectionNow, float VoxelSize)
+{
+	// A quarter of a block of travel: walking moves the crosshair over the world as turning does.
+	if (FVector::DistSquared(OriginThen, OriginNow) > FMath::Square(VoxelSize * 0.25f))
+	{
+		return true;
+	}
+	const double Degrees = FMath::Max(CVarVCDigGhostRearmDegrees.GetValueOnGameThread(), 0.f);
+	return FVector::DotProduct(DirectionThen, DirectionNow) < FMath::Cos(FMath::DegreesToRadians(Degrees)) - UE_KINDA_SMALL_NUMBER;
 }
 
 void UVCBlockInteractionComponent::BuildCrackLines(const FBox& Block, uint8 ExposedFaces, float Progress, uint32 Seed, float SurfaceOffset, TArray<FVector>& OutSegments)
@@ -188,6 +206,8 @@ FVCBlockTargets UVCBlockInteractionComponent::ComputeTargets() const
 	{
 		return Out;
 	}
+	Out.bHasHit = true;
+	Out.HitVoxel = DigVoxel;
 	const FVector PawnLocation = Character->GetActorLocation();
 	// The primary action digs with edit mode on or a digging tool in hand (its gate), the secondary places in edit mode.
 	if (Character->IsEditModeEnabled() || Character->HasDiggingTool())
@@ -259,8 +279,56 @@ void UVCBlockInteractionComponent::TickLocal(float DeltaSeconds)
 	{
 		bSuppressVoxel = false;
 	}
+	UpdateGhostHoldOff(Config, ChunkMgr);
 	UpdateHold(DeltaSeconds);
 	Draw(Config, ChunkMgr);
+}
+
+bool UVCBlockInteractionComponent::GetAim(FVector& OutOrigin, FVector& OutDirection) const
+{
+	const AVCCharacterBase* Character = GetCharacter();
+	if (!Character || !Character->CameraManager)
+	{
+		return false;
+	}
+	OutOrigin = Character->CameraManager->GetCurrentCameraLocation();
+	OutDirection = Character->CameraManager->GetCurrentCameraRotation().Vector();
+	return true;
+}
+
+void UVCBlockInteractionComponent::NoteDug(const FIntVector& VoxelCoord)
+{
+	FVector Origin, Direction;
+	if (!GetAim(Origin, Direction))
+	{
+		return;
+	}
+	bGhostHeldOff = true;
+	GhostHeldOffVoxel = VoxelCoord;
+	DigAimOrigin = Origin;
+	DigAimDirection = Direction;
+}
+
+bool UVCBlockInteractionComponent::GetGhostHoldOff(FIntVector& OutVoxel) const
+{
+	OutVoxel = GhostHeldOffVoxel;
+	return bGhostHeldOff;
+}
+
+void UVCBlockInteractionComponent::UpdateGhostHoldOff(const UVoxelWorldConfiguration* Config, const UVoxelChunkManager* ChunkMgr)
+{
+	if (!bGhostHeldOff)
+	{
+		return;
+	}
+	FVector Origin, Direction;
+	// A block in the dug cell again (placed back) has nothing left to hide.
+	if (!ChunkMgr || !Config || !GetAim(Origin, Direction)
+		|| HasAimMoved(DigAimOrigin, DigAimDirection, Origin, Direction, Config->VoxelSize)
+		|| ChunkMgr->GetVoxelAt(ChunkMgr->GlobalVoxelToWorldCentre(GhostHeldOffVoxel)).IsSolid())
+	{
+		bGhostHeldOff = false;
+	}
 }
 
 void UVCBlockInteractionComponent::StartHold()
@@ -363,6 +431,11 @@ void UVCBlockInteractionComponent::Client_BlockBreakFinished_Implementation(FInt
 	// gets no voxel edits, keeps drawing it), and a refused one would be refused again.
 	bSuppressVoxel = true;
 	SuppressedVoxel = VoxelCoord;
+	if (bBroken)
+	{
+		// The note a remote client gets; DigVoxelAt has already noted a listen server's own player (the same cell again).
+		NoteDug(VoxelCoord);
+	}
 	UE_LOG(LogVoxelCharacter, Verbose, TEXT("Block break at %s ended: %s"), *VoxelCoord.ToString(), bBroken ? TEXT("broken") : TEXT("refused or cancelled"));
 }
 
@@ -389,7 +462,12 @@ void UVCBlockInteractionComponent::Draw(const UVoxelWorldConfiguration* Config, 
 	const bool bOutline = bEnabled && Targets.bHasDig;
 	// The ghost steps aside while a break runs: the player is mining, and it would cover the cracks on the top face.
 	const bool bBreaking = bOutline && bClientBreaking && ClientVoxel == Targets.DigVoxel;
-	const bool bGhost = bEnabled && Targets.bHasPlace && !bBreaking;
+	// Nor in the cell this player has just dug until the aim moves (G75): a place aimed at the hole's floor fills it, and
+	// a pale block there reads as a dig that did not happen. Nor, for the frames until the dug block's collision is
+	// rebuilt, while the trace still hits that block: the ghost would hang in front of the hole.
+	const bool bHeldOff = bGhostHeldOff
+		&& (Targets.PlaceVoxel == GhostHeldOffVoxel || (Targets.bHasHit && Targets.HitVoxel == GhostHeldOffVoxel));
+	const bool bGhost = bEnabled && Targets.bHasPlace && !bBreaking && !bHeldOff;
 	const FBox NewOutline = bOutline ? BlockCell(ChunkMgr, Config, Targets.DigVoxel) : FBox(ForceInit);
 	const FBox NewGhost = bGhost ? BlockCell(ChunkMgr, Config, Targets.PlaceVoxel) : FBox(ForceInit);
 	const float Progress = bBreaking ? ClientProgress : 0.f;

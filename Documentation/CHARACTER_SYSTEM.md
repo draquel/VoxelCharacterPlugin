@@ -228,8 +228,20 @@ prediction (`BuildCrackLines`). The server keeps one break per player, checks it
 (`FVoxelMaterialRegistry::GetHardness`) divided by `MiningSpeed`, and digs through `DigVoxelAt` when it completes
 (`Client_BlockBreakFinished`, `OnBlockBroken`). `Server_RequestVoxelModification(Destroy)` is refused while breaks are
 timed. Smooth worlds dig at once. Voxel edits are not replicated to clients (VoxelWorlds' edit layer), so a remote
-client sees its cracks but not the dug block. In first person the dug cell can sit under the held tool's head (open
-finding G75).
+client sees its cracks but not the dug block.
+
+**The ghost after a dig** (G75, closed 2026-11-02). Once a dig empties a block, the trace through its cell lands on the
+block behind it, whose place cell is the dug one, so the ghost used to move into the hole at once: a pale block where
+the dug one was, and a one-block dig read as not having happened. Now `NoteDug` (from `DigVoxelAt` for this machine's
+own player, from `Client_BlockBreakFinished` for a remote one) holds the ghost off the dug cell until the aim moves:
+the camera turns more than `vc.Dig.GhostRearmDegrees` (2) or moves more than a quarter of a block from where it was at
+the dig (`HasAimMoved`), or the cell is solid again. The ghost is also held off while the trace still hits the dug
+block's collision, for the frames until it is rebuilt (`FVCBlockTargets::HitVoxel`), where it would hang in front of
+the hole. The outline moves to the block behind as before, and the place is not held back: the secondary action fills
+the hole whether the ghost shows or not. A held dig goes on to the next block with the ghost hidden by the break and
+then by the hold-off. Smooth worlds draw no ghost (D32), so nothing changes there. In first person the dug cell can
+still sit under the held tool's head; that is the view model's framing, left as it is (judge a dig from above, or turn
+the camera a little).
 
 ## Spawn and the terrain wait
 

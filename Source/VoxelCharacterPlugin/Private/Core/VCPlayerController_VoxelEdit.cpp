@@ -302,6 +302,13 @@ bool AVCPlayerController::DigVoxelAt(const FIntVector& VoxelCoord)
 		if (Dug != INDEX_NONE)
 		{
 			GatherFromVoxel(Before[Dug].MaterialID);
+			// This machine's own player sees the hole now: keep the placement ghost out of it until the aim moves (G75).
+			// A remote client is told by its timed break's end (Client_BlockBreakFinished).
+			const AVCCharacterBase* Digger = Cast<AVCCharacterBase>(ControlledPawn);
+			if (Digger && Digger->IsLocallyControlled() && Digger->BlockInteraction)
+			{
+				Digger->BlockInteraction->NoteDug(VoxelCoord);
+			}
 		}
 	}
 
