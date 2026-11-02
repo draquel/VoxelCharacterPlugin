@@ -26,6 +26,7 @@
 #include "GameFramework/Character.h"
 #include "Components/CapsuleComponent.h"
 #include "VoxelChunkManager.h"
+#include "VoxelTreeInjector.h"
 #include "VoxelEditManager.h"
 #include "VoxelEditTypes.h"
 #include "VoxelWorldConfiguration.h"

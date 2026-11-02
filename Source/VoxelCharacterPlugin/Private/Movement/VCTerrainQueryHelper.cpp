@@ -3,6 +3,7 @@
 #include "Movement/VCTerrainQueryHelper.h"
 #include "Movement/VCMovementComponent.h"
 #include "VoxelChunkManager.h"
+#include "VoxelSeaSurface.h"
 #include "VoxelWorldConfiguration.h"
 #include "VoxelCoordinates.h"
 #include "VoxelData.h"
