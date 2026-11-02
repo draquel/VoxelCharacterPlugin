@@ -115,8 +115,10 @@ re-mesh).
 
 - **Terrain context.** `FVCTerrainContext` (surface type, material, friction, water depth, chunk) is refreshed every
   `TerrainCacheDuration` (0.1 s) and at once when an edit touches the pawn's chunk. `EVCSurfaceType` sets ground
-  friction (`GetSurfaceFriction`, times `VoxelSurfaceGripMultiplier`). The context reads the generated voxels without
-  edits (open finding G86 in `Documentation/FINDINGS.md`).
+  friction (`GetSurfaceFriction`, times `VoxelSurfaceGripMultiplier`). The context and `IsPositionUnderwater` read the
+  voxel with its edits (`UVoxelChunkManager::GetVoxelAt`; G86, 2026-11-02): a dig under the sea floods in the edit layer
+  (VoxelWorlds' water propagation), and a pawn in it swims and the camera in it gets the underwater post-process. Test
+  `VoxelCharacter.Terrain.FloodedDigIsWater`.
 - **Swimming.** Entered at `SwimmingEntryDepth` (40 uu) of voxel water, left under `SwimmingExitDepth`; buoyancy, drag,
   surface damping, a shore climb and dive keys (jump rises, crouch dives; the held rise is a saved-move flag). Breath
   drains under water. `ImmersionDepth` uses the voxel sea, not physics volumes.
@@ -173,9 +175,13 @@ surface stays clear while the pawn swims.
 `AVCCharacterBase::SetViewMode` pushes the camera mode, switches rotation (first person: yaw follows the controller;
 third person: orient to movement), hides the body for the local first-person view after the blend, attaches the
 equipment visuals to the arms or the body (`FVCEquipmentSocketMapping`), updates the interaction range and broadcasts
-`OnViewModeChanged`; the anim instance reads `CurrentViewMode`. `CurrentViewMode` is a replicated property, but
-`SetViewMode` runs on the machine that calls it (the owning client's toggle) and has no server request, so other
-machines keep the server's value. A system that cares about the view mode joins this sequence.
+`OnViewModeChanged`; the anim instance reads `CurrentViewMode`. The view mode is the local player's and is not
+replicated (G87, 2026-11-02): `SetViewMode` runs on the machine that calls it (the owning client's toggle), and every
+other machine draws the pawn in third person, its equipment on the body sockets. Nothing on the server reads it (the
+server's interaction range check keeps the third-person range). It used to replicate from the server, which never
+received a client's change; a listen-server host in first person sent its mode to the clients, which attached its
+weapon to arms they do not draw. Test `VoxelCharacter.ViewMode.NotReplicated`. A system that cares about the view mode
+joins this sequence, on the local machine.
 
 ## Input
 
@@ -235,9 +241,12 @@ A pawn spawns frozen (`FreezeForTerrainWait`: no movement, no collision) until t
    (`FindPlaneSpawnPoint`), only inside the world's bounds; with `bSearchWholeWorld` it goes on past the ring
    (`FindPlaneSpawnPointAtScale`, WM-MP10). On a planet the search is by direction (`FindPlanetSpawnPoint`, then
    `FindPlanetSpawnPointAtScale` over the whole planet, G36).
-2. It requests collision for the chunks around the pawn (a planet: a grid in the tangent plane plus the chunk under the
-   feet along local down) and waits for them (`OnChunkCollisionReady`), at most `TerrainWaitTimeout` (60 s). On a
-   heightmap world it waits at the pawn's own chunk layer only (open finding G84).
+2. It requests collision for the chunks around the pawn and waits for them (`OnChunkCollisionReady`), at most
+   `TerrainWaitTimeout` (60 s). The chunks are `FVCTerrainQueryHelper::GetTerrainWaitChunks`: a grid of
+   `TerrainWaitChunkRadius` chunks either way in the tangent plane at the pawn's chunk layer (the X/Y grid on a heightmap
+   world), and the chunk half a chunk under it along local down, in every kind of world (G84, 2026-11-02: a heightmap
+   pawn in the lower half of its chunk stands on the layer below and was released before that chunk had collision).
+   Test `VoxelCharacter.Terrain.WaitChunkUnderFeet`.
 3. `PlaceOnTerrainAndResume` traces along local up for the surface, stands the pawn upright and restores movement.
 
 `AVCPlayerState::PendingSpawnTransform` (a loaded save) puts a player back where they stood; the wait then settles the
@@ -340,7 +349,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 | Inventory, equipment | Server (the gameplay plugins' components on the pawn) | Their own replication |
 | Attributes, effects, abilities | Server (ASC on the player state; an NPC's on the NPC) | GAS replication; prediction keys for activation |
 | Progression | Server | `Progression` on the player state |
-| View mode | The calling machine | `CurrentViewMode` replicated from the server |
+| View mode | The local player's machine | Not replicated (G87); other machines draw third person |
 | Camera, input, edit mode, debug flight | Local | Not replicated |
 
 ## Console variables
@@ -354,4 +363,4 @@ and `ToggleVoxelDebug` are on the controller and the character. Every name, defa
 ## Tests
 
 `VoxelCharacter.*` in `Private/Tests/`: AI, Camera, Combat, Config, Cubic, Edit, EditMode, EquipmentLoop, Gather,
-Island, Map, Plane, Planet, Progression, Respawn, Save, WorldEdge.
+Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, WorldEdge.
