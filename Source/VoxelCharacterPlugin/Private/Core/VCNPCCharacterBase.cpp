@@ -20,6 +20,8 @@
 #include "Components/WidgetComponent.h"
 #include "UI/VCNPCHealthBarWidget.h"
 #include "HAL/IConsoleManager.h"
+#include "Core/VCSettings.h"
+#include "VoxelWorldsSettings.h"
 
 static TAutoConsoleVariable<int32> CVarNPCHealthBars(
 	TEXT("vc.UI.NPCHealthBars"),
@@ -181,7 +183,7 @@ void AVCNPCCharacterBase::SetShowHealthBar(bool bShow)
 
 void AVCNPCCharacterBase::UpdateHealthBar()
 {
-	const int32 Mode = CVarNPCHealthBars.GetValueOnGameThread();
+	const int32 Mode = VoxelSettings::Resolve(CVarNPCHealthBars, UVCSettings::Get().NPCHealthBars);
 	const bool bWanted = !IsRunningDedicatedServer() && !IsDead() && CombatComponent
 		&& (Mode == 2 || (Mode == 1 && bShowHealthBar));
 
