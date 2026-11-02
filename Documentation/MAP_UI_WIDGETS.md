@@ -67,7 +67,7 @@ When the camera faces north (yaw=0), "N" appears at the top. As the camera rotat
 
 The tick is throttled (default 10 Hz via `UpdateInterval = 0.1`). Each refresh requests the tiles in view
 (`RequestTilesInRadius`), rotates the image and places the markers, but fills the texture again only when what it shows
-changed (G64; `vc.Minimap.SkipUnchanged`, 0 = every refresh). A fill costs 2-3 ms of game thread, so filling at every refresh
+changed (G64). A fill costs 2-3 ms of game thread, so filling at every refresh
 put one in six frames over budget. `NeedsRefill` fills when:
 
 - there is no texture yet, or its size changed;
@@ -87,8 +87,8 @@ A fill (`RefreshMapTexture(Center)`):
 1. Lock the transient `UTexture2D` mip 0 bulk data
 2. A planet: `FVCPlanetMapSampler::Fill` over the tangent plane at `Center`. A plane: `FVCPlaneMapSampler::Fill`, texel
    by texel (each texel the tile pixel just inside its far corner, the pixel the old per-tile-pixel blit wrote last; the
-   columns' and rows' tiles and positions worked out once; `vc.Minimap.TexelFill 0` = the blit as before, which left
-   gaps where tile pixels are coarser than texels). Both report the tiles they read (`VisitedTiles`).
+   columns' and rows' tiles and positions worked out once; the per-tile-pixel blit before G64 left gaps where tile
+   pixels are coarser than texels). Both report the tiles they read (`VisitedTiles`).
 3. Unlock and `UpdateResource()`
 4. Apply via `SetBrushFromTexture()` + `SetDesiredSizeOverride()`
 

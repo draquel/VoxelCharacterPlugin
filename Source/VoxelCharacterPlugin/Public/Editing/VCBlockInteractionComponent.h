@@ -75,7 +75,7 @@ public:
 	// =================================================================
 
 	/**
-	 * Whether digs in this world are timed breaks: a cubic world, with vc.Dig.BreakTimes on.
+	 * Whether digs in this world are timed breaks: a cubic world (world modes review WM-C15).
 	 * @param Config The world's configuration
 	 * @return True when a block breaks only by holding the primary action on it
 	 */

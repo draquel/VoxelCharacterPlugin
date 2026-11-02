@@ -94,7 +94,7 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 		if (UVCBlockInteractionComponent::UsesTimedBreaks(Config))
 		{
 			UE_LOG(LogVoxelCharacter, Warning, TEXT("Server_RequestVoxelModification: refused a dig at [%d,%d,%d]: blocks here break by holding ")
-				TEXT("the primary action (Server_BeginBlockBreak; vc.Dig.BreakTimes 0 digs at once)"), VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z);
+				TEXT("the primary action (Server_BeginBlockBreak)"), VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z);
 			return;
 		}
 		DigVoxelAt(VoxelCoord);

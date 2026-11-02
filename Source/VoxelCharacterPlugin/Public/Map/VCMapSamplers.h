@@ -189,9 +189,6 @@ struct VOXELCHARACTERPLUGIN_API FVCPlaneMapSampler
 	/** Texel X along world +Y and texel Y along world -X (the world map's north-up image); false: texel (X, Y) is world (X, Y). */
 	bool bNorthUp = false;
 
-	/** True: texel by texel; false: clear, then blit every pixel of every tile in view at its near corner (before G64). */
-	bool bTexelFill = true;
-
 	/** If set, receives every tile the fill read. */
 	TSet<FIntPoint>* VisitedTiles = nullptr;
 

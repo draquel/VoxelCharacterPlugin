@@ -130,7 +130,7 @@ re-mesh).
   expression is then the old Z arithmetic (`VoxelCharacter.Planet.GravityFrame`).
 - **Block steps.** In a cubic world (`UVoxelChunkManager::IsBlockSurface`) `RefreshBlockStepHeight` sets `MaxStepHeight`
   to one block (`GetBlockStepHeight`: voxel size + `BlockStepMargin`, 80 at 75 uu), so one block is walked up and two are
-  a wall (D29; `bStepUpOneBlock`, `vc.Move.StepUpBlocks`). Smooth worlds keep 50. Surface navigation uses the same rule.
+  a wall (D29; `bStepUpOneBlock`). Smooth worlds keep 50. Surface navigation uses the same rule.
 - **Terrain closing around a pawn.** An edit near a pawn arms a check; when the new collision lands,
   `ResolveTerrainEmbedding` lifts a pawn whose centre and upper body are inside solid voxels onto the new surface
   (authority). "Near" is a brush's sphere, or for an edit with no centre (a stamp, undo, a load) the box of voxels it
@@ -345,8 +345,8 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 
 ## Console variables
 
-`vc.*` groups: `vc.AI.*` (NPC AI), `vc.Dig.*` (cubic break times, the highlight), `vc.Minimap.*` (the minimap's refill
-and its stats), `vc.Move.*` (block steps), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
+`vc.*` groups: `vc.AI.*` (NPC AI), `vc.Dig.*` (the cubic break times' scale, the highlight), `vc.Minimap.*` (the
+minimap's refill stats), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
 and `ToggleVoxelDebug` are on the controller and the character. Every name, default and meaning:
 `Documentation/EDITOR_CONSOLE_GUIDE.md` §4 at the project root. The `vox.*` QA commands that drive this plugin's pawn
 (`vox.TP`, `vox.AutoRun`, `vox.Fly`, `vox.Mine`, `vox.Chop`, `vox.EditMode`, ...) live in the game module.
