@@ -46,6 +46,17 @@ struct VOXELCHARACTERPLUGIN_API FVCBlockTargets
 	/** The server would refuse the place: a pawn is in the block's cell. */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Voxel")
 	bool bPlaceBlocked = false;
+
+	/** The crosshair's trace hit the terrain (within the cubic, UI and incapacitation gates; no reach or edit-mode gate). */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Voxel")
+	bool bHasHit = false;
+
+	/**
+	 * The cell whose face the trace hit (FindEditTarget's dig voxel, whatever it holds now): until a dug block's collision
+	 * is rebuilt, the trace still hits it and this is the dug cell, now air.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Voxel")
+	FIntVector HitVoxel = FIntVector::ZeroValue;
 };
 
 /**
@@ -61,6 +72,12 @@ struct VOXELCHARACTERPLUGIN_API FVCBlockTargets
  * prediction of the progress; the server advances the one break it keeps per player, checks it again when the time is up
  * and digs through the same path an instant dig takes (AVCPlayerController::DigVoxelAt: one block, the gather table once
  * per voxel). Smooth worlds keep the instant dent per click and show nothing (D32).
+ *
+ * After this player's dig empties a block (NoteDug), the ghost is not shown in that block's cell until the aim moves
+ * (G75): a place aimed at the floor of the hole fills that cell, and a pale block where the dug one was made a one-block
+ * dig read as not having happened. The aim moves when the camera turns more than vc.Dig.GhostRearmDegrees or its
+ * location moves more than a quarter of a block from where they were at the dig (HasAimMoved). The place itself is not
+ * held back: the secondary action places as before, ghost or not.
  */
 UCLASS(ClassGroup = (VoxelCharacter), meta = (BlueprintSpawnableComponent))
 class VOXELCHARACTERPLUGIN_API UVCBlockInteractionComponent : public UActorComponent
@@ -113,6 +130,18 @@ public:
 	/** The crack pattern's seed for a block. */
 	static uint32 HashVoxel(const FIntVector& VoxelCoord);
 
+	/**
+	 * Whether the aim has moved since a dig, which shows the ghost in the dug cell again (G75): the view direction turned
+	 * more than vc.Dig.GhostRearmDegrees, or the view location moved more than a quarter of VoxelSize.
+	 * @param OriginThen    View location at the dig
+	 * @param DirectionThen View direction at the dig (unit)
+	 * @param OriginNow     View location now
+	 * @param DirectionNow  View direction now (unit)
+	 * @param VoxelSize     The world's block size
+	 * @return True when the aim has moved
+	 */
+	static bool HasAimMoved(const FVector& OriginThen, const FVector& DirectionThen, const FVector& OriginNow, const FVector& DirectionNow, float VoxelSize);
+
 	// =================================================================
 	// The owning client
 	// =================================================================
@@ -137,6 +166,21 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Voxel")
 	bool GetClientBreak(FIntVector& OutVoxel, float& OutProgress) const;
+
+	/**
+	 * This player's dig emptied a block: hold the ghost off its cell until the aim moves (G75). Called on the locally
+	 * controlled player by AVCPlayerController::DigVoxelAt and, for a remote client, by Client_BlockBreakFinished; a later
+	 * dig replaces the earlier one.
+	 * @param VoxelCoord The dug block
+	 */
+	void NoteDug(const FIntVector& VoxelCoord);
+
+	/**
+	 * The dug cell the ghost is held off (G75).
+	 * @param OutVoxel The dug block
+	 * @return False when no hold-off is in force (the aim has moved since, or nothing was dug)
+	 */
+	bool GetGhostHoldOff(FIntVector& OutVoxel) const;
 
 	/** What the edits aim at, as last shown (the locally controlled player only). */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Voxel")
@@ -257,6 +301,12 @@ private:
 	/** Faces of a block whose neighbour is air (bit per face, +X, -X, +Y, -Y, +Z, -Z). */
 	static uint8 FindExposedFaces(const UVoxelChunkManager* ChunkMgr, const FIntVector& VoxelCoord);
 
+	/** The camera's location and direction, the crosshair trace's (AVCCharacterBase::TraceForVoxel). False without a camera. */
+	bool GetAim(FVector& OutOrigin, FVector& OutDirection) const;
+
+	/** End the ghost's hold-off once the aim has moved or the dug cell is solid again (G75). */
+	void UpdateGhostHoldOff(const UVoxelWorldConfiguration* Config, const UVoxelChunkManager* ChunkMgr);
+
 	// --- Client ---
 	FVCBlockTargets Targets;
 	bool bHolding = false;
@@ -267,6 +317,11 @@ private:
 	/** A break that ended here (dug or refused) is not begun again on the same block until the target moves off it. */
 	bool bSuppressVoxel = false;
 	FIntVector SuppressedVoxel = FIntVector::ZeroValue;
+	/** G75: the block this player last dug, kept free of the ghost until the aim moves from where it was at the dig. */
+	bool bGhostHeldOff = false;
+	FIntVector GhostHeldOffVoxel = FIntVector::ZeroValue;
+	FVector DigAimOrigin = FVector::ZeroVector;
+	FVector DigAimDirection = FVector::ForwardVector;
 
 	UPROPERTY(Transient)
 	TObjectPtr<ULineBatchComponent> Lines;
