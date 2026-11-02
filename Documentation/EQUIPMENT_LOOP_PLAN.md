@@ -1,5 +1,7 @@
 # Inventory + Equipment Loop — Plan (roadmap feature 2)
 
+> **Frozen 2026-11-02** (code review CR5, D-CR6). This plan is history: roadmap feature 2, merged 2026-10-08. Built: `UVCEquipmentStatEffect` and the `SetByCaller.Stat.*` tags, consumables through `Server_UseItemInSlot`, items across death (`FVCItemSnapshot` on `AVCPlayerState`), the hotbar callables. As it is now: `CHARACTER_SYSTEM.md` ("GAS" and "Items, progression and saves").
+
 Status: APPROVED 2026-10-09 (all five open questions answered yes; use key F); IMPLEMENTED on the feature/equipment-loop branches. Follows the combat foundation (`COMBAT_FOUNDATION_PLAN.md`, merged 2026-10-09).
 
 ## 1. Goal

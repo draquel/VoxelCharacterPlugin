@@ -1,5 +1,7 @@
 # Voxel World Character Controller — Architecture Design
 
+> **Frozen 2026-11-02** (code review CR5, D-CR6). The design record from February; the plugin as built: CHARACTER_SYSTEM.md.
+
 ## Overview
 
 This document defines a **hybrid first/third-person character controller** for Unreal Engine 5.8, designed as a standalone plugin (`VoxelCharacterPlugin`) that integrates with the existing plugin suite:
