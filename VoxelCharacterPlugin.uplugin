@@ -3,7 +3,7 @@
 	"Version": 1,
 	"VersionName": "1.0",
 	"FriendlyName": "VoxelCharacterPlugin",
-	"Description": "a hybrid first/third-person character controller for Unreal Engine 5.7",
+	"Description": "a hybrid first/third-person character controller for Unreal Engine 5.8",
 	"Category": "Other",
 	"CreatedBy": "Daniel Raquel",
 	"CreatedByURL": "",

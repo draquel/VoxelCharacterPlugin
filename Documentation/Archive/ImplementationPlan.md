@@ -1,5 +1,7 @@
 # VoxelCharacterPlugin — Implementation Plan
 
+> **Archived 2026-11-02** (code review CR5, D-CR6): the February build plan (gates 1-5, written when the module was an empty shell); every gate is built. Current: `../CHARACTER_SYSTEM.md`. Kept as history.
+
 ## Current State
 
 **Implemented:** Empty module shell (3 files: `VoxelCharacterPlugin.h`, `.cpp`, `.Build.cs`)

@@ -1,5 +1,7 @@
 # Combat Foundation — Plan
 
+> **Frozen 2026-11-02** (code review CR5, D-CR6). This plan is history: the combat foundation (roadmap feature 1, merged 2026-10-08) and the ten-feature gameplay roadmap of 2026-10-08, all ten features merged. Built: `UVCCombatComponent`, the damage pipeline, `UVCMeleeAttackAbility`, NPC ASCs on `AVCNPCCharacterBase`, death and respawn through `AVCGameModeBase`. As it is now: `CHARACTER_SYSTEM.md` ("GAS", "NPCs").
+
 Status: APPROVED 2026-10-08 (decisions in §14 resolved). First feature of the gameplay roadmap below.
 
 ## 0. Agreed gameplay roadmap (2026-10-08)

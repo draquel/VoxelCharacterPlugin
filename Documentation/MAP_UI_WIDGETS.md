@@ -1,7 +1,9 @@
 # Map UI Widgets
 
+> State as of 2026-11-02 (code review CR5).
+
 **Module**: VoxelCharacterPlugin
-**Dependencies**: VoxelMap (data), UMG (rendering)
+**Dependencies**: VoxelWorlds' `VoxelMap` module (`UVoxelMapSubsystem`, the tile data), UMG (rendering)
 
 ## Overview
 
@@ -65,8 +67,8 @@ When the camera faces north (yaw=0), "N" appears at the top. As the camera rotat
 
 The tick is throttled (default 10 Hz via `UpdateInterval = 0.1`). Each refresh requests the tiles in view
 (`RequestTilesInRadius`), rotates the image and places the markers, but fills the texture again only when what it shows
-changed (VoxelWorlds world modes review G64; `vc.Minimap.SkipUnchanged`, 0 = every refresh as before). A fill cost 2-3 ms
-of game thread at the old rate of ten a second, one frame in six. `NeedsRefill` fills when:
+changed (G64; `vc.Minimap.SkipUnchanged`, 0 = every refresh). A fill costs 2-3 ms of game thread, so filling at every refresh
+put one in six frames over budget. `NeedsRefill` fills when:
 
 - there is no texture yet, or its size changed;
 - the player moved `RefillShiftTexels` (2) from the last fill's centre;
@@ -102,6 +104,7 @@ A fill (`RefreshMapTexture(Center)`):
 | `UpdateInterval` | 0.1 | Seconds between refreshes (rotation, markers; a fill only when needed) |
 | `RefillShiftTexels` | 2.0 | Texels the player may move before the texture is filled again (G64) |
 | `MaxRefillSeconds` | 2.0 | The texture is filled again at least this often (G64) |
+| `MaxMarkers` | 24 | Markers drawn at most |
 
 ### Coordinate Display
 
@@ -154,7 +157,7 @@ Exploration state is queried from `UVoxelMapSubsystem::IsTileExplored()`.
 ### Tile Images on Demand
 
 The map keeps tile images under a fixed budget (world modes review WM-E2): a tile may have only its overview (a quarter
-of the resolution a side) or no image at all until asked for (VoxelWorlds `Documentation/Features/MAP_SYSTEM.md`). While
+of the resolution a side) or no image at all until asked for (`Plugins/VoxelWorlds/Documentation/Features/MAP_SYSTEM.md`). While
 `RebuildMapTexture()` blits the view, every explored tile in it without an image asks for one
 (`UVoxelMapSubsystem::RequestTileImage`), and when the view shows more than one and a half times an overview's resolution
 per tile (zoom above 1.5 at the default texture size) tiles that have only the overview ask for detail. The drawings
@@ -168,7 +171,18 @@ so a fully explored island draws without asking for anything.
 - A new tile finishes generating (`OnMapTileReady` delegate)
 - The user zooms or pans
 
-The rendering process mirrors the minimap's tile blitting but operates at a larger fixed texture size (`MapTextureFixedSize`, default 1024) and includes fog of war logic.
+The rendering blits the tiles in view into a larger fixed texture (`MapTextureFixedSize`, default 1024) with the fog of
+war above. A view of more than `TileRedrawThrottleTiles` (256) tiles redraws for tile arrivals at most every 2 s
+(`DefersTileRedraw`; WM-MP9): the most zoomed-out view of a plane holds about 66,000 tiles, and `voxel.Map.ExploreAll`
+streams an image for each. A view zoomed in to about 16 tiles across still redraws at each arrival
+(`VoxelCharacter.Map.TileRedrawThrottle`).
+
+### Markers
+
+Both maps draw the markers `UVCMapMarkerRegistry` gathers around the view, at most `MaxMarkers` (minimap 24, world map 64,
+highest `Priority` first); the world map gathers them when the view changes and every `MarkerUpdateInterval` (0.5 s).
+VoxelWorldPOI's `VoxelWorlds.POI.Map.MarkerCap` checks the cap on a zoomed-out view; the POI side bounds its own
+query on a big planet (G50).
 
 ### Player Marker
 
@@ -188,6 +202,8 @@ The marker's canvas slot position is set relative to the center anchor (0.5, 0.5
 | `MaxZoom` | 4.0 | Maximum zoom (most zoomed in) |
 | `CurrentZoom` | 1.0 | Current zoom level |
 | `MapTextureFixedSize` | 1024 | Texture resolution (clamped 256-2048) |
+| `MaxMarkers` | 64 | Markers drawn at most |
+| `MarkerUpdateInterval` | 0.5 | Seconds between marker gathers |
 
 ### Lifecycle
 
@@ -207,12 +223,16 @@ On a planet (`UVoxelMapSubsystem::IsPlanetMap`) both widgets read the cube-spher
   face's axes), drawn north along texture X and east along Y like world X and Y on a plane, so the rotation
   (−heading − 90) and the north indicator carry over; the heading is measured from north. The coordinate text shows
   latitude and longitude. The texture is filled from the tile images by `FVCPlanetMapSampler` (a 16-texel grid of exact
-  control points with bilinear UV inside one-face cells, per texel across a face edge), and redrawn only when the player
-  has moved a texel, turned, or a tile arrived.
+  control points with bilinear UV inside one-face cells, per texel across a face edge), filled by the same rule as on a
+  plane (`NeedsRefill`) and shifted in between on the plane it was drawn in.
 - **World map**: a globe (decision D11, `FVCGlobeProjection`): an orthographic view around a direction, north up,
   opening on the player. Dragging brings what showed at −Δ to the centre; the wheel zooms at the plane map's scale (32
-  tiles from the centre at zoom 1, the whole disc near `MinZoom` 0.25). Redrawn at most 30 times a second while tiles
-  stream in. The footer shows the player's latitude and longitude.
+  tiles from the centre at zoom 1). The zoom range comes from the planet's radius (`GetPlanetZoomRange`): the most
+  zoomed-out view shows the whole globe at any radius, and where a texel covers more than two tiles
+  (`GlobeAlbedoTexelsPerTile` 0.5) the globe is drawn from the map's coarse albedo (`UVoxelMapSubsystem::GetGlobeAlbedo`)
+  rather than from every tile image (spherical Phase 6, G51). Redrawn at most 30 times a second while tiles stream in.
+  `SetZoom` (the game module's `vox.Map`) sets the zoom within the range. The footer shows the player's latitude and
+  longitude.
 - **Markers** carry one 3D position (`FVCMapMarker::WorldLocation`; a plane's maps draw its X and Y, a planet's its
   direction); every map gathers them through the one `UVCMapMarkerRegistry::OnGatherMarkers(Center, Radius)`, a square of
   that half extent on a plane and the 3D distance on a planet (code review CR2, VCP-21). POIs bind it (Phase 5).
@@ -236,11 +256,11 @@ TSubclassOf<UUserWidget> WorldMapWidgetClass;
 void ToggleWorldMapUI();
 ```
 
-**Input:** The M key triggers `ToggleWorldMapUI()` via the Enhanced Input action `IA_ToggleWorldMap` bound in `VCInputConfig`.
+**Input:** The M key (`UVCInputConfig::IA_OpenMap`, bound by `AVCCharacterBase::Input_OpenMap`) calls `ToggleWorldMapUI()`.
 
 ## Dynamic Texture Pattern
 
-Both widgets use the same `UTexture2D` creation and update pattern (matching `VoxelMaterialAtlas`):
+Both widgets use the same `UTexture2D` creation and update pattern:
 
 ```cpp
 // Create once
@@ -267,8 +287,10 @@ Texture->UpdateResource();
 | `Private/Map/VCMinimapWidget.cpp` | Minimap implementation |
 | `Public/Map/VCWorldMapWidget.h` | World map widget declaration |
 | `Private/Map/VCWorldMapWidget.cpp` | World map implementation |
+| `Public/Map/VCMapSamplers.h`, `Private/Map/VCMapSamplers.cpp` | `FVCPlanetMapFrame`, `FVCGlobeProjection`, `FVCPlanetMapSampler`, `FVCPlaneMapSampler` |
+| `Public/Map/VCMapMarkerRegistry.h` | `FVCMapMarker`, `UVCMapMarkerRegistry` (the marker gather) |
 
 ## See Also
 
-- VoxelWorlds [MAP_SYSTEM.md](../../VoxelWorlds/Documentation/MAP_SYSTEM.md) — Map data subsystem and tile generation
-- [NAVIGATION_SYSTEM.md](NAVIGATION_SYSTEM.md) — Voxel navigation helpers used alongside map display
+- `Plugins/VoxelWorlds/Documentation/Features/MAP_SYSTEM.md` — the map data subsystem, tile generation and exploration
+- [CHARACTER_SYSTEM.md](CHARACTER_SYSTEM.md) — the controller and HUD that host the widgets

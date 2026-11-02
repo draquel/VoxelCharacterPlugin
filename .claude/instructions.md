@@ -1,575 +1,122 @@
 # VoxelCharacterPlugin — Claude Code Instructions
 
-## Plugin Identity
+> State as of 2026-11-02 (code review CR5). Terms: `Documentation/GLOSSARY.md`.
 
-**Name:** VoxelCharacterPlugin
-**Purpose:** Hybrid first/third-person character controller for voxel worlds with integrated inventory, interaction, equipment, and GAS support.
-**Engine:** Unreal Engine 5.7
-**Module:** `VoxelCharacterPlugin` (Runtime), `VoxelCharacterPluginEditor` (Editor/Dev)
+The player and NPC layer: character, controller, player state, game mode, movement, camera, input, combat on GAS, NPC
+AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; one runtime module, `VoxelCharacterPlugin`.
 
-## Architecture Overview
+## Reading order
 
-This plugin provides the player character, controller, player state, camera system, and movement component for a multiplayer voxel-based game. It does NOT own gameplay systems — it integrates with them through interfaces and component references.
+1. `Documentation/CHARACTER_SYSTEM.md` — the class map, where each area lives (the CR4 file split of
+   `AVCCharacterBase` and `AVCPlayerController`), GAS, movement and the gravity frame, camera, input, editing, the
+   spawn wait, surface gameplay, NPCs, the HUD, replication. The current reference.
+2. `Documentation/MAP_UI_WIDGETS.md` — the minimap and world map, on planes and planets.
+3. `Documentation/EDITOR_CONSOLE_GUIDE.md` at the project root, §4 — every `vc.*` cvar and Exec function; the game
+   module's `vox.*` commands drive this plugin's pawn for QA.
+4. `Documentation/FINDINGS.md` at the project root — open findings in this plugin (G75, G84, G86).
+5. History only: `Documentation/CharacterController_Design.md` (the February design, frozen),
+   `COMBAT_FOUNDATION_PLAN.md` and `EQUIPMENT_LOOP_PLAN.md` (frozen), `Documentation/Archive/ImplementationPlan.md`.
 
-### Ownership Boundaries
+Across plugins: `Plugins/CommonGameFramework/Documentation/ARCHITECTURE.md`; VoxelWorlds'
+`Plugins/VoxelWorlds/Documentation/Features/WORLD_MODES.md` for frames, the sea and the surface queries this plugin
+calls.
 
-| This plugin OWNS | This plugin USES (does not own) |
+## Boundaries
+
+| This plugin owns | It uses (does not own) |
 |---|---|
-| `AVCCharacterBase` | `UInventoryContainerComponent` (ItemInventoryPlugin) |
-| `AVCPlayerController` | `UInteractionScannerComponent` (InteractionPlugin) |
-| `AVCPlayerState` (+ ASC host) | `UEquipmentManagerComponent` (EquipmentPlugin) |
-| `AVCNPCCharacterBase` (+ own ASC) | |
-| `AVCGameModeBase` (respawn) | |
-| `UVCCombatComponent`, combat attribute set, damage execution/effect, melee ability | `ICGFDamageableInterface`, `FCGFDamageContext`, combat tags (CommonGameFramework) |
-| `UVCMovementComponent` | VoxelWorlds terrain queries |
-| `UVCCameraManager` + camera modes | `UAbilitySystemComponent` (GAS — owned by PlayerState but GAS is engine) |
-| `UVCAnimInstance` | `UGameplayEffect`, `UGameplayAbility` (GAS) |
-| `UVCInputConfig` + input actions | CommonGameFramework shared types |
-| View mode system | |
-| Voxel trace helpers | |
-
-### Critical Rule: No Hard Plugin Dependencies in Headers
-
-Integration with other plugins MUST go through interfaces or forward declarations. Never `#include` a header from ItemInventoryPlugin, InteractionPlugin, or EquipmentPlugin in a public header of this plugin. Use:
-
-- `TScriptInterface<IInventoryOwnerInterface>` — not `UInventoryContainerComponent*`
-- Forward declarations + cpp-only includes for component setup
-- `UPROPERTY()` component pointers typed to the base class or interface when possible
-- Runtime resolution via `FindComponentByClass` or interface casts
-
-This ensures VoxelCharacterPlugin compiles even if other gameplay plugins are absent (graceful degradation).
-
-## Code Conventions
-
-### Prefix
-
-All classes in this plugin use the `VC` prefix:
-- `AVCCharacterBase`, `AVCPlayerController`, `AVCPlayerState`
-- `UVCMovementComponent`, `UVCCameraManager`
-- `UVCAnimInstance`, `UVCInputConfig`
-- `EVCViewMode`, `FVCEquipmentSocketMapping`
-
-### File Organization
-
-```
-Source/VoxelCharacterPlugin/
-├── Public/
-│   ├── Core/           # Character, Controller, PlayerState, AnimInstance, AttributeSets, NPC base, GameMode
-│   ├── Combat/         # CombatComponent, CombatAttributeSet, DamageExecution/Effect, MeleeAttackAbility, CombatStatics, EquipmentStatEffect
-│   ├── UI/             # VitalsWidget (health/stamina bars, programmatic)
-│   ├── Camera/         # CameraManager, CameraModeBase, FP/TP modes
-│   ├── Movement/       # MovementComponent, VoxelNavigationHelper, custom modes
-│   ├── Editing/        # BlockInteractionComponent (cubic block highlight, placement preview, timed breaking)
-│   ├── Integration/    # Interface bridges to other plugins
-│   └── Input/          # InputConfig DataAsset, input action references
-├── Private/
-│   └── (mirrors Public/)
-```
-
-### Naming Rules
-
-- Input Actions: `IA_Verb` (e.g., `IA_Move`, `IA_Interact`, `IA_ToggleView`)
-- Input Mapping Contexts: `IMC_Context` (e.g., `IMC_Gameplay`, `IMC_UI`)
-- Enums: `EVCName` (e.g., `EVCViewMode`, `EVCSurfaceType`)
-- Structs: `FVCName` (e.g., `FVCEquipmentSocketMapping`, `FVCTerrainContext`)
-- Delegates: `FOnVCEvent` (e.g., `FOnVCViewModeChanged`)
-- The `VC` prefix is the plugin's identity (CODE_REVIEW_PLAN.md D-CR3): every type carries it; `Voxel` after it says
-  what a type is about (`EVCVoxelModificationType`), never that it is VoxelWorlds' (CR3 renamed `EVoxelSurfaceType`,
-  `EVoxelModificationType`, `FVoxelTerrainContext`, `FOnVoxelEditBlocked`, with `[CoreRedirects]` in
-  `Config/DefaultVoxelCharacterPlugin.ini`)
-- DataAssets: `UVC{Name}Config` or `UVC{Name}Data`
-
-### C++ Standards
-
-- Use `TObjectPtr<>` for all `UPROPERTY` object pointers
-- Use `GENERATED_BODY()`, never `GENERATED_UCLASS_BODY()`
-- All public API functions must have `UFUNCTION()` with appropriate specifiers
-- Use `Category = "VoxelCharacter|Subsystem"` for UPROPERTY/UFUNCTION categories
-- Replicated properties use `ReplicatedUsing = OnRep_PropertyName`
-- Server RPCs: `UFUNCTION(Server, Reliable)` prefixed `Server_`
-- Client RPCs: `UFUNCTION(Client, Reliable)` prefixed `Client_`
-- Multicast RPCs: `UFUNCTION(NetMulticast, Unreliable)` prefixed `Multicast_`
-
-## GAS Architecture
-
-### ASC Lives on PlayerState
-
-The `UAbilitySystemComponent` and all `UAttributeSet` subclasses are owned by `AVCPlayerState`. This is a firm architectural decision — do NOT move the ASC to the character.
-
-**Rationale:** Respawn-based death mechanic. Attributes, cooldowns, and persistent gameplay effects survive character destruction.
-
-**Non-player pawns are the exception:** `AVCNPCCharacterBase` owns its ASC and attribute sets directly (no player state, death is final for the pawn). Anything that needs an ASC resolves it with `UAbilitySystemGlobals::GetAbilitySystemComponentFromActor` (honours `IAbilitySystemInterface`), never `FindComponentByClass` on the pawn — that returns null for players.
-
-### Key Relationships
-
-- **Owner Actor:** `AVCPlayerState` (stable, never destroyed during gameplay)
-- **Avatar Actor:** `AVCCharacterBase` (destroyed on death, re-bound on respawn)
-- `InitAbilityActorInfo(PlayerState, Character)` called in both `PossessedBy` (server) and `OnRep_PlayerState` (client)
-
-### Attribute Sets
-
-- `UVCCharacterAttributeSet` — Health, MaxHealth, Stamina, MaxStamina, MoveSpeedMultiplier, MiningSpeed, InteractionRange, IncomingDamage (meta)
-- `UVCCombatAttributeSet` — AttackPower, Defense (crit stays a weapon-fragment concern)
-
-### Damage Pipeline (Combat/)
-
-```
-attacker builds FCGFDamageContext
-  → UVCCombatStatics::ApplyDamageToActor
-  → UVCCombatComponent::ApplyDamage      (authority only; rejects dead / invulnerable / friendly / vetoed)
-  → UVCDamageEffect spec                 (SetByCaller.Damage + Damage.Type.* dynamic asset tag)
-  → UVCDamageExecution                   (Pure → Base; else max(0, Base + AttackPower − Defense)) → +IncomingDamage
-  → UVCCharacterAttributeSet::PostGameplayEffectExecute folds IncomingDamage into Health
-  → Health delegate → UVCCombatComponent: OnHealthChanged; at 0 → Dead or Downed per OutOfHealthPolicy
-```
-
-- `UVCCombatComponent` implements `ICGFDamageableInterface`; attackers find it with `UCGFCombatStatics::FindDamageable`. Every combatant pawn has one (player: `Faction.Player`; NPC: `Faction.Monster` by default).
-- Hostility is `UCGFCombatStatics::AreHostileFactions` (CommonGameFramework) and nowhere else.
-- `State.Dead` / `State.Downed` are replicated loose tags on the ASC (`EGameplayTagReplicationState::TagOnly`) and block ability activation; `bIsDead` / `bIsDowned` replicate on the component for client visuals.
-- `UVCMeleeAttackAbility` is `ServerOnly`; the client only requests activation by tag `Ability.Attack.Melee`. Damage comes from the main-hand `UItemFragment_Weapon` when present, else `UnarmedDamage`.
-- **Target traces use ECC_Pawn from `GetActorEyesViewPoint`**, never ECC_Visibility: the engine's Pawn and CharacterMesh profiles ignore Visibility, so a visibility trace passes through every character, and the third-person camera is metres behind the pawn.
-- **Sweep, don't ray, at a pawn** (world modes review WM-C9, KC12): a line trace that passes exactly through a capsule's axis misses the capsule (a Chaos query case: offset by 0.01 uu it hits), and an aim straight at a body's centre does exactly that (auto-aim, a target a block below). `AVCCharacterBase::FindMeleeTargetUnderCrosshair` sweeps a sphere of `AttackTargetProbeRadius` (5 uu); the melee ability sweeps `MeleeRadius`.
-- Crit is rolled on the server in the melee ability from the weapon fragment (`CritChance`, `CritMultiplier`); a critical hit carries `Damage.Critical` in `FCGFDamageContext::ContextTags`.
-
-### Item loop integration (feature 2)
-
-- **Equipment stats**: `UVCEquipmentStatEffect` (Combat/) is the project's SetByCaller.Stat.* effect; its keys are the native tags in `Core/VCGameplayTags.h` (`SetByCaller.Stat.MaxHealth|MaxStamina|MoveSpeedMultiplier|MiningSpeed|InteractionRange|AttackPower|Defense`). Adding a modifiable attribute = one tag + one `AddStatModifier` line. Configured in `Config/DefaultGame.ini` under `EquipmentGASSettings`.
-- **Consumables**: `IA_Use` (F) → `RequestUseActiveItem` → `Server_UseItemInSlot` → `UseItemInSlot` (authority): Consumable fragment required; per-definition cooldown on the pawn; applies `AttributeChanges` (instant transient effect), `ConsumeEffect`, `ConsumeAbility`; removes one when `bConsumeOnUse`.
-- **Items across death**: `HandleDied` → `CaptureItemSnapshotToPlayerState` (inventory slots + equipped items as the storage subsystem's item JSON, `FVCItemSnapshot` on `AVCPlayerState`); the new avatar's `PossessedBy` → `RestoreItemSnapshotFromPlayerState` (inventory by slot index, then re-equip through `TryEquipFromInventory`). Server only, not replicated.
-- **Callables for UI/scripts**: `EquipHotbarItem(slot)`, `UnequipSlotToInventory(tag)`, `RequestUseActiveItem()`; the inventory UI click-to-move path is unchanged.
-- **Clock slot**: `AVCPlayerController::ClockWidgetClass` (optional, any `UUserWidget`, anchored top-centre) — the world-clock plugin's widget in the demo; this plugin never reads the time.
-- **Vitals HUD**: `UVCVitalsWidget` (UI/) created by `AVCPlayerController::CreatePersistentWidgets`, rebound in `OnPossess` via `BindVitalsToPawn`; health from `UVCCombatComponent::OnHealthChanged`, stamina from the attribute delegates, `EDIT` cue from `AVCCharacterBase::OnEditModeChanged` (`IsEditModeShown()` for tests/scripts). Placed with anchors + alignment + padding like the other HUD widgets; NEVER `SetPositionInViewport` on a bottom-anchored widget (it lands off-screen). Verify HUD visually with the console command `Shot showui` (plain `Shot` / `pie_screenshot` omit UMG).
-
-### Progression + objective HUD (feature 4)
-
-- **Counters**: `FVCProgressionStats { DungeonsCleared, BossesKilled }` (Core/VCTypes.h) replicated on `AVCPlayerState` (`Progression`, `OnRep_Progression`); authority writes through `AddDungeonCleared(bBossKilled)`; `OnProgressionChanged` fires on the server and on replication. No XP / levels. Save systems persist the struct as-is.
-- **HUD**: `UVCVitalsWidget` gained an objective line (`SetObjective` / `ClearObjective` / `GetObjectiveText`) and a timed toast (`ShowToast(Text, Duration)` / `ClearToast` / `IsToastShown`), both above the bars. `AVCPlayerController` forwards them (`SetObjectiveText`, `ClearObjectiveText`, `ShowToast`, `GetObjectiveText`) and binds the player state's progression delegate in `InitPlayerState` / `OnRep_PlayerState` to toast "Dungeon cleared! (N)".
-- **Who calls it**: gameplay layers above this plugin (VoxelWorldPOI's dungeon objective actor) push objective text to the local controller and call `AddDungeonCleared` on the killer's player state. This plugin knows nothing about dungeons.
-
-### NPC AI (feature 5)
-
-- `AVCNPCAIController` (AI/): patrol → chase → attack → return state machine, server only, no Behavior Tree, no navmesh. Perception = sphere overlap on `ECC_Pawn` within `SightRadius` + a Visibility line trace eyes-to-eyes (pawn profiles ignore Visibility, so only world geometry blocks). Movement = `AddMovementInput` along waypoints from an `IVCPathProvider` (`SetPathProvider`; straight lines without one). Attacks = `TryActivateAbilitiesByTag(Ability.Attack.Melee)` on `AttackCooldown` after facing the target, so the pawn's own `UVCMeleeAttackAbility` (unarmed damage + AttackPower) applies. `DecideState` is a pure static function over `FVCNPCAIDecisionInput` (tested).
-- `AVCNPCCharacterBase` now defaults `AIControllerClass` to it with `AutoPossessAI = PlacedInWorldOrSpawned`, orients to movement (walk speed 300), `bAIEnabled` (false = training dummy) and a topple death visual (`ToppleSeconds`) when there is no physics asset. Dying also freezes the controller.
-- Freeze every NPC with the cvar `vc.AI.Enabled 0` (QA) or per NPC with `SetAIEnabled(false)`.
-- Surface behaviours (feature 10): states `Wander` (roam `WanderRadius` around home with pauses) and `Flee` (prey runs
-  `FleeDistance` legs away from a threat it saw within `FleeRadius`, settles where the run ended: home moves, no Return).
-  `EVCNPCBehavior {Hostile, Prey}` + `WanderRadius` + `PackRadius` + `Faction` live on `AVCNPCCharacterBase` (BP / python
-  friendly) and are read on possess; `DecideState` takes them through `FVCNPCAIDecisionInput` (`bPrey`, `bCanWander`,
-  `bThreatInFleeRange`) so the signature and the old tests stand. Hostiles entering Chase call `AlertPack` (same class
-  within `PackRadius`, idle / wandering / patrolling → `AlertToTarget`). `UVCVoxelPathProvider` (AI/) is the
-  `IVCPathProvider` over VoxelWorlds' `UVoxelSurfaceNavigationSubsystem`; the controller creates one on possess when no
-  provider was set and the subsystem exists (`bUseVoxelNavigation`), dungeon structures replace it with their grid
-  provider right after spawning. A stuck walker with the voxel provider blocks the cells ahead for 8 s and repaths
-  instead of skipping the waypoint. Wander / flee goals are projected onto the surface and checked with `IsWalkable`.
-  Roaming NPCs stretch `LeashDistance` to at least `WanderRadius + SightRadius` on possess (else Chase / Return flip-flop
-  at the edge of the roaming area), and a failed voxel search is retried after 0.75 s rather than every frame.
-- `AVCNPCCharacterBase` uses `UVCMovementComponent` (like the player) since feature 10: capsule sweeps against the voxel
-  trimesh can return edge normals, and the stock component's `FindFloor` / `IsValidLandingSpot` reject walkable voxel
-  slopes — an NPC then stays in Falling (no ground friction) and slides downhill for kilometres. `UVCMovementComponent`
-  re-checks such floors with a line trace. It no longer flips downward normals: the collision trimesh used to be wound
-  backwards (top faces pointing down) and is now wound the way Chaos expects (QA refinement R1), so a downward normal
-  under the feet is a real underside.
-- Light (feature 7): a hostile implementing `ICGFLightBearerInterface` with a lit light is gathered out to `SightRadius * LitTargetSightMultiplier` (1.5); unlit candidates keep the base radius (`IsWithinSight`, pure, tested). No darkness malus yet.
-
-### Carried light (feature 7)
-
-- `AVCCharacterBase` implements `ICGFLightBearerInterface` (CommonGameFramework) on top of the equipment manager's carried-light API: `GetCarriedLightLevel` (every machine), `ConsumeCarriedLightFuel` (authority), plus `GetCarriedLightFuel(Fuel, Max)` and the `OnCarriedLightChanged(bLit, Fuel, Max)` delegate (forwarded from `UEquipmentManagerComponent::OnCarriedLightChanged`, reporting the strongest light). The off-hand slot accepts `Item.Category.Light`.
-- `UVCVitalsWidget` shows "Torch M:SS" (amber, red under a minute) under the EDIT cue while a light burns (`FormatCarriedLight`, pure). A burnt-out light item (`OnItemBroken` on the authority) reaches the owning client through `Client_LightBurntOut` → toast "Your torch burnt out".
-
-### Persistence hooks (feature 9)
-- `AVCPlayerState::GetSaveKey()` strips the Null online subsystem's per-session GUID (`<Computer>-<32 hex>` ->
-  `<Computer>`), so a standalone / PIE player keeps one key across sessions; real online ids are used verbatim.
-- The engine drops the pawn BEFORE `Logout`: a local controller unpossesses (`APlayerController::Destroyed` ->
-  `UnPossess`, PIE stop / quit) and a remote one gets `PawnLeavingGame` (disconnect). `AVCPlayerController` calls
-  `AVCPlayerState::CaptureAvatarState()` from both (items -> pending snapshot, last transform, vitals unless dead),
-  and `AVCGameModeBase::Logout` broadcasts `OnPlayerLoggingOut` while the state is valid. `ExportSaveState` without
-  a pawn returns those captured values.
-
-- `AVCGameModeBase::OnPlayerLoggingIn(PlayerState)` fires in `PostLogin` before the first pawn spawns; `SpawnDefaultPawnFor` honours `AVCPlayerState::PendingSpawnTransform` (a loaded save puts the player back where they stood; the terrain-ready spawn settles the height).
-- `AVCPlayerState::ExportSaveState / ImportSaveState(FVCPlayerSaveState)`: items (the live avatar's `BuildItemSnapshot`, or the pending snapshot between avatars), progression, rest point, last transform, vitals. Import fills the pending snapshot (restored on the next possess), broadcasts progression, sets the rest point, the pending spawn transform and pending vitals (`ApplyPendingVitals` after the items). `GetSaveKey()` = unique net id or `Local0`.
-- `TryPlaceItem` tags spawned actors `Placed` so the save system can list them.
-
-### Surface gameplay (feature 8)
-
-- **Gathering:** `UVCGatherTable` (Gathering/, data asset on `AVCPlayerController::GatherTable`): voxel material id → item id, base / tool yield; `ToolMiningSpeedThreshold` (1.5) decides when a dig counts as tool-assisted. `Server_RequestVoxelModification(Destroy)` reads the voxel's material before the brush, and when voxels were removed `GatherFromVoxel` creates the item, adds it (or drops it at the feet when full) and sends `Client_NotifyGathered` → toast "+N Wood". Pure `YieldFor` is tested.
-- **Chopping:** step 1b of the primary action: `TryChopScatter` asks the local `UVoxelScatterManager::HarvestScatterNear` for a harvestable scatter instance (a tree, `FScatterDefinition::HarvestCategory`) within `ChopSearchRadius` of `GetChopAimPoint()` (160 uu ahead); if there is one, `Server_ChopScatter` → `AVCPlayerController::ChopScatterAt` re-checks, yields the gather table's `HarvestEntries` item per hit (tool ×2) and after `HitsToRemove` hits `Multicast_ScatterHarvested` makes every machine remove its local instance (scatter is local). No edit mode or tool needed.
-- **Voxel trees (cubic worlds; world modes review WM-C8, decision D30):** step 1c of the primary action (`TryChopVoxelTree`, after `TryChopScatter`, skipped in edit mode so B digs a trunk block like any block): a trunk block of a standing voxel tree under the crosshair (`UVoxelChunkManager::FindVoxelTreeAt`) → `Server_ChopVoxelTree` → `AVCPlayerController::ChopVoxelTreeAt` re-checks reach (800 uu, as digging) and the tree, pays the gather table's `VoxelTreeHarvestCategory` (`Tree`, the scatter trees' entry) per hit and at `HitsToRemove` fells it (`UVoxelChunkManager::FellVoxelTree`: trunk above the stump and leaves, one player edit outside the undo history, saved with the edit layer). A stump (`IsVoxelTreeStanding` false) is not chopped. `vox.Chop` / `vox.Trees` in the game module.
-- **Dig gate:** the primary action digs with edit mode (B) **or** a digging tool (`HasDiggingTool`: main hand occupied and `GetMiningSpeed() > 1`, i.e. a pickaxe). Unarmed digging and placing stay behind B.
-- **Placeable items:** `UseItemInSlot` handles `UItemFragment_Placeable` before Consumable: `TryPlaceItem` traces the ground `PlaceDistance` ahead, rejects steep ground (`AcceptsGround`), spawns the actor facing the player on the authority, consumes the item.
-- **Rest points:** `RequestRest / RequestSleep / RequestCraft` route to `Server_RestAt / Server_SleepAt / Server_CraftRecipe`; the server re-checks `IsRestPointInRange` (an `ICGFRestPointInterface` actor within interaction range + 100 uu) and calls the interface (the rest point owns healing / respawn point / clock). `RestoreVitals()` sets health and stamina to max. Results come back as `Client_CraftResult` toasts. `AVCPlayerState::SetRespawnPoint` + `EVCRespawnPolicy::AtLastRest` (`ResolveRespawnTransform`, pure, tested) respawn at the last campsite.
-- **UI:** `UVCCraftingPanelWidget` (recipes for a station via `UCraftingSubsystem`, rows with "Wood 2/4" summaries and Craft buttons, refreshes from `OnInventoryChanged`) and `UVCCampsiteWidget` (Rest / Sleep until dawn / Close + the crafting list). `AVCPlayerController::ToggleCraftingUI` (C, `IA_Craft`) opens hand crafting; `Client_OpenCampsite(RestPoint)` → `OpenCampsiteUI` after a confirmed interaction.
-- Give an NPC a loop with `SetPatrolRoute(points)`; without one it guards its spawn point (`SetLeashOrigin`). `LeashDistance` is measured from the nearest route point (or the leash origin).
-- The dungeon layer (VoxelWorldPOI) implements the path provider over its grid; the surface epic can plug in a voxel pathfinder the same way.
-
-### Damage without an ability system + weapon wear (feature 5b)
-
-- `IVCDamageReceiver` (Combat/): `UVCCombatStatics::ApplyDamageToActor` routes to the combat component when the actor has one, else to this interface (breakable props). Implementers also implement `ICGFDamageableInterface` so target rules see them (`Faction.Object` is hostile to everyone).
-- `UVCMeleeAttackAbility::ApplyWeaponWear` (after a landed hit, `WITH_EQUIPMENT_PLUGIN`): `ApplyDurabilityLoss(MainHand, DegradeRate)`; a weapon at zero durability that was not destroyed swings at `WornOutDamageMultiplier`.
-
-### Death/Respawn Contract (implemented)
-
-1. Health reaches 0 → `UVCCombatComponent::HandleOutOfHealth` (Health attribute delegate, authority)
-   - `OutOfHealthPolicy::Die` → `State.Dead`, `OnDied`, `Event.Combat.Died`
-   - `OutOfHealthPolicy::Downed` → `State.Downed`, `OnDowned`, recoverable with `Revive`; `DownedTimeout` promotes to death
-2. `AVCCharacterBase::HandleDied`: movement off, capsule passable, input ignored, ragdoll if a physics asset exists, `BP_OnDied`, then `AVCGameModeBase::HandlePlayerDied`
-3. After `RespawnDelay` the game mode destroys the pawn and restarts the controller at `ChooseRespawnTransform` (death location by default, or a player start)
-4. New avatar's `PossessedBy` re-binds the ASC; if the player state's ASC still carries `State.Dead`/`State.Downed` it calls `CombatComponent->Revive` and `HandleRespawnAttributeReset` (GEs tagged `DeathCleanseTags` removed; `RespawnResetEffect` applied, or vitals set to max directly when unset)
-5. Inventory and equipment live on the pawn and are destroyed with it; `CaptureItemSnapshotToPlayerState` / `RestoreItemSnapshotFromPlayerState` carry them across the respawn (see "Item loop integration")
-
-The demo game mode must derive from `AVCGameModeBase` or no respawn is scheduled (a warning is logged).
-
-### Rules for GAS Code
-
-- Never cache `GetAbilitySystemComponent()` results on the character across frames — the ASC pointer itself is stable but always access through the getter for safety
-- Attribute change delegates must be re-bound in `PossessedBy`/`OnRep_PlayerState` since they target the character's components
-- Equipment-granted abilities are dynamic: granted on equip, removed on unequip, re-granted on respawn
-- Use `IncomingDamage` as a meta attribute — apply damage through it in `PostGameplayEffectExecute`, never modify Health directly from gameplay code
-
-## Camera System
-
-### Camera Mode Stack
-
-`UVCCameraManager` maintains a stack of `UVCCameraModeBase` instances with blend weights. Modes are pushed/popped, and the manager blends between the top two modes during transitions.
-
-### View Mode Switching Rules
-
-Changing view mode is NOT just a camera change. `SetViewMode()` must trigger ALL of these in order:
-
-1. Push new camera mode onto stack
-2. Update mesh visibility (FP: hide body/show arms, TP: show body/hide arms)
-3. Re-attach all equipment visuals to correct mesh (FP arms vs TP body)
-4. Update interaction scanner profile (different trace params per mode)
-5. Update animation instance view mode property
-6. Replicate to other clients (they need correct body mesh visibility)
-7. Broadcast `OnViewModeChanged` delegate
-
-If you add a new system that cares about view mode, add it to this sequence.
-
-### Voxel Camera Collision
-
-Third-person camera must trace against voxel geometry to prevent clipping into terrain. Use `ResolveVoxelCameraCollision()` in the camera manager. First-person mode does not need this.
-
-### The gravity frame (planets, VoxelWorlds spherical Phase 3)
-
-On a planet the pawn's "up" is local up, minus the movement component's gravity direction. `FVCGravityFrame`
-(Movement/VCGravityFrame.h) converts between world space and that frame (the engine's own `WorldToGravityTransform`):
-`ToGravityRelative` / `ToWorld`, `GetYawRotation` (the heading in the local horizontal), `VectorToWorld`, `GetUp`,
-`GetHorizontalSpeed`. Every movement-component overload returns its input unchanged without custom gravity, so heightmap
-worlds keep the old arithmetic. Rules:
-
-- `AVCPlayerController::UpdateRotation` keeps the control rotation in world space, turns it each frame by the change in
-  gravity, and clamps pitch / zeroes roll in the gravity frame; without custom gravity it is the engine's.
-- Anything that reads the control rotation's yaw (ground input, the third-person offset, facing in first person,
-  `AVCCharacterBase::FaceRotation`) goes through `GetYawRotation`; eye heights and camera offsets through `VectorToWorld`;
-  the anim instance reads speed, direction and aim in the gravity frame.
-- Only frame-independent things are done in the gravity frame (zero a pitch or roll, take a yaw-only heading, clamp a
-  pitch). The frame's own twist spins near a planet's south pole, so never keep a gravity-relative yaw across frames.
-- Since spherical Phase 4: `FVCGravityFrame::Horizontal` / `HorizontalDirection` / `HorizontalDistance` / `UpComponent` /
-  `FacingRotation` / `HorizontalAtAngle` / `VectorToGravity`, each the old Z-up expression without custom gravity, carry
-  the NPC AI (steering, waypoints, stuck probe, facing, wander and flee goals; `AVCNPCAIController::SteerDirection`,
-  `WanderGoalAt`, `FleeDirection`), the auto-jump (feet, knee trace, top probe, rise along local up), placing
-  (`AVCCharacterBase::GetPlacementTrace` / `GetPlacementTransform`, the slope test on the normal in the gravity frame),
-  the chop aim point (`GetChopAimPointFor`). Characters and NPCs override `GetPawnViewLocation` (the eye height along
-  local up). Ragdolls on a planet switch the bodies' world gravity off and pull toward the centre each tick
-  (`StartRadialRagdoll` / `TickRadialRagdoll`). Every possession levels the view on the first planet frame
-  (`AVCPlayerController::bLevelViewInGravity`: the engine's restart leaves the start spot's world-level rotation).
-- The map widgets on a planet (see `Documentation/MAP_UI_WIDGETS.md` "Planets"): the minimap's tangent plane
-  (`FVCPlanetMapFrame`), the world map's globe (`FVCGlobeProjection`), `FVCPlanetMapSampler`.
-
-## Movement Component
-
-### Voxel Terrain Context
-
-`UVCMovementComponent` caches voxel terrain data in `FVCTerrainContext` to avoid per-frame voxel queries. Cache rules:
-
-- Re-query every `TerrainCacheDuration` seconds (default 100ms)
-- Invalidate immediately when `OnVoxelChunkModified` fires for the character's current chunk
-- `EVCSurfaceType` drives friction multiplier, footstep sounds, and movement speed modifiers
-
-### Block steps (cubic worlds; world modes review WM-C7, decision D29)
-
-A cubic world's ground is blocks a voxel high. Once a walker sees an initialized voxel world with a block surface
-(`UVoxelChunkManager::IsBlockSurface`) `RefreshBlockStepHeight` sets `MaxStepHeight` to one block
-(`GetBlockStepHeight`: voxel size + `BlockStepMargin`, 80 at 75 uu), for players and NPCs alike (`bStepUpOneBlock`,
-`vc.Move.StepUpBlocks`), so one block is walked up and two are a wall (the jump's apex is about 113). Smooth worlds keep
-50. The surface navigation uses the same rule (`voxel.Nav.BlockSteps`). `UVCCameraManager` eases the view through a block
-step (`bEaseBlockSteps`, `BlockStepEaseSpeed`, pure `ComputeStepEaseOffset`) only for a walker that `IsSteppingBlocks()`.
-
-### Terrain closing around a pawn
-
-Edits must never trap a pawn. `Server_RequestVoxelModification` refuses a placement whose voxel cube (smooth worlds:
-centred on the sample, half a voxel plus a margin; cubic worlds: the block's own cell) overlaps ANY pawn and tells the player through `Client_ShowToast` ("Too close to
-place a block"); the demo `AVoxelDemoActor` build / place inputs refuse brushes that overlap a pawn. As a safety
-net for everything else (stamps, scripts), an edit near a pawn arms `UVCMovementComponent`, and when the new
-collision lands nearby `ResolveTerrainEmbedding()` lifts the pawn onto the new surface if its centre and upper body are
-inside solid voxels (players and NPCs both use this component). "Near" is a brush's sphere, or for an edit with no
-centre (a POI's terraform, a dungeon stamp, undo, a clear, a load) the box of the voxels it changed in the chunk
-(`UVoxelEditManager::GetBroadcastEditBounds`; world modes review G55), within the capsule's half height plus 200 uu.
-
-### Custom Floor Finding
-
-If VoxelWorlds uses async mesh generation (marching cubes), the standard `FindFloor` may fail during mesh rebuilds. The override must handle transitional states gracefully — if no valid floor is found and the character was grounded last frame, maintain grounded state briefly to avoid jitter.
-
-### Movement Modes
-
-### Planet gravity (spherical SP-F1, SP-F2)
-
-On a planet (the voxel world's bounds are a shell) `UVCMovementComponent::PerformMovement` points the engine's custom
-gravity direction (UE 5.4+ `SetGravityDirection`) at the planet centre from the position before every move
-(`UpdatePlanetGravity`), so the server's replay, the client's prediction and NPCs agree with no new replicated state;
-simulated proxies take the engine's replicated gravity direction. The engine then walks, falls, finds floors, steps,
-jumps and stays upright in gravity space. This component's own vertical code is in the same frame: the swim controls,
-buoyancy, surface damping and cap and the vertical clamp (`GetGravitySpaceZ` / `SetGravitySpaceZ`), the dive floor probe,
-the floor-normal / landing / grace line traces (along `GetGravityDirection()`), the shore climb (heights by
-`GetGravitySpaceZ`, the probe capsule along local up), the terrain context's samples, the breath head point, the embed
-resolve and the sprint's ground speed. After placing a pawn on a planet call `UpdatePlanetGravity()` then
-`SnapUprightToGravity()` (the spawn, `vox.TP` and the recovery paths do). Heightmap worlds never set a custom gravity;
-with the default gravity every expression is the old Z arithmetic (tested bit for bit in `VoxelCharacter.Planet.GravityFrame`).
-
-- Walking: standard, modified by voxel surface friction
-- Swimming: triggered by voxel water detection, speed scaled by `VoxelSwimmingSpeedMultiplier`
-- Climbing: custom mode for vertical voxel surfaces (ladders, cliff faces)
-- Falling: standard, no voxel modifications
-
-## Input System
-
-### Enhanced Input Only
-
-All input uses UE5 Enhanced Input. No legacy `BindAction`/`BindAxis` calls.
-
-### Input Mapping Context Priority
-
-| Priority | Context | When Active |
-|---|---|---|
-| 0 | `IMC_Gameplay` | Always (base layer) |
-| 1 | `IMC_UI` | Inventory/menu open (adds cursor, blocks gameplay) |
-| 10 | `IMC_Ability` | During GAS ability activation that overrides input (future) |
-
-### Input → Action Routing
-
-Primary/Secondary actions (LMB/RMB) route through a priority chain:
-
-1. GAS ability activation — implemented for melee: a hostile damageable within `AttackTargetRange` under the crosshair → `TryActivateAbilitiesByTag(Ability.Attack.Melee)`
-2. Equipped item action (tool mining, weapon attack, block placement)
-3. Bare-hands fallback (punch/default)
-
-Dead or downed characters ignore primary/secondary actions entirely.
-
-**Voxel edit mode gate:** steps 2-3 carve terrain (tool dig, unarmed dig, block placement) and only run while
-`bEditModeEnabled` is true (off by default). It is toggled by `IA_ToggleEditMode` (B) → `ToggleEditMode()`, by
-`SetEditModeEnabled()` from Blueprint/code, or by `vox.EditMode` in the game module. The flag is local input state,
-never replicated; the server still validates every `Server_RequestVoxelModification`. `OnEditModeChanged(bool)`
-drives the `EDIT` cue on `UVCVitalsWidget`. The toggle also mirrors into the VoxelWorlds console variable
-`voxel.Edit.PlayerInputs` (looked up by name, no dependency) so a map whose `AVoxelDemoActor` has
-`bEnableEditInputs` set (the demo's brush sphere) obeys the same key instead of polling the raw mouse; in a cubic world
-the mirror sets 2 (the test actor keeps its keys, no mouse edits or target boxes: the character edits blocks itself, with
-break times; world modes review WM-C16). This is a stop-gap so attacking/interacting never digs; the plan is to bind edit
-to an item / mechanic later, which should replace the key, not the gate.
-
-**Block-accurate editing in cubic worlds (world modes review WM-C2):** the dig / place target comes from
-`AVCCharacterBase::GetEditVoxelCoord(ImpactPoint, ImpactNormal, Config, bPlace)`: a place fills the voxel half a voxel in
-front of the hit face; in a cubic world a dig takes the block half a voxel behind it (the impact point lies on the face,
-so `floor(ImpactPoint)` was the air voxel on +X/+Y/+Z faces, KC5), while smooth worlds still dig at the voxel containing
-the impact point. On the server a cubic world edits whole blocks: one full-strength cube brush around that one voxel
-(density to 0 / 255), so one click removes or places exactly one block; smooth worlds keep the density brushes. The game
-module's `vox.Dig` (crosshair form) uses the same helper. Every edit action takes its voxels from
-`AVCCharacterBase::FindEditTarget` (the crosshair trace and `GetEditVoxelCoord` for the dig and the place voxel; WM-C12),
-and the server's reach is `AVCPlayerController::IsVoxelInEditReach` (800 uu, `EditReach`, to the voxel's corner).
-
-**Block feedback and timed breaking (cubic worlds; world modes review §22, decisions D31-D34):**
-`UVCBlockInteractionComponent` (Editing/, `AVCCharacterBase::BlockInteraction`) on the locally controlled player in a cubic
-world outlines the block the primary action would dig (edit mode, or a digging tool) and draws a translucent ghost of the
-block the secondary action would place (edit mode), red where the server would refuse it
-(`AVCPlayerController::WouldPlaceTrapPawn`); both from `FindEditTarget`, within the reach, only on a solid / air voxel,
-hidden in a UI mode and in smooth worlds; drawn by its own `ULineBatchComponent` (no assets; `vc.Dig.Highlight`). A dig in a
-cubic world is a hold: `IA_PrimaryAction` binds `Completed` / `Canceled` too, the press starts `StartHold`, the release
-`StopHold`. While held the owning client sends `Server_BeginBlockBreak(voxel)` for the target (again on every retarget)
-and `Server_StopBlockBreak` on release, and draws cracks over the block's exposed faces from its own prediction
-(`BuildCrackLines`, pure); the server keeps one break per player, checks it as a dig (reach, a solid voxel,
-`UVoxelEditManager::CanEditAt`), advances it by Δt ÷ (`FVoxelMaterialRegistry::GetHardness` ÷ `MiningSpeed`) each tick
-(`GetBreakSeconds`), and when it completes checks again and digs through `AVCPlayerController::DigVoxelAt` (the instant
-dig's path: one block, the gather table once per voxel), then `Client_BlockBreakFinished`; `OnBlockBroken` fires on the
-server, `AVCPlayerController::OnVoxelGathered` when a dig pays. Holding on breaks the next block under the crosshair.
-`Server_RequestVoxelModification(Destroy)` refuses in a timed world (a client cannot skip the time). Smooth worlds dig at
-once (D32). Cvars `vc.Dig.BreakTimes` (0 = instant breaks, as before), `vc.Dig.BreakTimeScale` (QA), `vc.Dig.Highlight`;
-`vox.Mine [seconds]` holds the break through the client path, `vox.Dig` digs at once (QA). Voxel edits are not replicated
-to clients (VoxelWorlds' edit layer, a known gap), so a remote client sees its predicted cracks but not the dug block.
-
-Do not bypass this chain. New action types insert into the chain, they don't replace it.
-
-## Terrain Spawn System
-
-### FindSpawnablePosition
-
-`FVCTerrainQueryHelper::FindSpawnablePosition()` uses `IVoxelWorldMode::GetTerrainHeightAt()` to deterministically query terrain height from noise parameters — no loaded chunks required. Called at the top of `InitiateChunkBasedWait()` to correct the spawn position before chunk collision is requested.
-
-- If position is above water (or water disabled): returns terrain height at that X,Y
-- If underwater: spirals outward at `ChunkWorldSize` intervals in 8 directions until above-water terrain is found
-- Returns false if no land within `MaxSearchRadius` (default 50,000 units)
-
-**Critical**: The character must be placed AT the terrain surface height (not above it) so the chunk Z coordinate calculation picks the correct terrain-level chunks. Movement and collision are disabled during the wait, so the character won't fall.
-
-**Planets (spherical SP-F4):** the search is by direction (`FindPlanetSpawnPoint`): the terrain along the direction from
-the centre (`UVoxelChunkManager::GetSurfacePointAt`), dry when it is above the sea sphere, else rings of directions one
-chunk of arc apart in 8 bearings. `InitiateChunkBasedWait` then waits on a chunk grid in the tangent plane (plus the chunk
-under the feet along local down), `PlaceOnTerrainAndResume` traces along local up and stands the pawn upright, the
-recovery location is `UVoxelChunkManager::GetSpawnPosition` (the planet centre is inside it), and the
-out-of-world rule is radial (`AVCCharacterBase::IsOutOfWorld`: `OutOfWorldDepth` inside the shell's inner radius).
-Water depth everywhere (`QueryTerrainContext`, `IsPositionUnderwater`, the spawn search) is the chunk manager's sea
-(`GetSeaSurface(true)`: the plane at `WaterLevel + WorldOrigin.Z`, or the sphere of `WaterRadius` on a planet).
-`AVCGameModeBase` parks the world-item pool at the planet centre once the voxel world is up.
-
-### Capsule Overlap Gate for Block Placement
-
-`Server_RequestVoxelModification_Implementation` rejects `Place` operations where the voxel's AABB overlaps the character's capsule bounding box. This prevents:
-- Placing blocks inside the character's feet position
-- The surface mesh topology absorbing the block the character stands on
-- The character falling through the world due to collision surface removal
-
-The check uses an AABB-vs-AABB test (voxel box against capsule bounding box) — slightly conservative at capsule corners, which is the safer direction.
-
-## Multiplayer Rules
-
-### Server Authority
-
-- All voxel modifications go through `Server_RequestVoxelModification` RPC — never modify voxels client-side authoritatively
-- Inventory operations are server-authoritative (via ItemInventoryPlugin)
-- Equipment changes are server-authoritative (via EquipmentPlugin)
-- GAS attribute changes are server-authoritative (via ASC)
-
-### Client Prediction
-
-- Movement: standard CharacterMovementComponent prediction
-- Voxel block breaking: the client draws its predicted cracks (`UVCBlockInteractionComponent`), the server times the break and removes the block
-- GAS: use prediction keys for ability activation, server reconciles
-
-### Replication Checklist
-
-| Data | Replicated? | Method |
-|---|---|---|
-| View Mode | Yes | `ReplicatedUsing` on character |
-| Movement | Yes | CMC built-in prediction |
-| Equipment State | Yes | Via EquipmentPlugin |
-| Inventory | Yes | Via ItemInventoryPlugin (on PlayerState) |
-| GAS Attributes | Yes | Via ASC on PlayerState |
-| Camera State | No | Local only, never replicated |
-| Input State | No | Local only |
-
-## UI Management (AVCPlayerController)
-
-### Widget Ownership
-
-`AVCPlayerController` owns and manages all player-facing UI widgets. It creates them, positions them in the viewport, and handles input flow. The widget classes themselves live in their respective gameplay plugins (e.g., `UHotbarWidget` in ItemInventoryPlugin), but the controller is the orchestrator.
-
-**Persistent widgets** (created in `CreatePersistentWidgets()` during `BeginPlay`):
-- `HotbarWidget` — always visible at bottom-center, `HitTestInvisible` by default
-- `InteractionPromptWidget` — shown/hidden by interaction scanner callbacks
-
-**Toggle widgets** (lazy-created in `ShowInventoryPanels()`):
-- `InventoryPanelWidget` — grid of slots [9, MaxSlots), removed from viewport on close
-- `EquipmentPanelWidget` — equipment slots, removed from viewport on close
-- `ItemCursorWidget` — floating cursor icon, lazy-created on first item grab, Z-order 100
-
-All widget class references are `TSubclassOf<UUserWidget>` properties on the controller. If not set, they default to the C++ base class via `StaticClass()`. This allows Blueprint skinning without code changes.
-
-### Click-to-Move State Machine
-
-The controller manages a state machine for item rearrangement across inventory and equipment slots. The held source tracks what type of slot the player grabbed from:
-
-```
-EVCHeldSource::None       →  Nothing held
-EVCHeldSource::Inventory  →  Item grabbed from an inventory slot (HeldSlotIndex, HeldInventory)
-EVCHeldSource::Equipment  →  Item grabbed from an equipment slot (HeldEquipmentSlotTag, HeldEquipmentManager)
-```
-
-**Interaction matrix:**
-
-| Source | Target | Operation |
-|--------|--------|-----------|
-| Inventory → Inventory | `TrySwapSlots(sourceSlot, targetSlot)` |
-| Inventory → Equipment | `EquipMgr->TryEquipFromInventory(itemGuid, inventory, slotTag)` |
-| Equipment → Inventory | `EquipMgr->TryUnequipToInventory(slotTag, inventory)` + `TrySwapSlots` to clicked slot |
-| Equipment → Equipment | Cancel (not supported) |
-| Any → Same slot | Cancel |
-| Any → Right-click | Cancel |
-
-The unequip flow (equipment → inventory) first unequips to the first available inventory slot via `TryUnequipToInventory`, then finds where the item landed by `FindSlotIndexByInstanceId` and swaps it to the player's clicked slot. This gives precise placement control.
-
-**Delegate binding:** `BindSlotClickDelegates()` is called once from `ShowInventoryPanels()` **after both inventory and equipment panels are created**. It binds:
-- Hotbar + inventory panel `OnSlotClicked`/`OnSlotRightClicked` → `OnSlotClickedFromUI`/`OnSlotRightClickedFromUI`
-- Equipment panel `OnSlotClicked`/`OnSlotRightClicked` → `OnEquipmentSlotClickedFromUI`/`OnEquipmentSlotRightClickedFromUI`
-
-A `bSlotDelegatesBound` guard prevents double-binding since widget objects persist across open/close cycles. **Critical:** The bind call must come after both `#if WITH_INVENTORY_PLUGIN` and `#if WITH_EQUIPMENT_PLUGIN` blocks so all panels exist.
-
-**Slot routing:** `SetSlotHeldVisual(int32, bool)` routes inventory slots to the correct container: `< 9` → hotbar, `>= 9` → panel. `SetEquipmentSlotHeldVisual(FGameplayTag, bool)` routes equipment slots to the equipment panel's `SetSlotHeld()`.
-
-**Cursor icon:** `ShowItemCursor(int32, UInventoryComponent*)` resolves icons from inventory items. `ShowItemCursorForEquipment(FGameplayTag, UEquipmentManagerComponent*)` resolves icons from equipped items. Both use the `ItemDatabaseSubsystem` to look up the `UItemDefinition::Icon`.
-
-**Cancel/cleanup:** `CancelHeldState()` checks `HeldSourceType` to clear the correct visual (inventory or equipment), hides the cursor, and resets all held fields. `HideInventoryPanels()` calls `CancelHeldState()` before reverting the hotbar to `HitTestInvisible`.
-
-### Conditional Compilation
-
-All inventory/interaction/equipment UI code is wrapped in `#if WITH_INVENTORY_PLUGIN` / `#if WITH_INTERACTION_PLUGIN` / `#if WITH_EQUIPMENT_PLUGIN` guards. The controller compiles and functions (without UI) when gameplay plugins are absent.
-
-Widget class includes go in the `.cpp` inside these guards — never in the header. The header uses forward declarations only: `class UItemCursorWidget;`, `class UInventoryComponent;`.
-
-### Adding New UI Widgets
-
-When adding a new widget that the controller manages:
-1. Add `TSubclassOf<UUserWidget>` class property and `TObjectPtr<UUserWidget>` instance in the controller header
-2. Forward-declare the widget class in the header; `#include` in the `.cpp` under the correct `WITH_*` guard
-3. Create/add to viewport in the appropriate lifecycle method
-4. If the widget needs click interaction, follow the delegate relay pattern: child widget → container delegate → controller handler
-
-## Integration Testing Checklist
-
-When modifying this plugin, verify:
-
-- [ ] Plugin compiles with all gameplay plugins present
-- [ ] Plugin compiles with all gameplay plugins ABSENT (graceful degradation)
-- [ ] View mode switch updates: camera, meshes, equipment visuals, interaction scanner, animation, replication
-- [ ] Death → respawn flow: ASC rebinds, attributes reset, equipment re-grants, delegates reconnect
-- [ ] Voxel surface type changes propagate to: movement friction, footstep sounds, animation
-- [ ] Input routing priority chain works: GAS → equipment → fallback
-- [ ] Third-person camera does not clip into voxel terrain
-- [ ] Server RPCs validate before applying voxel modifications
-- [ ] Hotbar slot change updates: held item visual, FP arms animation, interaction behavior
-
-## File Creation Order (Build Sequence)
-
-When implementing from scratch, create files in this order with compile gates:
-
-### Gate 1: Core Skeleton
-1. `VoxelCharacterPlugin.Build.cs` (module dependencies)
-2. `VoxelCharacterPlugin.h/.cpp` (module startup)
-3. `EVCViewMode.h` (enum, no dependencies)
-4. `FVCTerrainContext.h` (struct, no dependencies)
-5. `UVCInputConfig.h/.cpp` (DataAsset with input action refs)
-6. **Compile gate — module loads, types exist**
-
-### Gate 2: Movement & Camera
-7. `UVCMovementComponent.h/.cpp` (extend CMC)
-8. `UVCCameraModeBase.h/.cpp` (abstract camera mode)
-9. `UVCFirstPersonCameraMode.h/.cpp`
-10. `UVCThirdPersonCameraMode.h/.cpp`
-11. `UVCCameraManager.h/.cpp`
-12. **Compile gate — movement and camera work standalone**
-
-### Gate 3: Character & Controller
-13. `UVCCharacterAttributeSet.h/.cpp` (GAS attribute set)
-14. `AVCPlayerState.h/.cpp` (ASC owner)
-15. `AVCCharacterBase.h/.cpp` (assembles all components)
-16. `AVCPlayerController.h/.cpp`
-17. `UVCAnimInstance.h/.cpp`
-18. **Compile gate — character spawns, moves, camera works, GAS initializes**
-
-### Gate 4: Integration Bridges
-19. The four `IVC*Bridge` interfaces were deleted in CR1 (VCP-01): the character implements their methods directly
-24. **Compile gate — full plugin compiles with and without gameplay plugins**
-
-### Gate 5: Voxel Integration
-25. `UVCVoxelNavigationHelper.h/.cpp`
-26. Voxel terrain context queries in movement component
-27. Voxel camera collision in camera manager
-28. Block trace and modification in character/controller
-29. **Compile gate — character moves correctly on voxel terrain**
+| `AVCCharacterBase`, `AVCPlayerController`, `AVCPlayerState` (ASC host), `AVCGameModeBase`, `AVCNPCCharacterBase` (own ASC), `AVCNPCAIController` | `UInventoryComponent` (ItemInventoryPlugin), `UInteractionComponent` (InteractionPlugin), `UEquipmentManagerComponent` (EquipmentPlugin) |
+| `UVCMovementComponent`, `FVCGravityFrame`, `FVCTerrainQueryHelper` | VoxelWorlds' chunk manager, edit manager, scatter manager and surface navigation |
+| `UVCCameraManager` and its modes, `UVCAnimInstance`, `UVCInputConfig` | `UAbilitySystemComponent`, `UGameplayEffect`, `UGameplayAbility` (GAS) |
+| `UVCCombatComponent` and the combat GAS classes, `UVCBlockInteractionComponent`, `UVCGatherTable` | `ICGFDamageableInterface`, `FCGFDamageContext`, `ICGFInventoryInterface`, `ICGFLightBearerInterface`, `ICGFRestPointInterface`, combat tags (CommonGameFramework) |
+| The HUD widgets, the map widgets, `UVCMapMarkerRegistry`, `UVCSettings` | Widget classes from the gameplay plugins (`UHotbarWidget`, `UItemCursorWidget`, ...) |
+
+## Rules
+
+### No hard dependency on the gameplay plugins
+
+- ItemInventoryPlugin, InteractionPlugin and EquipmentPlugin are optional. `VoxelCharacterPlugin.Build.cs` defines
+  `WITH_INVENTORY_PLUGIN`, `WITH_INTERACTION_PLUGIN`, `WITH_EQUIPMENT_PLUGIN` (1 or 0) and adds each as a private
+  dependency only when present.
+- Never include their headers in a public header of this plugin. Forward-declare; include in the `.cpp` under the
+  matching `#if WITH_*_PLUGIN`. Members of their types are not `UPROPERTY` (UHT forbids it inside `#if`).
+- Cross-plugin contracts go through CommonGameFramework's `ICGF*` interfaces and gameplay tags; resolve at runtime with
+  interface casts or `FindComponentByClass`.
+- The plugin must compile and run (movement, camera, input, combat) with all three absent.
+- VoxelWorlds is a hard dependency, but read its settings by name where a dependency would be upward
+  (`voxel.Edit.PlayerInputs` is looked up, not linked).
+
+### Naming and C++
+
+- Every type carries `VC` after the UE letter (D-CR3): `AVCCharacterBase`, `FVCTerrainContext`, `EVCSurfaceType`,
+  `FOnVCViewModeChanged`. `Voxel` after `VC` says what a type is about (`EVCVoxelModificationType`), never that it is
+  VoxelWorlds'. Renamed types get `[CoreRedirects]` in `Config/DefaultVoxelCharacterPlugin.ini` (checked by
+  `VoxelCharacter.Config.CoreRedirects`).
+- Input actions `IA_<Verb>`, mapping contexts `IMC_<Context>`; data assets `UVC<Name>Config` / `UVC<Name>Data`.
+- `TObjectPtr<>` for `UPROPERTY` object pointers; `GENERATED_BODY()`; categories `"VoxelCharacter|<Area>"`.
+- RPC prefixes: `Server_` (Server, Reliable), `Client_` (Client, Reliable), `Multicast_`. Replicated properties use
+  `ReplicatedUsing = OnRep_<Name>`.
+- A new piece of a large class goes in the file of its area (`VCCharacterBase_Spawn.cpp`, `_Surface.cpp`,
+  `VCPlayerController_Items.cpp`, `_VoxelEdit.cpp`; CHARACTER_SYSTEM.md has the table), not back into the main file.
+
+### GAS
+
+- The player's ASC and attribute sets live on `AVCPlayerState`. Do not move them to the character: respawn keeps
+  attributes, cooldowns and lasting effects. NPCs own theirs.
+- Resolve an ASC with `UAbilitySystemGlobals::GetAbilitySystemComponentFromActor`, never `FindComponentByClass` on the
+  pawn (null for players). Do not cache it across frames; go through the getter.
+- Attribute delegates bound to the character's components are bound again in `PossessedBy` / `OnRep_PlayerState`.
+- Damage goes through `IncomingDamage` (folded in `PostGameplayEffectExecute`); gameplay code never writes Health.
+- Hostility is `UCGFCombatStatics::AreHostileFactions` and nowhere else.
+- Equipment-granted abilities are granted on equip, removed on unequip, granted again on respawn.
+
+### Traces at pawns
+
+- Target traces use the Pawn channel from `GetActorEyesViewPoint`, never Visibility (pawn profiles ignore it), and
+  sweep a small sphere, not a ray (a ray through a capsule's axis misses it: KC12).
+
+### Movement and the gravity frame
+
+- Anything "up", "horizontal" or yaw-based goes through `FVCGravityFrame` (each helper is the Z-up expression without
+  custom gravity, so heightmap worlds are unchanged). Only frame-independent work is done in the frame; never keep a
+  gravity-relative yaw across frames (the frame twists near a planet's south pole).
+- After placing a pawn on a planet: `UpdatePlanetGravity()` then `SnapUprightToGravity()`.
+- NPCs use `UVCMovementComponent` too; do not give a voxel walker the stock component.
+- Edits must never trap a pawn: the server refuses a place overlapping any pawn (`WouldPlaceTrapPawn`), and
+  `ResolveTerrainEmbedding` is the safety net for everything else. Keep both.
+
+### Input and the action chain
+
+- Enhanced Input only. `IMC_Gameplay` at priority 0, `IMC_UI` at 1 while a panel is open.
+- Primary and secondary actions go through one chain (melee target, chop, dig / place). New action types insert into
+  the chain; they do not replace or bypass it. Dead or downed characters ignore both.
+- Edit mode is local input state and gates unarmed digging and placing; the server validates every request regardless.
+- A view-mode-dependent system joins `AVCCharacterBase::SetViewMode`'s sequence.
+
+### Server authority
+
+- Every voxel edit goes through `Server_RequestVoxelModification` or the timed break (`Server_BeginBlockBreak`); every
+  inventory, equipment, rest and crafting change through the owning plugin's server path. Clients predict visuals only
+  (cracks, the ghost).
+- Voxel edits are not replicated to clients (a VoxelWorlds gap); do not build client logic that assumes they are.
+
+### UI
+
+- `AVCPlayerController` creates and places every player widget. A new widget: a `TSubclassOf<UUserWidget>` class
+  property and a `TObjectPtr<UUserWidget>` instance in the controller header, the class forward-declared, its include in
+  the `.cpp` under the right `WITH_*` guard, created in the matching lifecycle method; clicks relay child widget ->
+  container delegate -> controller handler.
+- Widgets are built in C++ (`NativeOnInitialized`), no designer assets.
+- Place with anchors, alignment and padding; never `SetPositionInViewport` on a bottom-anchored widget. Check the HUD
+  with `Shot showui`; `Shot` and `pie_screenshot` omit UMG.
+- `BindSlotClickDelegates` must run after both the inventory and equipment panels exist.
+
+## Before you finish a change
+
+- [ ] Compiles with all gameplay plugins present, and with them absent.
+- [ ] The `VoxelCharacter.*` tests pass.
+- [ ] Death and respawn: the ASC binds again, attributes reset, items and equipment restored, delegates reconnect.
+- [ ] Heightmap behaviour unchanged by planet code (the gravity-frame helpers fall back to Z-up).
+- [ ] Server RPCs validate before they change voxels or items.
+- [ ] A changed or new `vc.*` cvar is in `Documentation/EDITOR_CONSOLE_GUIDE.md` §4; a changed system in
+      `Documentation/CHARACTER_SYSTEM.md`.
