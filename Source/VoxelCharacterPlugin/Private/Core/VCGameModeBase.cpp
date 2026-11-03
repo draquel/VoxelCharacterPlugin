@@ -7,6 +7,9 @@
 #include "VoxelCharacterPlugin.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
+#include "GameFramework/SpectatorPawn.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
 #include "Movement/VCTerrainQueryHelper.h"
@@ -24,6 +27,76 @@ void AVCGameModeBase::StartPlay()
 	Super::StartPlay();
 	VoxelWorldShapePolls = 0;
 	GetWorldTimerManager().SetTimer(VoxelWorldShapeTimer, this, &AVCGameModeBase::ApplyVoxelWorldShape, 0.5f, /*bLoop=*/true, 0.0f);
+	GetWorldTimerManager().SetTimer(PlayerPawnCheckTimer, this, &AVCGameModeBase::CheckPlayersHavePawns, 5.f, /*bLoop=*/false);
+}
+
+FString AVCGameModeBase::DescribeSpawnState(AController* Controller) const
+{
+	if (!Controller)
+	{
+		return TEXT("no controller");
+	}
+	APlayerController* PC = Cast<APlayerController>(Controller);
+	const APlayerState* PS = Controller->PlayerState;
+	const UWorld* World = GetWorld();
+	return FString::Printf(
+		TEXT("%s (%s, local %d, net mode %d, state %s): player state %s (only spectator %d, spectator %d); can restart %d (world loaded %d), must spectate %d, start as spectators %d, match started %d, world begun %d; pawn %s, spectator %s, start spot %s; pawn class %s, controller class %s"),
+		*Controller->GetName(), *GetNameSafe(Controller->GetClass()), Controller->IsLocalController() ? 1 : 0,
+		World ? static_cast<int32>(World->GetNetMode()) : -1, *Controller->GetStateName().ToString(),
+		*GetNameSafe(PS), PS && PS->IsOnlyASpectator() ? 1 : 0, PS && PS->IsSpectator() ? 1 : 0,
+		PC && PC->CanRestartPlayer() ? 1 : 0, PC && PC->HasClientLoadedCurrentWorld() ? 1 : 0,
+		PC && MustSpectate(PC) ? 1 : 0, bStartPlayersAsSpectators ? 1 : 0, HasMatchStarted() ? 1 : 0,
+		World && World->HasBegunPlay() ? 1 : 0, *GetNameSafe(Controller->GetPawn()),
+		PC ? *GetNameSafe(PC->GetSpectatorPawn()) : TEXT("-"), *GetNameSafe(Controller->StartSpot.Get()),
+		*GetNameSafe(DefaultPawnClass.Get()), *GetNameSafe(PlayerControllerClass.Get()));
+}
+
+void AVCGameModeBase::HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer)
+{
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("Starting player: %s"), *DescribeSpawnState(NewPlayer));
+	Super::HandleStartingNewPlayer_Implementation(NewPlayer);
+
+	const bool bShouldSpawn = NewPlayer && !bStartPlayersAsSpectators && !MustSpectate(NewPlayer);
+	if (bShouldSpawn && !NewPlayer->GetPawn())
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("A starting player has no pawn: %s"), *DescribeSpawnState(NewPlayer));
+	}
+	else
+	{
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("Started player: %s"), *DescribeSpawnState(NewPlayer));
+	}
+}
+
+void AVCGameModeBase::RestartPlayer(AController* NewPlayer)
+{
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("RestartPlayer: %s"), *DescribeSpawnState(NewPlayer));
+	Super::RestartPlayer(NewPlayer);
+}
+
+void AVCGameModeBase::FailedToRestartPlayer(AController* NewPlayer)
+{
+	UE_LOG(LogVoxelCharacter, Warning, TEXT("Failed to restart a player: %s"), *DescribeSpawnState(NewPlayer));
+	Super::FailedToRestartPlayer(NewPlayer);
+}
+
+void AVCGameModeBase::CheckPlayersHavePawns()
+{
+	int32 Players = 0;
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		APlayerController* PC = It->Get();
+		if (!PC)
+		{
+			continue;
+		}
+		++Players;
+		if (!PC->GetPawn() && !bStartPlayersAsSpectators && !MustSpectate(PC) && !PendingRespawns.Contains(PC))
+		{
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("A player has no pawn %.1f s into play: %s"),
+				GetWorld()->GetTimeSeconds(), *DescribeSpawnState(PC));
+		}
+	}
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("Pawn check: %d player controller(s)."), Players);
 }
 
 void AVCGameModeBase::ApplyVoxelWorldShape()
@@ -215,6 +288,9 @@ APawn* AVCGameModeBase::SpawnDefaultPawnFor_Implementation(AController* NewPlaye
 			return SpawnDefaultPawnAtTransform(NewPlayer, Saved);
 		}
 	}
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s spawns %s at the start %s %s"), *GetNameSafe(NewPlayer),
+		*GetNameSafe(GetDefaultPawnClassForController(NewPlayer)), *GetNameSafe(StartSpot),
+		StartSpot ? *StartSpot->GetActorLocation().ToCompactString() : TEXT("-"));
 	return Super::SpawnDefaultPawnFor_Implementation(NewPlayer, StartSpot);
 }
 
