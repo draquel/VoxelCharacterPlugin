@@ -264,6 +264,16 @@ A pawn spawns frozen (`FreezeForTerrainWait`: no movement, no collision) until t
 `AVCPlayerState::PendingSpawnTransform` (a loaded save) puts a player back where they stood; the wait then settles the
 height. `AVCGameModeBase` parks the world-item pool at the planet centre once the voxel world is up.
 
+**The start trace (G110).** `log LogVoxelCharacter Verbose` traces each player's start in `AVCGameModeBase`: before and
+after `HandleStartingNewPlayer`, at `RestartPlayer` and at the player start `SpawnDefaultPawnFor` spawns at, one line
+of `DescribeSpawnState` (the controller's class, local flag and state, the player state's spectator flags,
+`CanRestartPlayer` and `HasClientLoadedCurrentWorld`, `MustSpectate`, `bStartPlayersAsSpectators`, the pawn or
+spectator it holds, its start spot, the pawn and controller classes). Whatever the verbosity, a Warning with that line
+marks a starting player left without a pawn although it should have one, a failed restart (`FailedToRestartPlayer`)
+and any player controller still without a pawn 5 s into play (`CheckPlayersHavePawns`, not counting a pending
+respawn). G110, a PIE start on a planet that once came up with a spectator and no pawn, is open until one of these
+lines catches it (`Documentation/FINDINGS.md`).
+
 **Leaving the world.** `TickWorldSafety` records the last safe ground (`GetLastSafeLocation`). Falling out of the world
 (KillZ, `OutOfWorldDepth` below the terrain, on a planet that depth inside the shell's inner radius: `IsOutOfWorld`)
 runs `FellOutOfWorld`; `RecoverFromMissingTerrain` puts a pawn whose terrain never came at a recovery location
