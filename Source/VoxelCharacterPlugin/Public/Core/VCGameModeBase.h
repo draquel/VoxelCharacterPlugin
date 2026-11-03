@@ -112,6 +112,28 @@ protected:
 	virtual void Logout(AController* Exiting) override;
 	virtual void StartPlay() override;
 
+	/** Traces the start of each player (LogVoxelCharacter Verbose) and warns when one that should spawn has no pawn (G110). */
+	virtual void HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer) override;
+	virtual void RestartPlayer(AController* NewPlayer) override;
+	/** Warns with the controller's spawn state, then lets the engine park it (inactive). */
+	virtual void FailedToRestartPlayer(AController* NewPlayer) override;
+
+	/**
+	 * One line of what decides a controller's spawn: its class and state, the player state's spectator flags, the
+	 * engine's restart checks, the pawn or spectator it holds and the classes the game mode would use (G110).
+	 * @param Controller The controller to describe
+	 * @return The description, for a log line
+	 */
+	FString DescribeSpawnState(AController* Controller) const;
+
+	/**
+	 * A few seconds into play: warn for every player controller that holds no pawn although it should (not a spectator,
+	 * no respawn pending), whatever path created it (G110).
+	 */
+	void CheckPlayersHavePawns();
+
+	FTimerHandle PlayerPawnCheckTimer;
+
 	/**
 	 * Once the voxel world is up, settle what depends on its shape: on a planet the world-item pool parks inside its
 	 * core, at the centre, instead of the default spot under a flat world's ground, which is a small planet's south pole
