@@ -339,6 +339,41 @@ from an `IVCPathProvider`: `UVCVoxelPathProvider` over `UVoxelSurfaceNavigationS
 cells ahead for 8 s and plans again. `SetPatrolRoute` gives a loop; without one an NPC guards `SetLeashOrigin`.
 `vc.AI.Enabled 0` freezes every NPC; `SetAIEnabled(false)` one.
 
+### NPCs at scale (G73, 2026-11-04)
+
+What an NPC costs the game thread, and the three things that keep it down:
+
+- **Perception at a random phase.** An NPC's first think falls at a random point of `PerceptionInterval` (0.25 s), so a
+  group spawned together does not run its overlaps, line-of-sight traces and decisions in one frame every interval (96
+  spawned at once: AI P99 7.8 → 4.4 ms).
+- **No search again right after a partial route.** When the surface provider's route ends short of its goal
+  (`UVCVoxelPathProvider::WasLastPathPartial`: out of reach, the search's budget or its sampling cap), the walker follows
+  it and searches again after `PartialRepathSeconds` (1 s) at the earliest. A wolf that could not reach the player used
+  to search again every time it reached the end of a partial route, each search the full budget.
+- **Distant movement at a lower rate.** Once a second the controller sets its pawn's movement tick interval from the
+  nearest player: every frame within `vc.AI.FarTickDistance` (4,000 uu), every `vc.AI.FarTickInterval` (0.05 s) beyond
+  it, twice that past twice the distance; every frame while not on the ground. The movement integrates the longer step,
+  so routes and speeds are unchanged; only how often a distant NPC's position updates.
+
+`FVCNPCCost` counts the AI ticks, the path requests inside them and the movement ticks of pawns no player controls; the
+game module's `vox.NPCBench` reads it per frame (`Scripts/qa/npc_bench.py`, `npc_bench_table.py`). Two scenarios at the
+bench site (25000, 12000), each count in its own 20 s run after 3 s of warm-up, the before and after in one build
+(temporary switches, adjacent runs), the means of two rounds, editor PIE at 2,874 × 1,358:
+
+| NPCs (ambient: 36-84 m out, mostly wandering) | VoxelDemo: NPC ms / frame | Movement | Review_Cubic: NPC ms / frame |
+|---|---|---|---|
+| 12 | 1.12 → 0.78 | 0.98 → 0.64 | 1.01 → 0.68 |
+| 24 | 1.85 → 1.32 | 1.62 → 1.11 | 1.56 → 1.13 |
+| 48 | 3.47 → 2.40 | 3.05 → 2.01 | 2.86 → 2.26 |
+| 96 | 6.75 → 4.51 | 5.79 → 3.60 | 5.98 → 4.21 |
+
+Movement is about 85% of an NPC's cost (`UVCMovementComponent` sweeping against the voxel collision, 60-80 µs a pawn a
+frame at every-frame rate), the AI about 10-15%, path searches 1-3% on average. The searches owned the hitches: in the
+chase scenario (N wolves 4-21 m out chasing a player driven round a 12 m circle) the longest path request at 96 wolves
+on the block world was 197-206 ms before (a full-budget search over cold block columns to a player the wolves could not
+reach) and 1-5 ms after; the game thread's P99 there went from 51-73 ms to 32-35 ms. Navigation's own numbers:
+VoxelWorlds `SURFACE_NAVIGATION.md`, "The search (G73)" and "Costs".
+
 ## HUD and widgets
 
 `AVCPlayerController` owns every player-facing widget; the widget classes come from the gameplay plugins

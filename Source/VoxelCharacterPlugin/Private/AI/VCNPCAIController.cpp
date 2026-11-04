@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "AI/VCNPCAIController.h"
+#include "AI/VCNPCCost.h"
 #include "AI/VCPathProvider.h"
 #include "AI/VCVoxelPathProvider.h"
 #include "Core/VCNPCCharacterBase.h"
@@ -18,6 +19,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
 
 namespace
@@ -25,6 +27,16 @@ namespace
 	TAutoConsoleVariable<int32> CVarAIEnabled(
 		TEXT("vc.AI.Enabled"), 1,
 		TEXT("0 freezes every AVCNPCAIController (NPCs stand still, no attacks); 1 resumes. QA switch."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<float> CVarAIFarTickDistance(
+		TEXT("vc.AI.FarTickDistance"), 4000.f,
+		TEXT("An NPC on the ground farther than this (uu) from every player ticks its movement every vc.AI.FarTickInterval seconds, twice that past twice the distance (G73)."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<float> CVarAIFarTickInterval(
+		TEXT("vc.AI.FarTickInterval"), 0.05f,
+		TEXT("Seconds between movement ticks of an NPC past vc.AI.FarTickDistance from every player (0 = every frame; G73)."),
 		ECVF_Default);
 
 	FVector2D Flat(const FVector& V) { return FVector2D(V.X, V.Y); }
@@ -334,11 +346,19 @@ void AVCNPCAIController::OnUnPossess()
 	Target.Reset();
 	CurrentPath.Reset();
 	State = EVCNPCAIState::Idle;
+	// The pawn's movement back to every frame (UpdateMovementTickRate may have slowed it).
+	if (UCharacterMovementComponent* Movement = GetPawn() ? GetPawn()->FindComponentByClass<UCharacterMovementComponent>() : nullptr)
+	{
+		Movement->SetComponentTickInterval(0.f);
+	}
 	Super::OnUnPossess();
 }
 
 void AVCNPCAIController::Tick(float DeltaSeconds)
 {
+	// The AI's cost (FVCNPCCost, G73): the whole tick, its path requests included.
+	FVCNPCCostScope Cost(FVCNPCCost::Get().AISeconds);
+	++FVCNPCCost::Get().AITicks;
 	Super::Tick(DeltaSeconds);
 	APawn* MyPawn = GetPawn();
 	UWorld* World = GetWorld();
@@ -350,8 +370,15 @@ void AVCNPCAIController::Tick(float DeltaSeconds)
 	const double Now = World->GetTimeSeconds();
 	if (LastThinkTime < 0.0 || Now - LastThinkTime >= PerceptionInterval)
 	{
-		LastThinkTime = Now;
+		// The first think at a random phase of the interval: a group spawned together would otherwise think (overlap,
+		// line of sight, decisions, the searches they start) in the same frame every interval (G73).
+		LastThinkTime = LastThinkTime < 0.0 ? Now - FMath::FRand() * PerceptionInterval : Now;
 		Think();
+	}
+	if (Now >= NextTickRateTime)
+	{
+		NextTickRateTime = Now + 1.0;
+		UpdateMovementTickRate();
 	}
 
 	switch (State)
@@ -609,7 +636,14 @@ void AVCNPCAIController::SetPathTo(const FVector& Goal)
 	bool bFound = false;
 	if (PathProvider.GetObject())
 	{
+		FVCNPCCostScope Cost(FVCNPCCost::Get().PathSeconds);
+		++FVCNPCCost::Get().PathRequests;
 		bFound = IVCPathProvider::Execute_FindPath(PathProvider.GetObject(), MyPawn->GetActorLocation(), Goal, CurrentPath);
+	}
+	if (bFound && CurrentPath.Num() > 0 && GetVoxelProvider() && GetVoxelProvider()->WasLastPathPartial())
+	{
+		// Short of the goal: walk what there is, and search again only after a while (G73).
+		NextPathRetryTime = PathNow + PartialRepathSeconds;
 	}
 	if (!bFound || CurrentPath.Num() == 0)
 	{
@@ -625,6 +659,47 @@ void AVCNPCAIController::SetPathTo(const FVector& Goal)
 		{
 			NextPathRetryTime = PathNow + 0.75;
 		}
+	}
+}
+
+void AVCNPCAIController::UpdateMovementTickRate()
+{
+	UCharacterMovementComponent* Movement = GetPawn() ? GetPawn()->FindComponentByClass<UCharacterMovementComponent>() : nullptr;
+	const APawn* MyPawn = GetPawn();
+	const UWorld* World = GetWorld();
+	if (!Movement || !MyPawn || !World)
+	{
+		return;
+	}
+	// The nearest player decides: within FarTickDistance every frame, past it every FarTickInterval, past twice it every
+	// twice that. The movement integrates the longer step (substepped by MaxSimulationTimeStep), so routes and speeds stay;
+	// only how often the pawn's position updates changes. A pawn off the ground (falling, swimming) ticks every frame; the
+	// rate is decided once a second.
+	const float FarDistance = CVarAIFarTickDistance.GetValueOnGameThread();
+	const float FarInterval = FMath::Max(0.f, CVarAIFarTickInterval.GetValueOnGameThread());
+	double NearestSq = TNumericLimits<double>::Max();
+	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+	{
+		if (const APawn* Player = It->Get() ? It->Get()->GetPawn() : nullptr)
+		{
+			NearestSq = FMath::Min(NearestSq, FVector::DistSquared(Player->GetActorLocation(), MyPawn->GetActorLocation()));
+		}
+	}
+	float Interval = 0.f;
+	if (FarInterval > 0.f && FarDistance > 0.f && Movement->IsMovingOnGround())
+	{
+		if (NearestSq > FMath::Square(2.0 * FarDistance))
+		{
+			Interval = 2.f * FarInterval;
+		}
+		else if (NearestSq > FMath::Square(static_cast<double>(FarDistance)))
+		{
+			Interval = FarInterval;
+		}
+	}
+	if (!FMath::IsNearlyEqual(Movement->GetComponentTickInterval(), Interval))
+	{
+		Movement->SetComponentTickInterval(Interval);
 	}
 }
 

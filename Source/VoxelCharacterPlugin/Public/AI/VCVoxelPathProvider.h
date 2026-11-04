@@ -36,4 +36,15 @@ public:
 	/** A walker got stuck here: block the cells around it for a while so the next search routes elsewhere. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AI")
 	void ReportBlocked(const FVector& Location, float Radius = 120.f, float Seconds = 8.f) const;
+
+	/**
+	 * Whether the last route FindPath gave ends short of its goal (the search's budget, a goal out of reach, its sampling
+	 * cap): the walker follows it, and the next search toward the same goal is worth waiting for (G73).
+	 *
+	 * @return True when the last route was partial
+	 */
+	bool WasLastPathPartial() const { return bLastPathPartial; }
+
+private:
+	mutable bool bLastPathPartial = false;
 };
