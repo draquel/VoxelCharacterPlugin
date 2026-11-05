@@ -123,6 +123,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
 	float RepathDistance = 200.f;
 
+	/**
+	 * After a surface route that ends short of its goal (out of reach, or past the search's budget), wait this long before
+	 * searching again (the walker follows the partial route meanwhile): a goal out of reach otherwise cost a full-budget
+	 * search every time the walker reached the route's end (G73).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
+	float PartialRepathSeconds = 1.0f;
+
 	/** Seconds without progress toward the current waypoint before it is skipped (blocked by a prop / corner). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0.5"))
 	float StuckSeconds = 2.0f;
@@ -373,8 +381,15 @@ protected:
 	EVCNPCBehavior Behavior = EVCNPCBehavior::Hostile;
 	double WanderWaitUntil = 0.0;
 	double LastFleePathTime = -1.0;
-	/** A voxel search just failed: don't run another before this (no straight-line fallback to walk meanwhile). */
+	/** A voxel search just failed or came back partial: don't run another before this. */
 	double NextPathRetryTime = 0.0;
+
+	/**
+	 * Tick the pawn's movement less often while no player is near (vc.AI.FarTickDistance, vc.AI.FarTickInterval; G73).
+	 * Re-decided every second.
+	 */
+	void UpdateMovementTickRate();
+	double NextTickRateTime = 0.0;
 	FVector LastThreatLocation = FVector::ZeroVector;
 
 	// QA R16, read from the possessed AVCNPCCharacterBase.

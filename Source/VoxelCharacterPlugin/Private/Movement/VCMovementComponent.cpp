@@ -3,6 +3,7 @@
 #include "Movement/VCMovementComponent.h"
 #include "Movement/VCTerrainQueryHelper.h"
 #include "Movement/VCGravityFrame.h"
+#include "AI/VCNPCCost.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/PhysicsVolume.h"
 #include "VoxelChunkManager.h"
@@ -163,6 +164,14 @@ void UVCMovementComponent::BeginPlay()
 
 void UVCMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
+	// The NPCs' movement cost (FVCNPCCost, G73): pawns no player controls.
+	TOptional<FVCNPCCostScope> NPCCost;
+	if (PawnOwner && !PawnOwner->IsPlayerControlled())
+	{
+		NPCCost.Emplace(FVCNPCCost::Get().MoveSeconds);
+		++FVCNPCCost::Get().MoveTicks;
+	}
+
 	// Track grounded state before movement update (for floor grace logic)
 	bWasGroundedLastFrame = IsMovingOnGround();
 

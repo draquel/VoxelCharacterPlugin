@@ -7,7 +7,10 @@ bool UVCVoxelPathProvider::FindPath_Implementation(const FVector& From, const FV
 {
 	OutPoints.Reset();
 	UVoxelSurfaceNavigationSubsystem* Nav = UVoxelSurfaceNavigationSubsystem::Get(this);
-	return Nav && Nav->FindPath(From, To, OutPoints);
+	FVoxelSurfacePathStats Stats;
+	const bool bFound = Nav && Nav->FindPathWithStats(From, To, OutPoints, Stats);
+	bLastPathPartial = bFound && Stats.bPartial;
+	return bFound;
 }
 
 bool UVCVoxelPathProvider::IsAvailable(const UObject* WorldContextObject)
