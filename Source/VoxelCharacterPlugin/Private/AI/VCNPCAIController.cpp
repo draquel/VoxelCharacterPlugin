@@ -39,7 +39,15 @@ namespace
 		TEXT("Seconds between movement ticks of an NPC past vc.AI.FarTickDistance from every player (0 = every frame; G73)."),
 		ECVF_Default);
 
+	TAutoConsoleVariable<float> CVarAIRestTickInterval(
+		TEXT("vc.AI.RestTickInterval"), 0.5f,
+		TEXT("Seconds between movement ticks of an NPC resting on the ground (no route, idle or between wander legs), wherever the players are (0 = no slower; G125)."),
+		ECVF_Default);
+
 	FVector2D Flat(const FVector& V) { return FVector2D(V.X, V.Y); }
+
+	/** The longest movement step a slowly ticked pawn takes (G125): a walker covers 45-90 uu in it. */
+	constexpr float MaxSlowStepSeconds = 0.15f;
 }
 
 AVCNPCAIController::AVCNPCAIController()
@@ -375,11 +383,6 @@ void AVCNPCAIController::Tick(float DeltaSeconds)
 		LastThinkTime = LastThinkTime < 0.0 ? Now - FMath::FRand() * PerceptionInterval : Now;
 		Think();
 	}
-	if (Now >= NextTickRateTime)
-	{
-		NextTickRateTime = Now + 1.0;
-		UpdateMovementTickRate();
-	}
 
 	switch (State)
 	{
@@ -402,8 +405,14 @@ void AVCNPCAIController::Tick(float DeltaSeconds)
 	case EVCNPCAIState::Chase:
 		if (AActor* T = Target.Get())
 		{
-			if (CurrentPath.Num() == 0 || FVCGravityFrame::HorizontalDistance(GetPawnMovement(), T->GetActorLocation(), LastPathGoal) > RepathDistance)
+			if (CurrentPath.Num() == 0)
 			{
+				SetPathTo(T->GetActorLocation());
+			}
+			else if (FVCGravityFrame::HorizontalDistance(GetPawnMovement(), T->GetActorLocation(), LastPathGoal) > RepathDistance
+				&& (LastChaseRepathTime < 0.0 || Now - LastChaseRepathTime >= ChaseRepathSeconds))
+			{
+				LastChaseRepathTime = Now;
 				SetPathTo(T->GetActorLocation());
 			}
 			FollowPath(DeltaSeconds);
@@ -441,6 +450,13 @@ void AVCNPCAIController::Tick(float DeltaSeconds)
 		break;
 	default:
 		break;
+	}
+
+	// After the state's work, so a route or a threat found this frame wakes the movement in the same frame (G125).
+	if (Now >= NextTickRateTime || IsMovementResting() != bMovementResting)
+	{
+		NextTickRateTime = Now + 1.0;
+		UpdateMovementTickRate();
 	}
 }
 
@@ -674,7 +690,7 @@ void AVCNPCAIController::UpdateMovementTickRate()
 	// The nearest player decides: within FarTickDistance every frame, past it every FarTickInterval, past twice it every
 	// twice that. The movement integrates the longer step (substepped by MaxSimulationTimeStep), so routes and speeds stay;
 	// only how often the pawn's position updates changes. A pawn off the ground (falling, swimming) ticks every frame; the
-	// rate is decided once a second.
+	// rate is decided once a second, and at once when the pawn starts or stops resting (MovementTickInterval).
 	const float FarDistance = CVarAIFarTickDistance.GetValueOnGameThread();
 	const float FarInterval = FMath::Max(0.f, CVarAIFarTickInterval.GetValueOnGameThread());
 	double NearestSq = TNumericLimits<double>::Max();
@@ -685,22 +701,74 @@ void AVCNPCAIController::UpdateMovementTickRate()
 			NearestSq = FMath::Min(NearestSq, FVector::DistSquared(Player->GetActorLocation(), MyPawn->GetActorLocation()));
 		}
 	}
-	float Interval = 0.f;
-	if (FarInterval > 0.f && FarDistance > 0.f && Movement->IsMovingOnGround())
+	// A resting pawn's movement only holds it on its floor: a sweep down every tick that finds what the last one found. Most
+	// of a wandering herd's time is rest between legs (WanderWaitMin-Max), so this is most of a crowd's movement (G125).
+	bMovementResting = IsMovementResting();
+	const float Interval = MovementTickInterval(FMath::Sqrt(NearestSq), Movement->IsMovingOnGround(), bMovementResting, FarDistance,
+		FarInterval, CVarAIRestTickInterval.GetValueOnGameThread());
+	// A slower rate saves the floor's sweeps only when a tick is one step: the movement cuts a tick longer than
+	// MaxSimulationTimeStep (0.05 s by default) into steps, each moving the capsule and sweeping for the floor, so a pawn
+	// ticked every 0.1 s did the work of two or three every-frame ticks (G125). While it ticks slowly a step spans the tick
+	// (the interval and a frame, at most MaxSlowStepSeconds); every frame the pawn's own step is back.
+	if (DefaultMaxSimulationTimeStep < 0.f)
 	{
-		if (NearestSq > FMath::Square(2.0 * FarDistance))
+		DefaultMaxSimulationTimeStep = Movement->MaxSimulationTimeStep;
+	}
+	Movement->MaxSimulationTimeStep = Interval > 0.f
+		? FMath::Clamp(Interval + 0.05f, DefaultMaxSimulationTimeStep, FMath::Max(DefaultMaxSimulationTimeStep, MaxSlowStepSeconds))
+		: DefaultMaxSimulationTimeStep;
+	const float Previous = Movement->GetComponentTickInterval();
+	if (!FMath::IsNearlyEqual(Previous, Interval))
+	{
+		// A shorter interval takes effect now (the pawn woke: its route starts this frame, not at the end of a rest); a
+		// longer one from the next tick.
+		if (Interval < Previous)
+		{
+			Movement->SetComponentTickIntervalAndCooldown(Interval);
+		}
+		else
+		{
+			Movement->SetComponentTickInterval(Interval);
+		}
+	}
+}
+
+float AVCNPCAIController::MovementTickInterval(double NearestPlayerDistance, bool bOnGround, bool bResting, float FarDistance,
+	float FarInterval, float RestInterval)
+{
+	if (!bOnGround)
+	{
+		return 0.f;
+	}
+	float Interval = 0.f;
+	if (FarInterval > 0.f && FarDistance > 0.f)
+	{
+		if (NearestPlayerDistance > 2.0 * FarDistance)
 		{
 			Interval = 2.f * FarInterval;
 		}
-		else if (NearestSq > FMath::Square(static_cast<double>(FarDistance)))
+		else if (NearestPlayerDistance > FarDistance)
 		{
 			Interval = FarInterval;
 		}
 	}
-	if (!FMath::IsNearlyEqual(Movement->GetComponentTickInterval(), Interval))
+	return bResting ? FMath::Max(Interval, RestInterval) : Interval;
+}
+
+bool AVCNPCAIController::IsMovementResting() const
+{
+	const UCharacterMovementComponent* Movement = GetPawnMovement();
+	if (!Movement || !Movement->IsMovingOnGround() || CurrentPath.Num() > 0)
 	{
-		Movement->SetComponentTickInterval(Interval);
+		return false;
 	}
+	if (State != EVCNPCAIState::Idle && State != EVCNPCAIState::Wander)
+	{
+		return false;
+	}
+	// Still braking from the last leg, or a push it has not integrated yet (a knock-back launch).
+	return Movement->Velocity.SizeSquared() < 1.f && Movement->GetCurrentAcceleration().IsNearlyZero()
+		&& Movement->PendingLaunchVelocity.IsNearlyZero();
 }
 
 bool AVCNPCAIController::FollowPath(float DeltaSeconds)
