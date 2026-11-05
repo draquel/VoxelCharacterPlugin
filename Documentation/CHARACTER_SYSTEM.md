@@ -341,7 +341,8 @@ cells ahead for 8 s and plans again. `SetPatrolRoute` gives a loop; without one 
 
 ### NPCs at scale (G73, 2026-11-04)
 
-What an NPC costs the game thread, and the three things that keep it down:
+What an NPC costs the game thread, and the three things that keep it down (three more for a player on the move: G125
+below):
 
 - **Perception at a random phase.** An NPC's first think falls at a random point of `PerceptionInterval` (0.25 s), so a
   group spawned together does not run its overlaps, line-of-sight traces and decisions in one frame every interval (96
@@ -373,6 +374,39 @@ chase scenario (N wolves 4-21 m out chasing a player driven round a 12 m circle)
 on the block world was 197-206 ms before (a full-budget search over cold block columns to a player the wolves could not
 reach) and 1-5 ms after; the game thread's P99 there went from 51-73 ms to 32-35 ms. Navigation's own numbers:
 VoxelWorlds `SURFACE_NAVIGATION.md`, "The search (G73)" and "Costs".
+
+**On the move (G125, 2026-11-05).** A player crossing the land fast (the streaming bench's planet flight, 1,500 uu/s)
+keeps a fresh population about it: at the demo table's density (VoxelWorldPOI `POI_SYSTEM.md` §12) about 9 creatures
+alive, most 40-80 m out in the 20 Hz band. A movement tick there cost 120-190 µs: the engine's capsule sweeps against the
+voxel trimesh (the floor sweep alone about 40 µs a call), our own pre-tick work 10-30 µs. Three changes:
+
+- **One step a slow tick.** The movement cuts a tick longer than `MaxSimulationTimeStep` (0.05 s) into steps, each
+  moving the capsule and sweeping for the floor, so a pawn ticked every 0.1 s did the work of two or three every-frame
+  ticks and the far rate saved little. While a pawn ticks slowly its step spans the tick (the interval and a frame, at
+  most 0.15 s); every frame its own step is back. Floor sweeps a tick: 1.3-1.7 → 1.0.
+- **Resting at a slow rate.** A pawn on the ground with no route, idle or between wander legs (`WanderWaitMin`-`Max`),
+  with no velocity, acceleration or launch pending, ticks its movement every `vc.AI.RestTickInterval` (0.5 s) wherever the
+  players are: its tick only held it on its floor. The controller decides after its state's work, so a route, a threat or
+  a hit found in a frame wakes the movement in the same frame (`SetComponentTickIntervalAndCooldown`). Resting ticks:
+  21-37% of all movement ticks → 4-9%. `AVCNPCAIController::MovementTickInterval` is the decision (a pure function).
+- **Chase searches at most every `ChaseRepathSeconds` (0.5 s).** A chaser searched again whenever its target was
+  `RepathDistance` from the route's goal: a wolf after a player sprinting or flying past searched several times a second.
+  Now one whose target moved waits `ChaseRepathSeconds` since its last such search (its route still leads where the
+  target was); one whose route ran out searches at once. Chase searches on the flight: 125-299 a run → 35.
+
+The flight (`Scripts/qa/npc_flight.py`: `PlanetTest`'s great circle with `vox.NPCBench observe` beside it, the clock at
+noon), the change behind temporary switches in one build, three interleaved rounds; the NPCs' cost (movement, AI, path
+requests, the spawner) in milliseconds per second of play, which compares runs the machine slowed with quick ones:
+
+| Density (the table's) | NPCs alive | NPC ms / s | Movement ms / s | Movement ticks / NPC / s | Game thread P50 (ms) |
+|---|---|---|---|---|---|
+| 1x (0.333) | 4.1 | 14.4 → 11.8 | 7.7 → 6.1 | 12.4 → 9.9 | 23.6 → 21.3 |
+| 3x (1, the demo's) | 9.2 | 37.0 → 32.7 | 21.7 → 18.0 | 20.8 → 15.9 | 22.7 → 23.0 |
+
+The game thread's P50 at 3x is within the runs' noise of 1x's (19-26 ms either way); what is left of 3x's cost is per
+creature (2.25 times as many alive), not the spawner's churn. The next lever is `vc.AI.FarTickInterval`: at 0.1 the flight's
+movement at 3x is 19.0 → 14.4 ms/s (NPCs 34.7 → 29.0), at the price of a distant creature's position updating 10 times a
+second (5 past 80 m), so it stays 0.05.
 
 ## HUD and widgets
 

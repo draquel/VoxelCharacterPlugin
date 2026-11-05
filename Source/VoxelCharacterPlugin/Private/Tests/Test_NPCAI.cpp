@@ -88,6 +88,30 @@ bool FVCNPCAI_WanderFlee::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
+// The movement's tick rate (G73, G125): every frame near a player and off the ground, the far rates past FarDistance and
+// twice it, at least the rest interval while resting, wherever the players are; 0 switches a rate off.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCNPCAI_MovementTickInterval, "VoxelCharacter.AI.MovementTickInterval", VC_NPCAI_FLAGS)
+bool FVCNPCAI_MovementTickInterval::RunTest(const FString& Parameters)
+{
+	auto Interval = [](double Distance, bool bOnGround, bool bResting, float Rest = 0.5f)
+	{
+		return AVCNPCAIController::MovementTickInterval(Distance, bOnGround, bResting, 4000.f, 0.05f, Rest);
+	};
+	TestEqual(TEXT("Near a player: every frame"), Interval(1000.0, true, false), 0.f);
+	TestEqual(TEXT("Past the far distance: the far interval"), Interval(5000.0, true, false), 0.05f);
+	TestEqual(TEXT("Past twice it: twice the far interval"), Interval(9000.0, true, false), 0.1f);
+	TestEqual(TEXT("Resting near a player: the rest interval"), Interval(1000.0, true, true), 0.5f);
+	TestEqual(TEXT("Resting far away: the rest interval (the longer)"), Interval(9000.0, true, true), 0.5f);
+	TestEqual(TEXT("A rest interval shorter than the far one: the far one"), Interval(9000.0, true, true, 0.02f), 0.1f);
+	TestEqual(TEXT("Rest rate off: the far rate"), Interval(9000.0, true, true, 0.f), 0.1f);
+	TestEqual(TEXT("Off the ground: every frame, far or resting"), Interval(9000.0, false, true), 0.f);
+	TestEqual(TEXT("Far rate off: every frame unless resting"),
+		AVCNPCAIController::MovementTickInterval(9000.0, true, false, 4000.f, 0.f, 0.5f), 0.f);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
 // The state decision is a pure function of what the NPC perceives.
 // ---------------------------------------------------------------------------
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCNPCAI_StateDecision, "VoxelCharacter.AI.StateDecision", VC_NPCAI_FLAGS)

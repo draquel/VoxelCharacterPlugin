@@ -124,6 +124,14 @@ public:
 	float RepathDistance = 200.f;
 
 	/**
+	 * A chaser whose target moved searches again at most this often (its route still leads toward where the target was); one
+	 * whose route ran out searches at once. A target faster than the chaser (a player sprinting or flying past) otherwise
+	 * cost a search every RepathDistance it moved: several a second for every wolf of a pack (G125).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI", meta = (ClampMin = "0"))
+	float ChaseRepathSeconds = 0.5f;
+
+	/**
 	 * After a surface route that ends short of its goal (out of reach, or past the search's budget), wait this long before
 	 * searching again (the walker follows the partial route meanwhile): a goal out of reach otherwise cost a full-budget
 	 * search every time the walker reached the route's end (G73).
@@ -287,6 +295,21 @@ public:
 		float InMeleeRange, float InLoseSightSeconds, float InLeashDistance);
 
 	/**
+	 * Pure: the seconds between a pawn's movement ticks (0 = every frame). On the ground: every frame within FarDistance of
+	 * the nearest player, every FarInterval past it, twice that past twice the distance (G73), and at least RestInterval
+	 * while it rests (G125). Off the ground (falling, swimming) every frame.
+	 * @param NearestPlayerDistance Distance to the nearest player (uu)
+	 * @param bOnGround   The pawn walks
+	 * @param bResting    It rests (IsMovementResting)
+	 * @param FarDistance vc.AI.FarTickDistance (0 = no far rate)
+	 * @param FarInterval vc.AI.FarTickInterval (0 = no far rate)
+	 * @param RestInterval vc.AI.RestTickInterval (0 = no rest rate)
+	 * @return The tick interval in seconds
+	 */
+	static float MovementTickInterval(double NearestPlayerDistance, bool bOnGround, bool bResting, float FarDistance,
+		float FarInterval, float RestInterval);
+
+	/**
 	 * Pure: is a candidate at Distance within sight, given whether it carries a lit light.
 	 * @param InSightRadius   Base sight radius.
 	 * @param bTargetLit      The candidate carries a lit light source.
@@ -383,13 +406,29 @@ protected:
 	double LastFleePathTime = -1.0;
 	/** A voxel search just failed or came back partial: don't run another before this. */
 	double NextPathRetryTime = 0.0;
+	/** When the chase last searched after its target moved (ChaseRepathSeconds; -1 = not yet). */
+	double LastChaseRepathTime = -1.0;
 
 	/**
-	 * Tick the pawn's movement less often while no player is near (vc.AI.FarTickDistance, vc.AI.FarTickInterval; G73).
-	 * Re-decided every second.
+	 * Tick the pawn's movement less often while no player is near (vc.AI.FarTickDistance, vc.AI.FarTickInterval; G73) and
+	 * while it rests (vc.AI.RestTickInterval; G125). Re-decided every second, and at once when the pawn starts or stops
+	 * resting.
 	 */
 	void UpdateMovementTickRate();
 	double NextTickRateTime = 0.0;
+
+	/**
+	 * Is the pawn resting: standing on the ground with no route to follow, idle or between wander legs, with nothing pending
+	 * for its movement (G125)?
+	 * @return True while its movement has nothing to do but hold it on its floor
+	 */
+	bool IsMovementResting() const;
+
+	/** What UpdateMovementTickRate last decided the pawn was doing (true = resting). */
+	bool bMovementResting = false;
+
+	/** The pawn's own MaxSimulationTimeStep, put back while it ticks every frame (-1 = not read yet). */
+	float DefaultMaxSimulationTimeStep = -1.f;
 	FVector LastThreatLocation = FVector::ZeroVector;
 
 	// QA R16, read from the possessed AVCNPCCharacterBase.
