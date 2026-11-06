@@ -97,6 +97,10 @@ calls.
   the chain; they do not replace or bypass it. Dead or downed characters ignore both.
 - Edit mode is local input state and gates unarmed digging and placing; the server validates every request regardless.
 - A view-mode-dependent system joins `AVCCharacterBase::SetViewMode`'s sequence.
+- The underwater post-process (`UVCUnderwaterPostProcess`) is local-player-only (G133): the character creates it on the
+  pawn a local player controller views through and destroys it when that controller goes (`UpdateUnderwaterPostProcess`
+  on `BeginPlay` and `NotifyControllerChanged`). A view effect never lives on a remote player's or an NPC's pawn: an
+  unbound post-process volume tints every view in its world.
 
 ### Server authority
 

@@ -22,6 +22,7 @@ class UVoxelWorldConfiguration;
 class UVCCombatComponent;
 class UVCBlockInteractionComponent;
 class UVCActionMontageComponent;
+class UVCUnderwaterPostProcess;
 enum class EVCAnimAction : uint8;
 struct FInputActionValue;
 struct FVoxelWorldBounds;
@@ -585,6 +586,17 @@ protected:
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void PossessedBy(AController* NewController) override;
+	virtual void NotifyControllerChanged() override;
+
+	/**
+	 * The underwater view tint, on the pawn a local player controller views through and nowhere else (G133): its
+	 * volume is unbound and would tint the local view for a swimming remote player or NPC. Null on every other pawn.
+	 */
+	UPROPERTY(Transient)
+	TObjectPtr<UVCUnderwaterPostProcess> UnderwaterPostProcess;
+
+	/** Create or destroy UnderwaterPostProcess so it exists exactly while a local player controller views through this pawn. */
+	void UpdateUnderwaterPostProcess();
 
 	/** Replicated corpse flag: clients apply the corpse state when it arrives. */
 	UPROPERTY(ReplicatedUsing = OnRep_IsCorpse)

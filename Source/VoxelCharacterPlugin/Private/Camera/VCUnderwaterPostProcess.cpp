@@ -71,12 +71,39 @@ void UVCUnderwaterPostProcess::BeginPlay()
 	}
 }
 
+void UVCUnderwaterPostProcess::OnComponentDestroyed(bool bDestroyingHierarchy)
+{
+	// The volume goes with this component: destroyed on its own (the pawn's player controller went, G133) it would
+	// otherwise stay registered on the pawn and keep tinting the view; with the whole actor it is destroyed anyway.
+	if (PostProcessComp && !bDestroyingHierarchy)
+	{
+		PostProcessComp->DestroyComponent();
+	}
+	PostProcessComp = nullptr;
+	Super::OnComponentDestroyed(bDestroyingHierarchy);
+}
+
+bool UVCUnderwaterPostProcess::IsLocalPlayerView(const APawn* Pawn)
+{
+	const APlayerController* PC = Pawn ? Cast<APlayerController>(Pawn->GetController()) : nullptr;
+	return PC && PC->IsLocalController();
+}
+
 void UVCUnderwaterPostProcess::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
 	if (!PostProcessComp)
 	{
+		return;
+	}
+
+	// No local player views through this pawn: nothing to tint, and the unbound volume must not tint anyone else's
+	// view (G133). The owner destroys the component in this case; this holds the weight at zero should one remain.
+	if (!IsLocalPlayerView(Cast<APawn>(GetOwner())))
+	{
+		CurrentBlendWeight = 0.f;
+		PostProcessComp->BlendWeight = 0.f;
 		return;
 	}
 
@@ -105,36 +132,20 @@ void UVCUnderwaterPostProcess::TickComponent(float DeltaTime, ELevelTick TickTyp
 
 bool UVCUnderwaterPostProcess::IsCameraUnderwater() const
 {
-	// Get the camera position (not the character position).
-	// In third-person, the camera may be above water while the character is submerged.
-	const AActor* Owner = GetOwner();
-	if (!Owner)
+	// The camera's position, not the character's: in third person the camera may be above water while the character is
+	// submerged. Only a local player controller has a view; without one there is nothing to tint (G133: the pawn's own
+	// terrain context used to stand in here, which tinted the local view blue for a swimming remote player or NPC).
+	const APawn* Pawn = Cast<APawn>(GetOwner());
+	const APlayerController* PC = Pawn ? Cast<APlayerController>(Pawn->GetController()) : nullptr;
+	if (!PC || !PC->IsLocalController())
 	{
 		return false;
 	}
 
-	// Try to get camera location from player controller
-	const APawn* Pawn = Cast<APawn>(Owner);
-	if (Pawn)
-	{
-		if (APlayerController* PC = Cast<APlayerController>(Pawn->GetController()))
-		{
-			FVector CameraLoc;
-			FRotator CameraRot;
-			PC->GetPlayerViewPoint(CameraLoc, CameraRot);
+	FVector CameraLoc;
+	FRotator CameraRot;
+	PC->GetPlayerViewPoint(CameraLoc, CameraRot);
 
-			// Check if camera position is in a water-flagged voxel
-			float WaterDepth = 0.f;
-			return FVCTerrainQueryHelper::IsPositionUnderwater(
-				Owner->GetWorld(), CameraLoc, WaterDepth);
-		}
-	}
-
-	// Fallback: use character's underwater state from movement component
-	if (MovementComp)
-	{
-		return MovementComp->GetTerrainContext().bIsUnderwater;
-	}
-
-	return false;
+	float WaterDepth = 0.f;
+	return FVCTerrainQueryHelper::IsPositionUnderwater(Pawn->GetWorld(), CameraLoc, WaterDepth);
 }

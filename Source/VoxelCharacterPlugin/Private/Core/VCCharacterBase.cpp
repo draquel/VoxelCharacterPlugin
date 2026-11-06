@@ -316,14 +316,8 @@ void AVCCharacterBase::BeginPlay()
 		CombatComponent->OnDowned.AddDynamic(this, &AVCCharacterBase::HandleDowned);
 	}
 
-	// --- Underwater Post-Process ---
-	{
-		UVCUnderwaterPostProcess* UnderwaterPP = NewObject<UVCUnderwaterPostProcess>(this, TEXT("UnderwaterPostProcess"));
-		if (UnderwaterPP)
-		{
-			UnderwaterPP->RegisterComponent();
-		}
-	}
+	// --- Underwater Post-Process (the local player's view only; again on each controller change, G133) ---
+	UpdateUnderwaterPostProcess();
 
 	// --- Terrain Ready Spawn ---
 	if (bWaitForTerrain)
@@ -520,6 +514,36 @@ void AVCCharacterBase::PossessedBy(AController* NewController)
 				PS->HandleRespawnAttributeReset();
 			}
 		}
+	}
+}
+
+void AVCCharacterBase::NotifyControllerChanged()
+{
+	Super::NotifyControllerChanged();
+
+	// Possessed, unpossessed, or the controller arrived by replication (the owning client's OnRep_Controller): the
+	// view tint follows the local player controller. Before BeginPlay, BeginPlay does it.
+	if (HasActorBegunPlay())
+	{
+		UpdateUnderwaterPostProcess();
+	}
+}
+
+void AVCCharacterBase::UpdateUnderwaterPostProcess()
+{
+	// The tint is a view effect (G133): it exists only on the machine whose player views through this pawn. A pawn with
+	// no local player controller (another player's character on a client, an NPC, every pawn on a dedicated server) has
+	// no view to tint, and its unbound volume would tint the local player's; several such pawns stacked theirs.
+	const bool bWanted = UVCUnderwaterPostProcess::IsLocalPlayerView(this);
+	if (bWanted && !UnderwaterPostProcess)
+	{
+		UnderwaterPostProcess = NewObject<UVCUnderwaterPostProcess>(this, TEXT("UnderwaterPostProcess"));
+		UnderwaterPostProcess->RegisterComponent();
+	}
+	else if (!bWanted && UnderwaterPostProcess)
+	{
+		UnderwaterPostProcess->DestroyComponent();
+		UnderwaterPostProcess = nullptr;
 	}
 }
 

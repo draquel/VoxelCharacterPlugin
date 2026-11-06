@@ -6,6 +6,7 @@
 #include "Components/ActorComponent.h"
 #include "VCUnderwaterPostProcess.generated.h"
 
+class APawn;
 class UPostProcessComponent;
 class UVCMovementComponent;
 
@@ -17,6 +18,12 @@ class UVCMovementComponent;
  * effect ramps on (blue tint, fog, vignette). Uses camera position (not
  * character feet) so third-person view above water while character is
  * submerged does NOT trigger the effect.
+ *
+ * The effect is the local player's view (G133): its volume is unbound, so it tints every view in its world, and the
+ * only pawn that may own one is the one a local player controller views through (IsLocalPlayerView).
+ * AVCCharacterBase creates it on that pawn alone and destroys it when the controller goes; a pawn with no local player
+ * controller (another player's character on a client, an NPC, anything on a dedicated server) has no view to tint.
+ * Should one exist elsewhere, its tick holds the blend weight at zero.
  *
  * Attach to the character and it auto-discovers the movement component
  * for water state queries.
@@ -30,7 +37,16 @@ public:
 	UVCUnderwaterPostProcess();
 
 	virtual void BeginPlay() override;
+	virtual void OnComponentDestroyed(bool bDestroyingHierarchy) override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+
+	/**
+	 * Whether a pawn is viewed through a player controller on this machine: the one condition under which the effect
+	 * may exist and blend (G133).
+	 * @param Pawn The pawn (null allowed).
+	 * @return True when the pawn's controller is a player controller local to this machine.
+	 */
+	static bool IsLocalPlayerView(const APawn* Pawn);
 
 	// --- Tuning ---
 
@@ -70,6 +86,6 @@ protected:
 	/** Current blend weight (0 = no effect, 1 = full effect). */
 	float CurrentBlendWeight = 0.f;
 
-	/** Check if the camera position is inside a water voxel. */
+	/** Check if the local player's camera is inside a water voxel; false for a pawn no local player controller views through. */
 	bool IsCameraUnderwater() const;
 };

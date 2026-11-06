@@ -4,7 +4,11 @@
 
 #if WITH_AUTOMATION_TESTS
 
+#include "AIController.h"
+#include "Camera/VCUnderwaterPostProcess.h"
+#include "Components/PostProcessComponent.h"
 #include "Core/VCCharacterBase.h"
+#include "Core/VCPlayerController.h"
 #include "Movement/VCTerrainQueryHelper.h"
 #include "VoxelChunkManager.h"
 #include "VoxelCoordinates.h"
@@ -13,6 +17,7 @@
 #include "VoxelEditTypes.h"
 #include "VoxelWaterPropagation.h"
 #include "VoxelWorldConfiguration.h"
+#include "Testing/VCTestWorld.h"
 #include "Testing/VoxelTestChunkWorld.h"
 #include "UObject/UnrealType.h"
 
@@ -22,6 +27,8 @@
 //   so a dig under the sea that flooded (the flood's flags live in the edit layer, G58/G59) is water to the pawn.
 // - G84: the terrain wait covers the chunk under the feet in every kind of world, not on a planet only.
 // - G87: the view mode is local to the machine that set it: not replicated, no RepNotify.
+// - G133: the underwater view tint (UVCUnderwaterPostProcess, an unbound post-process volume) exists only on the pawn a
+//   local player controller views through, following possession; never on an unpossessed or AI-controlled pawn.
 // ---------------------------------------------------------------------------
 
 namespace VCTerrainQueriesTestHelpers
@@ -238,6 +245,114 @@ bool FVCViewMode_NotReplicated::RunTest(const FString& Parameters)
 	TestNull(TEXT("No OnRep_ViewMode"), Class->FindFunctionByName(TEXT("OnRep_ViewMode")));
 	const FProperty* Corpse = FindFProperty<FProperty>(Class, TEXT("bIsCorpse"));
 	TestTrue(TEXT("The corpse state still replicates (the class's replication is intact)"), Corpse && Corpse->HasAnyPropertyFlags(CPF_Net));
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// G133: the underwater view tint is the local player's. Its volume is unbound (it tints every view in its world), so the
+// character creates it only on the pawn a local player controller views through, at BeginPlay or when such a controller
+// arrives, and destroys it (volume included) when the controller goes. The controller is linked and NotifyControllerChanged
+// called by hand, as the engine does from PossessedBy, UnPossessed and OnRep_Controller; the full possession path runs in
+// PIE (APlayerController::Possess sets up input, which has no config here).
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCUnderwater_LocalPlayerOnly, "VoxelCharacter.Underwater.LocalPlayerOnly", VC_TERRAIN_FLAGS)
+bool FVCUnderwater_LocalPlayerOnly::RunTest(const FString& Parameters)
+{
+	VCTesting::FPlayWorld W(TEXT("VCUnderwaterLocalOnlyWorld"), /*bDestroyActorsFirst=*/true);
+
+	auto Spawn = [&W](AController* ControllerBeforeBeginPlay) -> AVCCharacterBase*
+	{
+		const FTransform Stand(FVector::ZeroVector);
+		AVCCharacterBase* Character = W.World->SpawnActorDeferred<AVCCharacterBase>(AVCCharacterBase::StaticClass(), Stand, nullptr, nullptr,
+			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+		if (Character)
+		{
+			Character->bWaitForTerrain = false;
+			if (ControllerBeforeBeginPlay)
+			{
+				Character->Controller = ControllerBeforeBeginPlay;
+				ControllerBeforeBeginPlay->SetPawn(Character);
+			}
+			Character->FinishSpawning(Stand);
+		}
+		return Character;
+	};
+	auto Link = [](AVCCharacterBase* Character, AController* Controller)
+	{
+		if (AController* Old = Character->GetController())
+		{
+			Old->SetPawn(nullptr);
+		}
+		Character->Controller = Controller;
+		if (Controller)
+		{
+			Controller->SetPawn(Character);
+		}
+		static_cast<APawn*>(Character)->NotifyControllerChanged(); // public on APawn, protected on the character
+	};
+	auto Tint = [](const AActor* Character) { return Character->FindComponentByClass<UVCUnderwaterPostProcess>(); };
+	auto Volumes = [](const AActor* Character)
+	{
+		TInlineComponentArray<UPostProcessComponent*> Found;
+		Character->GetComponents(Found);
+		return Found.Num();
+	};
+
+	AVCCharacterBase* Nobody = Spawn(nullptr);
+	AVCCharacterBase* Bot = Spawn(nullptr);
+	AVCCharacterBase* Player = Spawn(nullptr);
+	AVCPlayerController* PC = W.World->SpawnActor<AVCPlayerController>();
+	AAIController* AI = W.World->SpawnActor<AAIController>();
+	if (!TestNotNull(TEXT("Nobody"), Nobody) || !TestNotNull(TEXT("Bot"), Bot) || !TestNotNull(TEXT("Player"), Player)
+		|| !TestNotNull(TEXT("Player controller"), PC) || !TestNotNull(TEXT("AI controller"), AI))
+	{
+		return false;
+	}
+	// A world with no net driver counts a player controller as local only with a ULocalPlayer (IsLocalController, UE 5.8);
+	// the PIE login marks a client's controller local the same way.
+	PC->SetAsLocalPlayerController();
+	TestTrue(TEXT("The player controller is local here"), PC->IsLocalController());
+
+	// No controller (another player's character on a client, a body nobody possesses): no tint, no volume.
+	TestNull(TEXT("No controller: no tint"), Tint(Nobody));
+	TestEqual(TEXT("No controller: no volume"), Volumes(Nobody), 0);
+	TestFalse(TEXT("No controller: not a local player view"), UVCUnderwaterPostProcess::IsLocalPlayerView(Nobody));
+
+	// An AI controller is local on its machine (IsLocallyControlled holds), but no player views through it: no tint.
+	Link(Bot, AI);
+	TestTrue(TEXT("AI: the pawn counts as locally controlled"), Bot->IsLocallyControlled());
+	TestFalse(TEXT("AI: not a local player view"), UVCUnderwaterPostProcess::IsLocalPlayerView(Bot));
+	TestNull(TEXT("AI: no tint"), Tint(Bot));
+	TestEqual(TEXT("AI: no volume"), Volumes(Bot), 0);
+
+	// A local player controller arriving after BeginPlay (possession, or the owning client's OnRep_Controller): the tint
+	// and its unbound volume appear; when it goes (unpossessed), both go.
+	TestNull(TEXT("Player, before the controller: no tint"), Tint(Player));
+	Link(Player, PC);
+	TestTrue(TEXT("Player: a local player view"), UVCUnderwaterPostProcess::IsLocalPlayerView(Player));
+	UVCUnderwaterPostProcess* Effect = Tint(Player);
+	TestNotNull(TEXT("Player: the tint, on possession"), Effect);
+	TestEqual(TEXT("Player: one unbound volume"), Volumes(Player), 1);
+	Link(Player, nullptr);
+	TestNull(TEXT("Player, unpossessed: the tint is gone"), Tint(Player));
+	TestEqual(TEXT("Player, unpossessed: the volume went with it"), Volumes(Player), 0);
+	TestTrue(TEXT("Player, unpossessed: the component is destroyed, not merely detached"), !IsValid(Effect));
+
+	// Possessed again: created again (a respawn's possession, a pawn swap); then handed to the AI: gone again.
+	Link(Player, PC);
+	TestNotNull(TEXT("Player, possessed again: the tint again"), Tint(Player));
+	Link(Player, AI);
+	TestNull(TEXT("Player, handed to an AI controller: no tint"), Tint(Player));
+	TestEqual(TEXT("Player, handed to an AI controller: no volume"), Volumes(Player), 0);
+
+	// Possessed before BeginPlay (the usual spawn: the game mode possesses the pawn it spawned): BeginPlay creates it.
+	AVCCharacterBase* Early = Spawn(PC);
+	if (TestNotNull(TEXT("Early"), Early))
+	{
+		TestNotNull(TEXT("Possessed before BeginPlay: the tint from BeginPlay"), Tint(Early));
+		TestEqual(TEXT("Possessed before BeginPlay: one volume"), Volumes(Early), 1);
+		Link(Early, nullptr);
+	}
 	return true;
 }
 
