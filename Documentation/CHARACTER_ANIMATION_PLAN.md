@@ -13,8 +13,9 @@ Both, at different layers. The system is Epic's animation stack, with the **Game
 5.8)** as its reference build. GASP is free and ships motion matching, foot placement and a MetaHuman setup. Its
 animations are on the **UEFN Mannequin**, and it retargets them each frame to every visible body (UE5 Manny, MetaHumans
 and others). The Fab packs are content we put into that stack: they fill what GASP lacks (sword and shield, two-handed
-weapons, bow, swimming, mining). They are on the **UE5 Mannequin**. So the project has two animation skeletons to
-reconcile, and D50 picks one.
+weapons, bow, swimming, mining). They are on the **UE5 Mannequin**. So the project has two animation skeletons; D50
+(decided after spike S4) keeps both and converts nothing: GASP's set plays on UE5 Mannequin and MetaHuman bodies through
+skeleton compatibility.
 
 The one 5.8 limit that matters here: motion matching's trajectory prediction assumes world Z is up, and our planets
 are not Z-up (§3). That is why motion matching gets a spike before any work depends on it.
@@ -79,7 +80,7 @@ Checked against the installed engine (`D:\Program Files\Epic Games\UE_5.8`) wher
 
 | System | Status in 5.8 | Use here |
 |---|---|---|
-| UE5 Mannequin skeleton | Standard | **The one animation skeleton** for every humanoid, if D50 goes that way |
+| UE5 Mannequin skeleton | Standard | **The body skeleton** for every humanoid and the skeleton of our own animations (D50) |
 | Game Animation Sample (5.8) | Free sample project (Fab) | Reference implementation and the locomotion animation set (on the UEFN Mannequin); its CMC character is the one to follow (our movement is CMC); copied in, not linked |
 | PoseSearch (motion matching) + Chooser | Production | Player locomotion, if spike S1 passes |
 | AnimationWarping: foot placement, orientation, stride and slope warping | Production | IK and warping. Foot placement traces along the owning component's down vector (`AnimNode_FootPlacement.cpp`: minus the owning component's up vector), so it works on a planet as long as the mesh stands upright to gravity, which it does |
@@ -140,11 +141,14 @@ EquipmentPlugin: AnimLayerClass         ──▶       player: motion matching 
 
 ### Principles
 
-1. **One animation skeleton.** Every humanoid animation lives on one skeleton: the UE5 Mannequin, with GASP's set
-   converted to it once by a script (D50). A body (MetaHuman, modular character, the dungeon skeleton) is a skin over
-   it, never a reason for a second set of animations. Why not GASP's way (everything on the UEFN Mannequin, each body
-   retargeted every frame): every pack, the current body and the NPC bodies are on the UE5 Mannequin, and an NPC would
-   pay for a second pose evaluation each frame.
+1. **One body skeleton, compatible animation skeletons (D50).** Every humanoid body is on the UE5 Mannequin or a
+   skeleton marked compatible with it (a MetaHuman's `metahuman_base_skel`); our own animations and the Fab packs are
+   on the UE5 Mannequin; GASP's set stays on the UEFN Mannequin, marked compatible both ways, and plays on any of these
+   bodies directly: the engine remaps bones when it samples, motion matching's pose history too (spikes S4 and S2). A
+   body (MetaHuman, modular character, the dungeon skeleton) is a skin, never a reason for a second set of animations.
+   Not GASP's way (an unseen UEFN body animated, each visible body retargeted from it every frame), so no character pays
+   for a second pose; not a conversion, so a GASP update is taken as it comes. The conversion stays the fallback for a
+   body whose proportions show a fault the remapping causes (S4's notes).
 2. **Animation follows gameplay; gameplay never reads a pose.** The server decides (movement, abilities, damage);
    animation shows replicated state. A hit's timing comes from the montage asset's data (a notify's time, read once),
    not from the server evaluating poses, so a dedicated server can run NPC meshes at `OnlyTickMontagesWhenNotRendered`
@@ -179,14 +183,15 @@ EquipmentPlugin: AnimLayerClass         ──▶       player: motion matching 
 The repository holds only `Content/PluginTesting` and `Content/Art`. Pack content and anything derived from it stays
 out of git and reaches worktrees through `content_packs.txt` (D46):
 
-- `Content/Characters/`: the consolidated Mannequin skeleton and meshes, GASP's set converted to it, the anim layer
-  interface and layer AnimBPs, the action montages. One new pack folder.
-- `Content/GameAnimationSample/`: what is taken from GASP, as it is. GASP's assets sit at the root of its `/Game`
-  (`/Game/Blueprints`, `/Game/Characters`, `/Game/Input`, ...), and a migrate keeps paths, so they are first moved under
-  one folder in a copy of the GASP project, never the project you made, then migrated: they cannot spread over our
-  `Content/` or collide with `Content/Characters`. Only what is used comes over (the UEFN Mannequin's animations, the
-  motion-matching data, the CMC character and its AnimBP, the MetaHuman retarget rigs), not Echo, Twinblast or the
-  levels.
+- GASP's content, unconverted. Its assets sit at the root of its `/Game` (`/Game/Blueprints`, `/Game/Characters`,
+  `/Game/Input`, `/Game/MetaHumans`, ...) and a migrate keeps paths. P1 gathers them under one folder,
+  `Content/GameAnimationSample/`, in a full editor on a copy of the GASP project (never the project you made; the
+  commandlet route failed in S1), or, failing that, keeps GASP's own roots, which collide with nothing of ours (the
+  spike ran so), each one a pack folder. Only what is used comes over (the UEFN Mannequin's animations, the
+  motion-matching data, the CMC character and its AnimBP, the UE5 Mannequins, the sample MetaHuman), not Echo,
+  Twinblast or the levels.
+- `Content/CharacterAnimation/`: ours on top of it: the anim layer interface and layer AnimBPs, the action montages,
+  the pack animations re-pointed to the one UE5 Mannequin skeleton (GASP's copy). One new pack folder.
 - `Content/MetaHumans/`: what MetaHuman Creator writes. Another pack folder (large: hundreds of MB per MetaHuman).
 - Tracked: the character Blueprints and AnimBPs in `Content/PluginTesting`, as today (they reference pack content, as
   `ABP_VoxelCharacter` already does).
@@ -269,7 +274,7 @@ bodies: P2-P4 show results on today's character before any MetaHuman exists.
   GASP's own runtime-retargeted Manny, the converted character picks the same kinds of poses and its feet slide no more.
   Measure what the conversion of the whole set would take. If it fails, D50 falls back to (b).
 
-  **S4 result (2026-11-05, the spike branch): a cheaper way passes, so D50 is proposed as (a') (the user decides).**
+  **S4 result (2026-11-05, the spike branch): a cheaper way passes; the user took it as D50 (a').**
   - **S4a, no conversion.** The UEFN Mannequin and UE5 Manny skeletons marked compatible with each other (each
     skeleton asset's `CompatibleSkeletons`). GASP's CMC AnimBP, its motion-matching databases and its UEFN
     animations then drive a `SKM_Manny` mesh directly (`vox.Spike.Mesh`): the engine remaps bones between compatible
@@ -286,7 +291,7 @@ bodies: P2-P4 show results on today's character before any MetaHuman exists.
   - S4b, the conversion, was not run. `UIKRetargetBatchOperation::RunBatchRetarget` duplicates and retargets
     sequences, blend spaces, montages and AnimBPs, but not motion-matching databases or choosers; a conversion would
     also need a script to duplicate those and point them at the converted sequences.
-  - **Proposed D50 (a'):** the UE5 Mannequin is the one skeleton for bodies and our animations; GASP's set stays on
+  - **D50 (a'), decided:** the UE5 Mannequin is the one skeleton for bodies and our animations; GASP's set stays on
     its UEFN skeleton and plays through skeleton compatibility; the conversion is done only if a body shows a fault it
     causes (feet, hands on weapons). P1 then keeps GASP's content as it is.
   - Also found: GASP's sample MetaHuman needs three renderer settings the project lacked
@@ -297,13 +302,14 @@ bodies: P2-P4 show results on today's character before any MetaHuman exists.
 
 ### P1: One skeleton, one content home (content and a script; parent PR)
 
-- `Content/Characters` with the canonical UE5 Mannequin (GASP's copy), every pack animation re-pointed to it, the
-  packs' own skeleton copies retired; UE4 sets retargeted only where a UE5 set is missing.
-- GASP's set converted to it as S4 did for the locomotion subset; `Content/GameAnimationSample` keeps the originals as
-  the conversion's source (a later GASP update is converted again by the same script).
+- GASP's content brought in unconverted (§4, "Where the content goes"), with the plugins and the
+  `[/Script/Engine.DataDrivenConsoleVariableSettings]` cvars it needs.
+- The canonical UE5 Mannequin skeleton is GASP's copy (`/Game/Characters/UE5_Mannequins`); every pack animation
+  re-pointed to it, the packs' own skeleton copies retired; UE4 sets retargeted only where a UE5 set is missing.
+- The skeletons marked compatible both ways: the UEFN Mannequin, the UE5 Mannequin, `metahuman_base_skel` (S4, S2).
 - Equipment sockets on the skeleton (`hand_r_socket`, `head_socket`, the back and hip slots), matching the slots'
   `AttachSocket` names (`UEquipmentManagerComponent::AvailableSlots`) and `FVCEquipmentSocketMapping`.
-- `setup_character_animation.py`; `content_packs.txt` gains `Characters` and `GameAnimationSample`.
+- `setup_character_animation.py`; `content_packs.txt` gains `CharacterAnimation` and GASP's folder(s).
 - Done when: `BP_VCPlayer` and `ABP_VoxelCharacter` run unchanged on the canonical skeleton; nothing references the
   retired copies.
 
@@ -346,7 +352,7 @@ bodies: P2-P4 show results on today's character before any MetaHuman exists.
 
 ### P5: Player locomotion (new module `VoxelCharacterAnimation`)
 
-- If S1 passed: motion matching from GASP's converted databases and choosers, our gravity-frame predictor, turn in
+- If S1 passed: motion matching from GASP's databases and choosers (unconverted, D50), our gravity-frame predictor, turn in
   place, starts, stops, pivots, jump and land; swimming from WaterAnimations (surface and underwater). GASP's CMC
   AnimBP is the starting point, reparented to `UVCAnimInstance`: its reads through GASP's Blueprint interfaces
   (`BPI_SandboxCharacter_Pawn`, `_ABP`) become our C++ values, and its trajectory generation becomes ours.
@@ -394,7 +400,7 @@ bodies: P2-P4 show results on today's character before any MetaHuman exists.
 | MetaHuman cost and art fit: photoreal humans in a stylised low-poly world; Creator is Beta | The appearance layer makes MetaHuman one body among several; S2 shows one on the terrain under the project's lighting before anything depends on it (D43) |
 | Fab licences | Pack content and anything derived from it stays out of git (D46) |
 | Animations bound to a retired skeleton copy | P1 first; the script finds stragglers |
-| GASP's conversion to the UE5 Mannequin: 2,300 assets, databases and choosers that point at them, a GASP update to follow | S4 first, on a subset; the conversion is a script, rerun on an update; the originals stay as its source; the fallback is D50 (b) |
+| GASP's set played through skeleton compatibility (D50): a body whose proportions show (feet dipping, hands off a weapon's grip) | P4's foot placement and hand IK take the small offsets; the conversion (S4's notes: batch retarget plus a script for the databases and choosers) is the fallback for one body or one set |
 | Server cost | No pose evaluation for gameplay; parts dropped on a dedicated server |
 | The south-pole twist | Principle 3; a test at the pole (P2, P5) |
 | Voxel collision under IK: trimesh edges, collision swapped during a re-mesh, 75 uu blocks | Clamp, smoothing and a short hold; tested on all three maps (P4) |
@@ -402,19 +408,19 @@ bodies: P2-P4 show results on today's character before any MetaHuman exists.
 
 ## 7. Decisions
 
-Decided 2026-11-05 by the user, each as recommended. D44 and D50 are decided with their conditions: a failed spike
-takes the fallback named in the row.
+Decided 2026-11-05 by the user, each as recommended; D44 and D50 with their spikes' results the same day (S1 passed, so
+D44 is (a); S4 found a cheaper way than D50's (a), and the user took it: (a')).
 
 | ID | Decision | Options | Decided |
 |---|---|---|---|
 | D43 | MetaHumans' role | (a) every humanoid; (b) one supported body type, the default look decided after S2; (c) stylised only | **(b)**: the architecture does not bet on it; the art direction is yours once S2 shows one in the world |
 | D44 | Player locomotion | (a) motion matching (GASP); (b) state machine with blend spaces | **(a) if S1 passes**, else (b); NPCs (b) either way |
 | D45 | Code placement | (a) a new module `VoxelCharacterAnimation`; (b) the deps in the core module | **(a)** |
-| D46 | Content home | (a) untracked pack folders `Characters`, `GameAnimationSample`, `MetaHumans` in `content_packs.txt`; (b) tracked under LFS | **(a)**, the existing policy |
+| D46 | Content home | (a) untracked pack folders in `content_packs.txt` (`CharacterAnimation`, GASP's content, `MetaHumans`; the names as D50 left them); (b) tracked under LFS | **(a)**, the existing policy |
 | D47 | Quadruped source | (a) PROTOFACTOR's Animal Variety Pack (wolf, deer, fox, pig, crow); (b) the Blender pipeline (rig and actions as scripts); (c) static meshes for now | **(a)**: it has both animals the game spawns, with their clips; its look (realistic low poly) is checked beside the stylised nature packs when it is imported |
 | D48 | First person | (a) the arms mesh, as now; (b) the body with the head hidden | **(a)** for now: it keeps the socket map and the view-mode rules; revisit after P6 |
 | D49 | Melee feel | (a) server-only ability, the owner's montage cosmetic; (b) a LocalPredicted ability | **(a)**: it keeps damage where it is now; (b) only if (a) feels late on a real connection |
-| D50 | The animation skeleton | (a) the UE5 Mannequin, GASP's set converted to it once by a script; (b) GASP's way: the UEFN Mannequin, every body retargeted each frame, the packs converted to UEFN for the player's graph | **(a) if S4 passes**: the packs, today's body and the NPC bodies are already on it, and no character pays for a second pose each frame; (b) for the player only if S4 fails |
+| D50 | The animation skeleton | (a) the UE5 Mannequin, GASP's set converted to it once by a script; (a') the UE5 Mannequin for bodies and our animations, GASP's set unconverted on the UEFN Mannequin, the skeletons marked compatible (S4); (b) GASP's way: the UEFN Mannequin, every body retargeted each frame | **(a')** (the user, 2026-11-05, after S4): nothing converted, no second pose per character, a GASP update taken as it comes; the conversion is the fallback for a body that shows a fault |
 | D51 | The gaps (chopping, placing and using) | (a) stand-ins from what we have (a two-handed swing, the mining loop, a pickup); (b) buy a pack; (c) author them | **(a)** for now: the action set is data, so a better clip replaces a stand-in without code |
 
 ## 8. Not in scope
