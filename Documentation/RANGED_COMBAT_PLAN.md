@@ -1,7 +1,7 @@
 # Ranged Combat Plan: the Bow
 
-> **Agreed 2026-11-06: the user approved the plan as drafted, every decision as recommended (D52-D57, §6). B1 done;
-> B2 next.**
+> **Agreed 2026-11-06: the user approved the plan as drafted, every decision as recommended (D52-D57, §6). B1 and B2
+> done; B3 next.**
 > Scope: a bow the player draws, aims and shoots, its
 > arrows as items, and the arrow's flight on a plane and on a planet. Owner: VoxelCharacterPlugin; one field each in
 > ItemInventoryPlugin and EquipmentPlugin; content and item data in the parent. It follows the character animation plan's
@@ -93,6 +93,32 @@ quivers), and the pack's own bow (`SM_Bow`, skeletal, its string a bone) and `SM
 - `AVCArrowProjectile` and `UVCArrowMovementComponent`: flight, sticking, lifespan, damage on a pawn.
 - Tests: on a plane the flight is the ballistic arc; on a planet the acceleration points to the centre at every step and
   an arrow fired level falls toward it; a hit applies the weapon's damage scaled by the draw, and respects factions.
+
+**B2 result (2026-11-06; VoxelCharacterPlugin).**
+- `AVCArrowProjectile` (`Combat/VCArrowProjectile.h`): replicated, spawned by the server (`SpawnArrow(Shooter, Class,
+  Location, Velocity, Shot, Mesh)`, which B3's attack calls; `Launch` and `SetArrowMesh` underneath), carrying an
+  `FVCArrowShot` (the bow's full-draw damage, the draw's power, damage type, crits, the bow's instance). A 4 uu sphere
+  (`BlockAllDynamic` without camera and visibility) sweeps and ignores the shooter on every machine. On a pawn or anything
+  with a combat component: `ApplyHit` (the shot's damage times the draw, the crit rolled at the hit, the arrow the causer so
+  P3's hit react faces it) and the arrow goes. On anything else it sticks, collision off, for `StuckLifetime` (30 s); an
+  `IVCDamageReceiver` prop takes the damage first. It rides a movable prop only when every machine knows the prop
+  (replicated or loaded with the level): the terrain's per-chunk collision is movable but local, so a stuck arrow stays where
+  it is. Unhit it goes after `FlightLifetime` (10 s). A shooter gone before the hit: the faction it had at the launch still
+  decides (else the pipeline would take the arrow for a hazard and hurt anyone). The mesh is the ammo's (replicated);
+  the component's fit is LowPolyRPGWeapons' (60 uu along +Z, nock to tip): turned onto +X, the tip 8 uu past the sphere.
+- `UVCArrowMovementComponent` (`Combat/VCArrowMovementComponent.h`): the engine's projectile movement, gravity replaced on
+  a planet by the same pull toward the centre from where the arrow is, read every substep (forced, 1/60 s; the pawns'
+  `ComputePlanetGravityDirection`); -Z elsewhere. §5's far-shot risk is answered without a range: in a chunk the collision
+  manager has not cooked (`HasCollision` false), an arrow below the generated surface stops at that surface, as a hit on the
+  terrain would; arcs through the air beyond the collision fly on.
+- Tests (`VoxelCharacter.Combat.Arrow.*`, 6): `GravityRule`; `PlaneArc` (a second's flight is the ballistic arc to half a uu);
+  `PlanetFall` (on the equator and under the south pole every substep accelerates toward the centre at the engine's
+  gravity, and a level shot falls 440-500 uu toward it in a second, none of it out of its plane); `HitsPawn` (spawned from
+  inside the shooter's capsule, it meets the target for half the damage at half draw and goes); `Sticks` (a static wall, a
+  movable replicated one it rides, a movable local one it does not); `DamageAndFactions`.
+- PIE in `VoxelDemo` (arrows spawned from the player's eyes by script, `SpawnArrow`): stuck tip first in the slope at 3 m
+  and 10 m; the training dummy hit for 15 at full draw and the arrow gone; a 47° shot arced to 8,300 uu up and came down
+  357 m out, past the cooked collision, stopping on the generated surface where the far mesh shows it.
 
 ### B3: The attack (VoxelCharacterPlugin)
 - `UVCRangedAttackAbility`: the draw on press, the shot on release, the arrow used, the release sent to others; the
