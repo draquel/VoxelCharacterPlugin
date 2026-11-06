@@ -17,7 +17,9 @@ editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the 
 4. `Documentation/FINDINGS.md` at the project root — open findings in this plugin (none since G75 closed, 2026-11-02).
 5. `Documentation/CHARACTER_ANIMATION_PLAN.md` — the active plan (agreed 2026-11-05, D43-D51): animation, IK and
    bodies for the player and the NPCs, MetaHumans among them; its phases and spikes.
-6. History only: `Documentation/CharacterController_Design.md` (the February design, frozen),
+6. `Documentation/RANGED_COMBAT_PLAN.md` — the active plan for the bow (agreed 2026-11-06, D52-D57): the ranged
+   attack, the arrow on planets, arrows as items.
+7. History only: `Documentation/CharacterController_Design.md` (the February design, frozen),
    `COMBAT_FOUNDATION_PLAN.md` and `EQUIPMENT_LOOP_PLAN.md` (frozen), `Documentation/Archive/ImplementationPlan.md`.
 
 Across plugins: `Plugins/CommonGameFramework/Documentation/ARCHITECTURE.md`; VoxelWorlds'

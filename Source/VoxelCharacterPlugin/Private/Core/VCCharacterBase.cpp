@@ -1093,11 +1093,13 @@ void AVCCharacterBase::UpdateEquipmentAttachments()
 			continue;
 		}
 
-		// Determine the correct socket for the current view mode
-		FName SocketName = Slot.AttachSocket;
+		// Determine the correct socket for the current view mode; an item that chooses its own bone (a bow on the left
+		// hand) keeps it in both views.
+		const FName ItemBone = EquipmentManager->GetItemAttachBone(Slot.SlotTag);
+		FName SocketName = ItemBone.IsNone() ? Slot.AttachSocket : ItemBone;
 		for (const FVCEquipmentSocketMapping& Mapping : EquipmentSocketMappings)
 		{
-			if (Mapping.SlotTag == Slot.SlotTag)
+			if (Mapping.SlotTag == Slot.SlotTag && ItemBone.IsNone())
 			{
 				if (CurrentViewMode == EVCViewMode::FirstPerson && !Mapping.ArmsSocket.IsNone())
 				{

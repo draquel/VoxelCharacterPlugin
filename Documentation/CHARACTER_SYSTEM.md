@@ -239,7 +239,8 @@ surface stays clear while the pawn swims.
 
 `AVCCharacterBase::SetViewMode` pushes the camera mode, switches rotation (first person: yaw follows the controller;
 third person: orient to movement), hides the body for the local first-person view after the blend, attaches the
-equipment visuals to the arms or the body (`FVCEquipmentSocketMapping`), updates the interaction range and broadcasts
+equipment visuals to the arms or the body (`FVCEquipmentSocketMapping`; an item that names its own bone, the bow on
+`hand_l`, keeps it in both views), updates the interaction range and broadcasts
 `OnViewModeChanged`; the anim instance reads `CurrentViewMode`. The view mode is the local player's and is not
 replicated (G87, 2026-11-02): `SetViewMode` runs on the machine that calls it (the owning client's toggle), and every
 other machine draws the pawn in third person, its equipment on the body sockets. Nothing on the server reads it (the
