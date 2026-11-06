@@ -7,8 +7,8 @@ mode, the movement component and camera, input, combat on GAS, NPC AI, surface g
 and the HUD and map widgets. It owns no item, interaction or equipment system; it uses ItemInventoryPlugin,
 InteractionPlugin and EquipmentPlugin when they are present and compiles without them (`WITH_INVENTORY_PLUGIN`,
 `WITH_INTERACTION_PLUGIN`, `WITH_EQUIPMENT_PLUGIN`, set by `VoxelCharacterPlugin.Build.cs`). It depends on
-CommonGameFramework, VoxelWorlds, GameplayAbilities and EnhancedInput. One runtime module, `VoxelCharacterPlugin`;
-UE 5.8. The rules for changing it are in `.claude/instructions.md`; the February design record is
+CommonGameFramework, VoxelWorlds, GameplayAbilities and EnhancedInput. A runtime module, `VoxelCharacterPlugin`, and
+an editor module, `VoxelCharacterEditor` (scripting the animation content, Animation below); UE 5.8. The rules for changing it are in `.claude/instructions.md`; the February design record is
 `CharacterController_Design.md` (frozen).
 
 ## Class map
@@ -24,6 +24,8 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Core | `AVCNPCCharacterBase` | NPC pawn with its own ASC and attribute sets, behaviour and temperament, a floating health bar (`UVCNPCHealthBarWidget`); implements `IVCAnimatedCharacter` |
 | Core | `UVCCharacterAttributeSet` | Health, Stamina, Breath (each with a max), MoveSpeedMultiplier, MiningSpeed, InteractionRange, IncomingDamage (meta) |
 | Core | `UVCAnimInstance`, `IVCAnimatedCharacter` | The anim instance of the player and the NPCs, every value in the gravity frame (Animation, below); the interface it reads a character's view mode, action set and combat state through |
+| Animation | `UVCActionMontageComponent`, `UVCActionAnimSet`, `UVCAnimNotify_ActionHit` | The action montages of both character classes: the owner's at input, everyone else's by multicast, hit reacts, deaths and get-ups from the combat events; a set's montages per action; the moment an action lands |
+| Editor | `UVCAnimAuthoringLibrary` (`VoxelCharacterEditor`) | Anim layers, interfaces, graph nodes, pins and properties from Python, which the engine does not expose: `Scripts/setup_character_layers.py` builds the content with it |
 | Core | `UVCSettings` | Project Settings > Plugins > Voxel Character (CR4): `NPCHealthBars`, overridden by `vc.UI.NPCHealthBars` once set |
 | Core | `VCTypes.h`, `VCGameplayTags.h` | `EVCViewMode`, `EVCSurfaceType`, `EVCVoxelModificationType`, `EVCOutOfHealthPolicy`, `EVCNPCBehavior`, `EVCNPCTemperament`, `EVCRespawnPolicy`, `FVCTerrainContext`, `FVCEquipmentSocketMapping`, `FVCItemSnapshot`, `FVCProgressionStats`, `FVCPlayerSaveState`; the native tags |
 | Movement | `UVCMovementComponent` | Voxel-aware character movement (players and NPCs): terrain context, swimming, sprint, planet gravity, block steps, embed resolve, world-edge push-back, debug flight |
@@ -199,7 +201,31 @@ it reads through `IVCAnimatedCharacter` (`VCAnimatedCharacter.h`), which both ch
   (ItemInventoryPlugin); `AVCCharacterBase::PickActionSet` makes the main hand's set the item's own, `Tool` for an item
   that names none and `Unarmed` for an empty hand. The character refreshes `ActiveActionSet` on the equipment's
   `OnEquipmentChanged`, which fires on every machine (on clients from the replicated slots). An NPC's set is its
-  `ActionSet` property (`Unarmed` unset). The layers and montages themselves come in P3.
+  `ActionSet` property (`Unarmed` unset).
+- **Layers.** `ABP_VoxelCharacter` runs the layer `UpperBodyStance` of `ALI_VCCharacter` between its state machine and
+  its slot, and implements it itself (the base pose through). An item's Equipment fragment links its stance layer on
+  equip (`AnimLayerClass`, EquipmentPlugin's `LinkAnimClassLayers`): `ABP_VCLayer_SwordShield`, `_TwoHand` and `_Tool`
+  lay the set's idle over `spine_01` and below it. Montages play in the slot above, over the stance.
+- **Action montages.** `UVCActionMontageComponent` (on both character classes) plays an action from the
+  `UVCActionAnimSet` of what the character holds: `ChooseAttack` steps through the set's combo within its window and
+  picks the play rate that fits one swing into an attack's interval; `PlayActionLocal` plays on this machine (a dig or a
+  chop already playing keeps playing); `PlayActionForEveryone` sends one unreliable multicast, which a dedicated server
+  and, for an action it played at input, the owning player skip (D49). On the server it answers the combat component: a
+  hit react from the side the hit came from (`DirectionOfHit`, about local up), a death montage for a body with no
+  physics asset (one with a physics asset ragdolls), a get-up on revive.
+- **What plays when.** The melee attack: the owner plays its swing at once (`TryStartMeleeAttack`, the server's rate
+  limit mirrored); the server's ability sends it to the others and lands the sweep and the damage at the montage's hit
+  time, the first `UVCAnimNotify_ActionHit` (`GetHitTime`; 40% of the length without one), and at once with no montage.
+  Dig, place and chop: the owner at input, the others once the server accepted the edit or the chop. Use and placing an
+  item: everyone, from the server, since the server may refuse.
+- **Where the sets come from.** The player's are `UVCSettings::PlayerActionAnimSets` (Project Settings > Voxel
+  Character, `Config/DefaultGame.ini`) unless its Blueprint lists its own; an NPC lists its own (none yet: its attacks
+  land at once, as before).
+- **The content.** `Scripts/setup_character_layers.py` builds the interface, the layers, the montages (from the
+  template mannequin's, Sword & Shield's and GASP's sequences, a hit notify at the strike) and the four sets under
+  `/Game/CharacterAnimation` (a content pack), puts the layer into `ABP_VoxelCharacter` and tags the swords and the
+  pickaxes. Stand-ins (D51) until VanillaLoop's samples: the pickaxe digs with a two-handed strike and holds the
+  two-handed idle; nothing plays for placing and using.
 
 ## Camera
 
@@ -481,6 +507,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 | Progression | Server | `Progression` on the player state |
 | View mode | The local player's machine | Not replicated (G87); other machines draw third person |
 | Action set | Server (the equipment) | Derived on every machine from the replicated equipment slots |
+| Action montages | The owner at input; the server for what it accepted | One unreliable multicast, skipped by the owner for its own actions (D49); the melee damage on the server at the montage's hit time |
 | Camera, input, edit mode, debug flight | Local | Not replicated |
 
 ## Console variables

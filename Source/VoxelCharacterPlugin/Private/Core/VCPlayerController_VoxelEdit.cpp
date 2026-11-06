@@ -6,6 +6,7 @@
 #include "Core/VCPlayerState.h"
 #include "UI/VCVitalsWidget.h"
 #include "Core/VCCharacterBase.h"
+#include "Animation/VCActionAnimSet.h"
 #include "Gathering/VCGatherTable.h"
 #include "Editing/VCBlockInteractionComponent.h"
 #include "VoxelScatterManager.h"
@@ -98,6 +99,10 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 			return;
 		}
 		DigVoxelAt(VoxelCoord);
+		if (AVCCharacterBase* Editor = Cast<AVCCharacterBase>(ControlledPawn))
+		{
+			Editor->ShareOwnAction(EVCAnimAction::Dig);
+		}
 		return;
 	}
 
@@ -157,6 +162,10 @@ void AVCPlayerController::Server_RequestVoxelModification_Implementation(const F
 
 		UE_LOG(LogVoxelCharacter, Verbose, TEXT("Voxel placed at [%d,%d,%d] Material=%d"),
 			VoxelCoord.X, VoxelCoord.Y, VoxelCoord.Z, MaterialID);
+		if (AVCCharacterBase* Editor = Cast<AVCCharacterBase>(ControlledPawn))
+		{
+			Editor->ShareOwnAction(EVCAnimAction::Place);
+		}
 		break;
 	}
 	}

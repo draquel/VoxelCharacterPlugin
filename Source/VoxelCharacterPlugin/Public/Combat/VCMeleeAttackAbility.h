@@ -8,13 +8,16 @@
 #include "VCMeleeAttackAbility.generated.h"
 
 /**
- * Minimal melee attack: a server-side sweep along the avatar's view, one hit on
- * the first hostile damageable, damage from the main-hand weapon fragment or
- * bare hands. No animation, no hit reaction — those are later features.
+ * Melee attack: a server-side sweep along the avatar's view, one hit on the first hostile damageable, damage from the
+ * main-hand weapon fragment or bare hands.
  *
- * Net policy is ServerOnly: the client requests activation (TryActivateAbilitiesByTag
- * with Ability.Attack.Melee from the primary-action input chain) and the server
- * traces and applies, so a client can never fabricate a hit.
+ * Net policy is ServerOnly: the client requests activation (TryActivateAbilitiesByTag with Ability.Attack.Melee from
+ * the primary-action input chain) and the server traces and applies, so a client can never fabricate a hit.
+ *
+ * The swing has a montage when the avatar's UVCActionMontageComponent has one for what it holds (character animation
+ * P3, D49): the owning player plays it at once on input, the server sends it to everyone else, and the sweep and the
+ * damage wait for the montage's hit time, read from the asset (UVCActionAnimSet::GetHitTime). Without a montage the
+ * hit is immediate.
  *
  * Granted to players natively through AVCPlayerState::MeleeAttackAbilityClass.
  */
@@ -46,6 +49,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0", ClampMax = "1"))
 	float WornOutDamageMultiplier = 0.5f;
 
+	/**
+	 * Attacks per second for what the avatar holds: the main-hand weapon fragment's AttackSpeed, else UnarmedAttackSpeed.
+	 * The owner's swing uses it to pick the same play rate and rate limit the server applies.
+	 * @param Avatar The attacker
+	 * @return Attacks per second
+	 */
+	float GetAttackSpeed(const AActor* Avatar) const;
+
 protected:
 	virtual void ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 		const FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
@@ -68,6 +79,16 @@ protected:
 	/** Resolve damage, type, attack speed, crit and item id from the equipped main-hand item, or unarmed defaults. */
 	FAttackParameters ResolveAttackParameters(const AActor* Avatar) const;
 
+	/** The sweep and the damage of one swing (authority), at its hit time. */
+	void ApplySwing(AActor* Avatar, const FAttackParameters& Attack) const;
+
+	/** The swing's hit time arrived: apply it unless the attacker went down meanwhile, then end. */
+	UFUNCTION()
+	void OnHitTime();
+
 	/** World time of the last activation that got past the rate limit. */
 	double LastAttackTimeSeconds = -1.0;
+
+	/** The swing waiting for its hit time. */
+	FAttackParameters PendingAttack;
 };

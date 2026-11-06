@@ -2,6 +2,8 @@
 
 #include "Combat/VCMeleeAttackAbility.h"
 #include "Combat/VCCombatStatics.h"
+#include "Animation/VCActionMontageComponent.h"
+#include "Abilities/Tasks/AbilityTask_WaitDelay.h"
 #include "Utilities/CGFCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
 #include "VoxelCharacterPlugin.h"
@@ -95,6 +97,11 @@ UVCMeleeAttackAbility::FAttackParameters UVCMeleeAttackAbility::ResolveAttackPar
 	return Out;
 }
 
+float UVCMeleeAttackAbility::GetAttackSpeed(const AActor* Avatar) const
+{
+	return ResolveAttackParameters(Avatar).AttackSpeed;
+}
+
 void UVCMeleeAttackAbility::ApplyWeaponWear(AActor* Avatar) const
 {
 #if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
@@ -152,6 +159,48 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 	}
 	LastAttackTimeSeconds = Now;
 
+	// The swing's montage: everyone but the owning player (who played its own at input) sees it, and the hit waits
+	// for the montage's hit time. No montage, no wait.
+	float HitDelay = 0.f;
+	if (UVCActionMontageComponent* Montages = Avatar->FindComponentByClass<UVCActionMontageComponent>())
+	{
+		float PlayRate = 1.f;
+		const int32 Variant = Montages->ChooseAttack(Attack.AttackSpeed, PlayRate);
+		if (const UAnimMontage* Montage = Montages->GetMontage(EVCAnimAction::Attack, Variant))
+		{
+			const APawn* Pawn = Cast<APawn>(Avatar);
+			Montages->PlayActionForEveryone(EVCAnimAction::Attack, Variant, PlayRate, Pawn && Pawn->IsPlayerControlled());
+			HitDelay = UVCActionAnimSet::GetHitTime(Montage) / PlayRate;
+		}
+	}
+
+	if (HitDelay <= UE_KINDA_SMALL_NUMBER)
+	{
+		ApplySwing(Avatar, Attack);
+		EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
+		return;
+	}
+	PendingAttack = Attack;
+	UAbilityTask_WaitDelay* Wait = UAbilityTask_WaitDelay::WaitDelay(this, HitDelay);
+	Wait->OnFinish.AddDynamic(this, &UVCMeleeAttackAbility::OnHitTime);
+	Wait->ReadyForActivation();
+}
+
+void UVCMeleeAttackAbility::OnHitTime()
+{
+	AActor* Avatar = GetAvatarActorFromActorInfo();
+	const UAbilitySystemComponent* ASC = GetAbilitySystemComponentFromActorInfo();
+	// Killed or knocked out during the wind-up: the swing never lands.
+	const bool bDown = ASC && (ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Dead) || ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Downed));
+	if (Avatar && !bDown)
+	{
+		ApplySwing(Avatar, PendingAttack);
+	}
+	EndAbility(GetCurrentAbilitySpecHandle(), GetCurrentActorInfo(), GetCurrentActivationInfo(), true, false);
+}
+
+void UVCMeleeAttackAbility::ApplySwing(AActor* Avatar, const FAttackParameters& Attack) const
+{
 	// The same sweep the client's target check runs (UVCCombatStatics::SweepHostileUnderView): eye location + control
 	// rotation (replicated to the server), so the sweep does not depend on a client-only camera.
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCMeleeAttack), /*bTraceComplex*/ false, Avatar);
@@ -164,7 +213,6 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s melee missed: hit %s (%s) at (%.0f, %.0f, %.0f) dist %.0f, from (%.0f, %.0f, %.0f) toward %s"), *GetNameSafe(Avatar),
 			*GetNameSafe(Met), Met ? *GetNameSafe(Sweep.Hit.GetComponent()) : TEXT("-"), Sweep.Hit.ImpactPoint.X, Sweep.Hit.ImpactPoint.Y, Sweep.Hit.ImpactPoint.Z, Sweep.Hit.Distance,
 			Sweep.ViewLocation.X, Sweep.ViewLocation.Y, Sweep.ViewLocation.Z, *Sweep.ViewRotation.ToCompactString());
-		EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 		return;
 	}
 
@@ -194,6 +242,4 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 		// Feature 5b: every landed hit wears the main-hand weapon by its DegradeRate.
 		ApplyWeaponWear(Avatar);
 	}
-
-	EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 }

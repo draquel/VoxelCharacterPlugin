@@ -21,6 +21,8 @@ class UVoxelCollisionManager;
 class UVoxelWorldConfiguration;
 class UVCCombatComponent;
 class UVCBlockInteractionComponent;
+class UVCActionMontageComponent;
+enum class EVCAnimAction : uint8;
 struct FInputActionValue;
 struct FVoxelWorldBounds;
 
@@ -186,6 +188,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Combat")
 	TObjectPtr<UVCCombatComponent> CombatComponent;
 
+	/** Plays the action montages: the owning player's at input, everyone else's by multicast (character animation P3). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UVCActionMontageComponent> ActionMontages;
+
 	/**
 	 * Cubic worlds (world modes review §22): the block highlight, the placement preview and timed block breaking (the
 	 * primary action held on a block breaks it after its material's hardness / MiningSpeed, decided on the server).
@@ -255,6 +261,19 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Combat")
 	bool TryStartMeleeAttack();
+
+	/**
+	 * Plays an action's montage at once on this machine: the owning player's own dig, chop or place, at input.
+	 * Cosmetic; the server's path decides what happens.
+	 * @param Action The action
+	 */
+	void PlayOwnAction(EVCAnimAction Action);
+
+	/**
+	 * Authority: plays an action the owning player started for every other machine (it played its own at input).
+	 * @param Action The action
+	 */
+	void ShareOwnAction(EVCAnimAction Action);
 
 	// --- Optional Integration Components ---
 	// Not UPROPERTY — UHT forbids UPROPERTY inside #if blocks.
@@ -723,6 +742,9 @@ protected:
 
 	/** Last reported carried-light lit state (prompt text depends on it; fuel ticks alone do not refresh). */
 	bool bLastCarriedLightLit = false;
+
+	/** World time of the owner's last swing played at input (the server's rate limit, mirrored). */
+	double LastOwnSwingTime = -1.0;
 
 	/** Equipment manager removed a worn-out item (authority): a burnt-out torch tells the owner. */
 	UFUNCTION()
