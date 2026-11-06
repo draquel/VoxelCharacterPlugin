@@ -210,6 +210,35 @@ bodies: P2-P4 show results on today's character before any MetaHuman exists.
   at the equator and near the south pole the trajectory's debug draw lies on the tangent plane and turns about local up;
   starts, stops and pivots look as they do on a plane; foot placement holds on voxel slopes and on 75 uu block steps.
   Measure the pose search's cost per character.
+
+  **S1 result (2026-11-05, spike branch `spike/character-animation-p0`, parent repository; not to merge): passes, so
+  D44 is (a).** GASP's CMC character reparented onto a pawn on `UVCMovementComponent` (`AVoxelSpikeGASPCharacter`), its
+  AnimBP onto `UVoxelSpikeMMAnimInstance`; `vox.Spike.GASP` swaps the player onto it on `PlanetTest` (radius 250,000
+  uu).
+  - GASP's motion matching runs on the planet unchanged: the character stands upright and walks, runs, turns and stops
+    at the equator and at 70°S, on slopes.
+  - GASP's own trajectory is the engine's CMC prediction (its pose-history node takes the AnimBP's `Trajectory`
+    variable; it does not generate its own). On a planet it goes wrong only when the view turns (strafing) or the
+    character orients to its movement: the prediction turns about world Z. With the view turning at 60°/s while
+    walking, its samples are upside down at the equator (sample up · local up −0.98) and at 70°S tilted (0.71-0.74)
+    with a heading error of 20°. Straight walks, turns of the walk direction and stops match ours.
+  - `UVoxelSpikeGravityPredictor` (`IPoseSearchTrajectoryPredictorInterface`, turning about local up, the engine's
+    speed and braking step reused) keeps every sample upright (1.000) with no heading error; with up = world Z it is the
+    engine's prediction to 0.01 uu (`VoxelEngine.Spike.Trajectory.*`, 3/3, headless). It reaches motion matching with
+    no graph edit: the anim instance's proxy `Update` runs after the AnimBP's thread-safe update and before its graph,
+    and replaces the trajectory there (`vox.Spike.GravityTrajectory 0|1`, the A/B in one build).
+  - Motion matching's own numbers (`FMotionMatchingState::SearchResult`): the same at the equator (the engine's error
+    there is a roll about the walk direction, which the trajectory features do not see); at 70°S lower match costs
+    with ours (straight walk −0.38 against −0.23, view turning −0.41 against −0.37) and fewer clip switches on the
+    straight walk (0.7 against 3.1 a second). Suggestive, not conclusive: the runs cross different ground.
+  - Cost: both trajectories (the engine's for the A/B, ours, and the collision pass's traces) 0.05-0.08 ms per update
+    on the animation worker.
+  - Not covered: foot placement on 75 uu block steps (`Review_Cubic`), the pose search's own time (`stat anim`).
+  - For P5: GASP's camera (`GameplayCameras`) is world-Z up, so on a planet the view lies on its side; the character
+    keeps `UVCCameraManager`. GASP's content needs its data-driven cvars (`[/Script/Engine.DataDrivenConsoleVariableSettings]`)
+    and plugins in the project. The single-folder gather does not work as a commandlet (`rename_assets` is refused by
+    a dialog `-unattended` answers Cancel, and stops on the MetaHuman retarget poses' Control Rig errors): P1 does it
+    in a full editor, or keeps GASP at its own paths; the spike copied it at its own paths, which collide with nothing.
 - **S2, a MetaHuman on the pawn.** One MetaHuman made in Creator on `BP_VCPlayer`: GASP's runtime retarget against
   direct playback on the MetaHuman body. Measure ms per character, visible offsets (hands, feet, sockets), the face's
   idle, the first-person view, disk and memory; check a dedicated server can drop face, groom and outfits.
