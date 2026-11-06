@@ -34,6 +34,8 @@ UAnimMontage* UVCActionAnimSet::GetMontage(EVCAnimAction Action, int32 Variant) 
 	case EVCAnimAction::HitReact: return HitReact.Get(static_cast<EVCHitDirection>(FMath::Clamp(Variant, 0, 3)));
 	case EVCAnimAction::Death:    return Death.Get(static_cast<EVCHitDirection>(FMath::Clamp(Variant, 0, 3)));
 	case EVCAnimAction::Revive:   return Revive;
+	case EVCAnimAction::Draw:     return Draw;
+	case EVCAnimAction::Release:  return Release;
 	}
 	return nullptr;
 }

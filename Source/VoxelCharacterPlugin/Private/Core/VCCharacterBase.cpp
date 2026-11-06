@@ -10,6 +10,7 @@
 #include "Core/VCSettings.h"
 #include "Combat/VCCombatComponent.h"
 #include "Combat/VCMeleeAttackAbility.h"
+#include "Combat/VCRangedAttackAbility.h"
 #include "Animation/VCActionMontageComponent.h"
 #include "Editing/VCBlockInteractionComponent.h"
 #include "Utilities/CGFCombatStatics.h"
@@ -583,6 +584,10 @@ void AVCCharacterBase::GrantDefaultAbilities(UAbilitySystemComponent* ASC)
 	{
 		ASC->GiveAbility(FGameplayAbilitySpec(PS->MeleeAttackAbilityClass, 1, INDEX_NONE, this));
 	}
+	if (PS->RangedAttackAbilityClass)
+	{
+		ASC->GiveAbility(FGameplayAbilitySpec(PS->RangedAttackAbilityClass, 1, INDEX_NONE, this));
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -658,6 +663,61 @@ bool AVCCharacterBase::TryStartMeleeAttack()
 	// The ability is ServerOnly: on a client this sends the activation request to the server,
 	// which does its own sweep, so a client cannot fabricate a hit.
 	return ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(CGFGameplayTags::Ability_Attack_Melee));
+}
+
+bool AVCCharacterBase::TryStartRangedAttack()
+{
+	if (!UVCRangedAttackAbility::HoldsRangedWeapon(this))
+	{
+		return false;
+	}
+	if (bDrawingRangedWeapon || !CombatComponent || IsIncapacitated())
+	{
+		return true;
+	}
+	// The owner's check; the server's activation runs the same one.
+	if (!UVCRangedAttackAbility::CanStartDraw(this))
+	{
+		if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+		{
+			PC->ShowToast(NSLOCTEXT("VCHud", "NoArrows", "No arrows"), 2.0f);
+		}
+		return true;
+	}
+	UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	// ServerOnly, as the melee attack: on a client this asks the server, which times the draw from its activation.
+	if (!ASC || !ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(VCGameplayTags::Ability_Attack_Ranged)))
+	{
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s: the ranged attack did not start"), *GetName());
+		return true;
+	}
+	bDrawingRangedWeapon = true;
+	OwnDrawStartTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	PlayOwnAction(EVCAnimAction::Draw);
+	return true;
+}
+
+void AVCCharacterBase::ReleaseRangedAttack()
+{
+	if (!bDrawingRangedWeapon)
+	{
+		return;
+	}
+	bDrawingRangedWeapon = false;
+	// The owner's look follows its own clock; the server's measure decides the shot.
+	if (ActionMontages && IsLocallyControlled())
+	{
+		const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : OwnDrawStartTime;
+		if (UVCRangedAttackAbility::GetDrawPower(this, static_cast<float>(Now - OwnDrawStartTime)) > 0.f)
+		{
+			ActionMontages->PlayActionLocal(EVCAnimAction::Release);
+		}
+		else
+		{
+			ActionMontages->StopActionLocal(EVCAnimAction::Draw);
+		}
+	}
+	UVCRangedAttackAbility::ReleaseDraw(GetAbilitySystemComponent());
 }
 
 void AVCCharacterBase::PlayOwnAction(EVCAnimAction Action)
@@ -1620,6 +1680,12 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 		return;
 	}
 
+	// Step 0: a ranged weapon in the main hand draws while the button is held and shoots on release.
+	if (TryStartRangedAttack())
+	{
+		return;
+	}
+
 	// Step 1: a hostile combatant under the crosshair takes priority over digging.
 	if (TryStartMeleeAttack())
 	{
@@ -1668,6 +1734,7 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 
 void AVCCharacterBase::Input_StopPrimaryAction(const FInputActionValue& Value)
 {
+	ReleaseRangedAttack();
 	if (BlockInteraction)
 	{
 		BlockInteraction->StopHold();

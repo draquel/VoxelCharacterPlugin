@@ -1,7 +1,7 @@
 # Ranged Combat Plan: the Bow
 
-> **Agreed 2026-11-06: the user approved the plan as drafted, every decision as recommended (D52-D57, §6). B1 and B2
-> done; B3 next.**
+> **Agreed 2026-11-06: the user approved the plan as drafted, every decision as recommended (D52-D57, §6). B1-B3 done;
+> B4 next.**
 > Scope: a bow the player draws, aims and shoots, its
 > arrows as items, and the arrow's flight on a plane and on a planet. Owner: VoxelCharacterPlugin; one field each in
 > ItemInventoryPlugin and EquipmentPlugin; content and item data in the parent. It follows the character animation plan's
@@ -125,6 +125,36 @@ quivers), and the pack's own bow (`SM_Bow`, skeletal, its string a bone) and `SM
   primary-action chain's bow step; `vox.Shoot [draw=1]` for QA (the game module).
 - Tests: the draw's fraction and its minimum; no arrow, no draw; one arrow per shot; a client's release with no arrow on
   the server is refused. The PIE dedicated-server test gains a step: the server's arrow reaches the client.
+
+**B3 result (2026-11-06; VoxelCharacterPlugin, the parent).**
+- `UVCRangedAttackAbility` (`Combat/VCRangedAttackAbility.h`), ServerOnly, granted with the melee attack
+  (`AVCPlayerState::RangedAttackAbilityClass`), tag `Ability.Attack.Ranged` (this plugin's native tags). Its activation
+  times the draw on the server; the release reaches it as the ability system component's input release
+  (`ReleaseDraw`: `ServerSetInputReleased` from a client, on the component's channel after the activation request, so
+  it cannot overtake it; `AbilitySpecInputReleased` on the server). At the release: a draw under the minimum is no shot;
+  otherwise one arrow leaves the bag, `SpawnArrow` launches it from `ArrowStartOffset` (ahead of the eyes, by the bow's
+  hand) toward what the view meets within `AimRange` (a thin sphere on the Pawn channel), at the bow's speed times the
+  draw's power, carrying the Weapon fragment's damage (halved when worn out), its type and crits, and the ammo's mesh;
+  the bow wears by its DegradeRate. No ranged weapon, a dead or downed shooter, or no arrow left at the release: no shot
+  and nothing used. One predicate for the owner's check and the server's (`CanStartDraw`, D-CR16).
+- The primary-action chain's step 0, `AVCCharacterBase::TryStartRangedAttack` / `ReleaseRangedAttack` (the input's
+  end): a ranged weapon in the main hand takes the press, arrows or not ("No arrows" as a toast); the owner plays its draw
+  at once and, at the release, its release when its own clock says the draw was long enough, else stops the draw; the
+  server sends both to everyone else (D49). `EVCAnimAction::Draw` / `Release` and the set's `Draw` / `Release` montages
+  are there for B4; `UVCActionMontageComponent::StopActionLocal` / `StopActionForEveryone` stop a draw let go too early
+  (a reliable multicast: a lost stop would leave a looping draw). `vox.Shoot [draw=1] [autoAim=0]` in the game module.
+- Tests: `VoxelCharacter.Combat.Ranged.DrawRules` (the power curve, no draw without a bow or an arrow),
+  `.OneArrowPerShot` (a full draw at 6000 uu/s, one arrow and one point of wear; a 0.1 s draw nothing; a partial draw a
+  partial speed), `.ReleaseWithoutArrowRefused`. `VoxelEngine.Replication.Framework` gains two steps: the server's arrow
+  reaches the client with its shooter and mesh, then sticks in a replicated wall there, riding the client's copy with its
+  collision off.
+- PIE in `VoxelDemo`, standalone: `vox.Shoot 1 1` hit the dummy for 15 (one arrow used); a 0.12 s draw shot nothing; with
+  no arrows no draw started and the toast showed. With a dedicated server and a client (the editor's play settings), the
+  client's own primary action (`Input.+action IA_PrimaryAction`) activated the ability on the server, the release came
+  in order, the server shot after its own measure of the draw and used an arrow, and the arrow stuck on both machines.
+  The client's arrow count stayed at 20 while the server's went to 19: G133, a framework replication bug (a stack's count
+  changed in place is never sent), not the attack's. Python cannot drive a client's server RPCs (it calls every function
+  under the editor's script guard, where an RPC runs locally); a key or action forced into the client's input can.
 
 ### B4: Animation and feel (content, the parent's script)
 - The Bow set and `ABP_VCLayer_Bow` (stance and aim offset) in `setup_character_layers.py`; the bow's montages; P3's

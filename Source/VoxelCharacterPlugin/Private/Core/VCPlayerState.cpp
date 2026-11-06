@@ -7,6 +7,7 @@
 #include "GameFramework/Pawn.h"
 #include "Combat/VCCombatAttributeSet.h"
 #include "Combat/VCMeleeAttackAbility.h"
+#include "Combat/VCRangedAttackAbility.h"
 #include "AbilitySystemComponent.h"
 #include "GameplayEffect.h"
 #include "VoxelCharacterPlugin.h"
@@ -22,6 +23,7 @@ AVCPlayerState::AVCPlayerState()
 	CombatAttributes = CreateDefaultSubobject<UVCCombatAttributeSet>(TEXT("CombatAttributes"));
 
 	MeleeAttackAbilityClass = UVCMeleeAttackAbility::StaticClass();
+	RangedAttackAbilityClass = UVCRangedAttackAbility::StaticClass();
 
 	// Net update frequency for ASC replication
 	SetNetUpdateFrequency(100.f);

@@ -136,6 +136,27 @@ void UVCActionMontageComponent::PlayActionForEveryone(EVCAnimAction Action, int3
 	Multicast_PlayAction(Action, static_cast<uint8>(FMath::Clamp(Variant, 0, 255)), PlayRate, bOwnerPlayedIt);
 }
 
+bool UVCActionMontageComponent::StopActionLocal(EVCAnimAction Action)
+{
+	UAnimMontage* Montage = GetMontage(Action);
+	UAnimInstance* AnimInstance = Montage ? GetBodyAnimInstance() : nullptr;
+	if (!AnimInstance || !AnimInstance->Montage_IsPlaying(Montage))
+	{
+		return false;
+	}
+	AnimInstance->Montage_Stop(Montage->GetDefaultBlendOutTime(), Montage);
+	return true;
+}
+
+void UVCActionMontageComponent::StopActionForEveryone(EVCAnimAction Action, bool bOwnerStoppedIt)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	Multicast_StopAction(Action, bOwnerStoppedIt);
+}
+
 int32 UVCActionMontageComponent::GetHitDirection(const FCGFDamageContext& Context) const
 {
 	const ACharacter* Character = Cast<ACharacter>(GetOwner());
@@ -193,4 +214,18 @@ void UVCActionMontageComponent::Multicast_PlayAction_Implementation(EVCAnimActio
 		return;
 	}
 	PlayActionLocal(Action, Variant, PlayRate);
+}
+
+void UVCActionMontageComponent::Multicast_StopAction_Implementation(EVCAnimAction Action, bool bOwnerStoppedIt)
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+	const APawn* Pawn = Cast<APawn>(GetOwner());
+	if (bOwnerStoppedIt && Pawn && Pawn->IsLocallyControlled())
+	{
+		return;
+	}
+	StopActionLocal(Action);
 }
