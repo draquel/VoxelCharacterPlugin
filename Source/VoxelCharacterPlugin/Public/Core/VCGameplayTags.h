@@ -10,9 +10,20 @@
  * SetByCaller.Stat.<AttributeName>: one key per attribute that UVCEquipmentStatEffect can modify.
  * The name after "Stat." must equal the attribute's property name, which is how
  * UCGFGameplayEffectStatics maps an FCGFAttributeModifier onto the effect's modifiers.
+ *
+ * Equipment.AnimSet.<Set>: the action set of what a character holds, which picks its anim layer and montages
+ * (character animation P2/P3). An item says its set in its definition's ItemTags; an item without one is a Tool, a
+ * character holding nothing is Unarmed.
  */
 namespace VCGameplayTags
 {
+	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Equipment_AnimSet);
+	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Equipment_AnimSet_Unarmed);
+	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Equipment_AnimSet_Tool);
+	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Equipment_AnimSet_SwordShield);
+	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Equipment_AnimSet_TwoHand);
+	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Equipment_AnimSet_Bow);
+
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stat_MaxHealth);
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stat_MaxStamina);
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stat_MoveSpeedMultiplier);

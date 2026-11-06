@@ -17,12 +17,13 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 
 | Area | Class | Role |
 |---|---|---|
-| Core | `AVCCharacterBase` | The player pawn: components, view mode, input, the primary-action chain, voxel edit targets, the terrain wait, leaving the world, surface gameplay. Implements `IAbilitySystemInterface` (a pass-through to the player state), `ICGFInventoryInterface` and `ICGFLightBearerInterface` |
+| Core | `AVCCharacterBase` | The player pawn: components, view mode, input, the primary-action chain, voxel edit targets, the terrain wait, leaving the world, surface gameplay. Implements `IAbilitySystemInterface` (a pass-through to the player state), `ICGFInventoryInterface`, `ICGFLightBearerInterface` and `IVCAnimatedCharacter` |
 | Core | `AVCPlayerController` | HUD and panels, the click-to-move item state machine, the voxel edit server path, gathering, chopping, rest and crafting RPCs, rotation in the gravity frame |
 | Core | `AVCPlayerState` | Hosts the ASC and both attribute sets; item snapshot across death, progression, rest point, save state |
 | Core | `AVCGameModeBase` | Respawn (`RespawnPolicy`, `RespawnDelay`), the corpse kept per player (`bKeepCorpse`), log-in / log-out events, save requests |
-| Core | `AVCNPCCharacterBase` | NPC pawn with its own ASC and attribute sets, behaviour and temperament, a floating health bar (`UVCNPCHealthBarWidget`) |
-| Core | `UVCCharacterAttributeSet`, `UVCAnimInstance` | Health, Stamina, Breath (each with a max), MoveSpeedMultiplier, MiningSpeed, InteractionRange, IncomingDamage (meta); the anim instance reads speed, direction, aim, view mode, surface and swimming |
+| Core | `AVCNPCCharacterBase` | NPC pawn with its own ASC and attribute sets, behaviour and temperament, a floating health bar (`UVCNPCHealthBarWidget`); implements `IVCAnimatedCharacter` |
+| Core | `UVCCharacterAttributeSet` | Health, Stamina, Breath (each with a max), MoveSpeedMultiplier, MiningSpeed, InteractionRange, IncomingDamage (meta) |
+| Core | `UVCAnimInstance`, `IVCAnimatedCharacter` | The anim instance of the player and the NPCs, every value in the gravity frame (Animation, below); the interface it reads a character's view mode, action set and combat state through |
 | Core | `UVCSettings` | Project Settings > Plugins > Voxel Character (CR4): `NPCHealthBars`, overridden by `vc.UI.NPCHealthBars` once set |
 | Core | `VCTypes.h`, `VCGameplayTags.h` | `EVCViewMode`, `EVCSurfaceType`, `EVCVoxelModificationType`, `EVCOutOfHealthPolicy`, `EVCNPCBehavior`, `EVCNPCTemperament`, `EVCRespawnPolicy`, `FVCTerrainContext`, `FVCEquipmentSocketMapping`, `FVCItemSnapshot`, `FVCProgressionStats`, `FVCPlayerSaveState`; the native tags |
 | Movement | `UVCMovementComponent` | Voxel-aware character movement (players and NPCs): terrain context, swimming, sprint, planet gravity, block steps, embed resolve, world-edge push-back, debug flight |
@@ -161,6 +162,44 @@ custom gravity.
   (`GetPlacementTrace` / `GetPlacementTransform`) and the chop aim (`GetChopAimPointFor`) use the frame's helpers.
 - Only frame-independent things are done in the frame (zero a pitch or roll, take a yaw-only heading). The frame's own
   twist spins near a planet's south pole, so a gravity-relative yaw is never kept across frames.
+
+## Animation
+
+`UVCAnimInstance` (`VCAnimInstance.h`) is the anim instance of every character: the player, the NPCs, any `ACharacter`
+with a character movement component (`UVCMovementComponent` adds the surface type and the sprint). What is not movement
+it reads through `IVCAnimatedCharacter` (`VCAnimatedCharacter.h`), which both character classes implement:
+`GetAnimViewMode` (the local player's mode for its own pawn, third person otherwise and for NPCs), `GetAnimActionSet`,
+`GetAnimCombatComponent` (dead and downed). The plan it belongs to is `CHARACTER_ANIMATION_PLAN.md` (P2).
+
+- **Two halves.** `NativeUpdateAnimation` gathers an `FVCAnimInput` on the game thread (the character's state in world
+  space, and a line trace along gravity for the ground under a falling character, on the movement's channel, up to
+  `MaxGroundTraceDistance`); `NativeThreadSafeUpdateAnimation` computes the values from it with `ComputeValues`, which
+  touches only the instance and is what the tests call.
+- **The frame.** Each update builds local up (minus the gravity direction), the facing (the actor's forward across up)
+  and right; every value is measured against them, so it is the same on a plane and anywhere on a planet, and without
+  custom gravity it is the Z-up expression (`Speed` is `Size2D` bit for bit). The state kept across updates is world
+  vectors (the last facing, the body heading), re-projected each update: no gravity-relative yaw is kept.
+- **Values** (`BlueprintReadOnly`; the names `ABP_VoxelCharacter` reads are unchanged): `Speed`, `Direction`,
+  `bIsFalling`, `bJustLanded`, `bIsCrouching`, `bIsAccelerating`, `bIsSprinting`; `LocalVelocity`, `LocalAcceleration`,
+  `RelativeAcceleration` (over the maximum acceleration or the braking deceleration, Lyra's lean input), `LeanAmount`,
+  `YawRate`; `SlopePitch`, `SlopeRoll` (the floor under the feet, against the facing), `GroundDistance`, `TimeToLand`;
+  `RootYawOffset`; `ViewMode`, `AimPitch`, `AimYaw` (a remote character's from its base aim rotation); `ActionSet`;
+  `bIsDead`, `bIsDowned`; `SurfaceType`, `bIsSwimming`, `bIsUnderwater` (the capsule under at `UnderwaterImmersion`),
+  `WaterDepth`.
+- **Turn in place.** While the character stands on the ground, the body keeps its heading as the facing turns:
+  `RootYawOffset` is the body's angle from the facing, clamped to `TurnInPlaceMaxOffset` (the body is dragged past it),
+  and it returns to zero at `TurnInPlaceRecoverySpeed` once the character moves or leaves the ground (falling,
+  swimming, held in `MOVE_None` while the terrain loads, when a restored save turns the pawn). A turn past
+  `TurnInPlaceMaxOffset` in one update is a rotation set by code (a teleport) and seats the body on the facing at once.
+  Carried along a walk, the body heading
+  is a heading in each tangent plane, so round a closed loop it turns by the solid angle the loop encloses; the
+  frame's twist at the south pole does not reach it.
+- **Action sets.** `Equipment.AnimSet.*` (`VCGameplayTags.h`: Unarmed, Tool, SwordShield, TwoHand, Bow) name which
+  layer and montages animate a character. An item names its set in its Equipment fragment's `ActionSetTag`
+  (ItemInventoryPlugin); `AVCCharacterBase::PickActionSet` makes the main hand's set the item's own, `Tool` for an item
+  that names none and `Unarmed` for an empty hand. The character refreshes `ActiveActionSet` on the equipment's
+  `OnEquipmentChanged`, which fires on every machine (on clients from the replicated slots). An NPC's set is its
+  `ActionSet` property (`Unarmed` unset). The layers and montages themselves come in P3.
 
 ## Camera
 
@@ -441,6 +480,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 | Attributes, effects, abilities | Server (ASC on the player state; an NPC's on the NPC) | GAS replication; prediction keys for activation |
 | Progression | Server | `Progression` on the player state |
 | View mode | The local player's machine | Not replicated (G87); other machines draw third person |
+| Action set | Server (the equipment) | Derived on every machine from the replicated equipment slots |
 | Camera, input, edit mode, debug flight | Local | Not replicated |
 
 ## Console variables
@@ -453,5 +493,5 @@ and `ToggleVoxelDebug` are on the controller and the character. Every name, defa
 
 ## Tests
 
-`VoxelCharacter.*` in `Private/Tests/`: AI, Camera, Combat, Config, Cubic, Edit, EditMode, EquipmentLoop, Gather,
+`VoxelCharacter.*` in `Private/Tests/`: AI, Anim, Camera, Combat, Config, Cubic, Edit, EditMode, EquipmentLoop, Gather,
 Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, WorldEdge.

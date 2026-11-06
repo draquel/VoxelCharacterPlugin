@@ -11,6 +11,7 @@
 #include "Editing/VCBlockInteractionComponent.h"
 #include "Utilities/CGFCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
+#include "Core/VCGameplayTags.h"
 #include "Interfaces/CGFRestPointInterface.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Camera/VCCameraManager.h"
@@ -207,6 +208,31 @@ UAbilitySystemComponent* AVCCharacterBase::GetAbilitySystemComponent() const
 }
 
 // ---------------------------------------------------------------------------
+// IVCAnimatedCharacter
+// ---------------------------------------------------------------------------
+
+EVCViewMode AVCCharacterBase::GetAnimViewMode() const
+{
+	// The view mode is the owning player's alone (G87): every other machine draws the pawn in third person.
+	return IsLocallyControlled() ? CurrentViewMode : EVCViewMode::ThirdPerson;
+}
+
+const UVCCombatComponent* AVCCharacterBase::GetAnimCombatComponent() const
+{
+	return CombatComponent;
+}
+
+FGameplayTag AVCCharacterBase::PickActionSet(bool bHoldsItem, const FGameplayTag& ItemActionSet)
+{
+	if (!bHoldsItem)
+	{
+		return VCGameplayTags::Equipment_AnimSet_Unarmed.GetTag();
+	}
+	const FGameplayTag Root = VCGameplayTags::Equipment_AnimSet.GetTag();
+	return ItemActionSet.MatchesTag(Root) && ItemActionSet != Root ? ItemActionSet : VCGameplayTags::Equipment_AnimSet_Tool.GetTag();
+}
+
+// ---------------------------------------------------------------------------
 // ICGFInventoryInterface
 // ---------------------------------------------------------------------------
 
@@ -258,8 +284,10 @@ void AVCCharacterBase::BeginPlay()
 		EquipmentManager->OnCarriedLightChanged.AddDynamic(this, &AVCCharacterBase::HandleCarriedLightChanged);
 		EquipmentManager->OnItemBroken.AddDynamic(this, &AVCCharacterBase::HandleItemBroken);
 		EquipmentManager->OnVisualAttached.AddDynamic(this, &AVCCharacterBase::HandleEquipmentVisualAttached);
+		EquipmentManager->OnEquipmentChanged.AddDynamic(this, &AVCCharacterBase::HandleEquipmentChanged);
 	}
 #endif
+	RefreshActionSet();
 
 	if (CombatComponent)
 	{
@@ -1099,15 +1127,6 @@ void AVCCharacterBase::HandleItemEquipped(const FItemInstance& Item, FGameplayTa
 #if WITH_EQUIPMENT_PLUGIN
 	UE_LOG(LogVoxelCharacter, Log, TEXT("Item equipped in slot %s"), *SlotTag.ToString());
 
-	// Update equipment anim type for the main hand
-	// (Game-specific: read from item data asset or equipment fragment)
-	// Default: any equipped item in a hand slot sets Tool anim type
-	static const FGameplayTag MainHandTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.MainHand"), false);
-	if (SlotTag == MainHandTag)
-	{
-		ActiveItemAnimType = EVCEquipmentAnimType::Tool;
-	}
-
 	// Re-attach to correct mesh for current view mode
 	UpdateEquipmentAttachments();
 #endif
@@ -1117,13 +1136,34 @@ void AVCCharacterBase::HandleItemUnequipped(const FItemInstance& Item, FGameplay
 {
 #if WITH_EQUIPMENT_PLUGIN
 	UE_LOG(LogVoxelCharacter, Log, TEXT("Item unequipped from slot %s"), *SlotTag.ToString());
+#endif
+}
 
+void AVCCharacterBase::HandleEquipmentChanged()
+{
+	RefreshActionSet();
+}
+
+void AVCCharacterBase::RefreshActionSet()
+{
+	bool bHoldsItem = false;
+	FGameplayTag ItemActionSet;
+#if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
 	static const FGameplayTag MainHandTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.MainHand"), false);
-	if (SlotTag == MainHandTag)
+	if (EquipmentManager && EquipmentManager->IsSlotOccupied(MainHandTag))
 	{
-		ActiveItemAnimType = EVCEquipmentAnimType::Unarmed;
+		bHoldsItem = true;
+		const FItemInstance Item = EquipmentManager->GetEquippedItem(MainHandTag);
+		const UGameInstance* GI = GetGameInstance();
+		const UItemDatabaseSubsystem* ItemDB = GI ? GI->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
+		const UItemDefinition* Def = ItemDB ? ItemDB->GetDefinition(Item.ItemDefinitionId) : nullptr;
+		if (const UItemFragment_Equipment* EquipFrag = Def ? Def->FindFragment<UItemFragment_Equipment>() : nullptr)
+		{
+			ItemActionSet = EquipFrag->ActionSetTag;
+		}
 	}
 #endif
+	ActiveActionSet = PickActionSet(bHoldsItem, ItemActionSet);
 }
 
 // ---------------------------------------------------------------------------
@@ -1290,10 +1330,8 @@ void AVCCharacterBase::DrawVoxelDebugInfo()
 	}
 
 	// --- Hotbar / Equipment ---
-	const UEnum* AnimEnum = StaticEnum<EVCEquipmentAnimType>();
-	const FString AnimName = AnimEnum ? AnimEnum->GetNameStringByValue(static_cast<int64>(ActiveItemAnimType)) : TEXT("?");
 	GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::White,
-		FString::Printf(TEXT("Hotbar: %d  AnimType: %s"), ActiveHotbarSlot, *AnimName));
+		FString::Printf(TEXT("Hotbar: %d  ActionSet: %s"), ActiveHotbarSlot, *ActiveActionSet.ToString()));
 }
 #endif
 

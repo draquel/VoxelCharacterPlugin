@@ -6,6 +6,7 @@
 #include "GameFramework/Character.h"
 #include "AbilitySystemInterface.h"
 #include "Core/VCTypes.h"
+#include "Core/VCAnimatedCharacter.h"
 #include "Types/CGFItemTypes.h"
 #include "Interfaces/CGFInventoryInterface.h"
 #include "Interfaces/CGFLightBearerInterface.h"
@@ -46,7 +47,8 @@ UCLASS()
 class VOXELCHARACTERPLUGIN_API AVCCharacterBase : public ACharacter,
 	public IAbilitySystemInterface,
 	public ICGFInventoryInterface,
-	public ICGFLightBearerInterface
+	public ICGFLightBearerInterface,
+	public IVCAnimatedCharacter
 {
 	GENERATED_BODY()
 
@@ -63,6 +65,20 @@ public:
 	// --- ICGFLightBearerInterface (feature 7: the equipped torch is the light) ---
 	virtual float GetCarriedLightLevel_Implementation() const override;
 	virtual bool ConsumeCarriedLightFuel_Implementation(float Seconds) override;
+
+	// --- IVCAnimatedCharacter (character animation P2) ---
+	virtual EVCViewMode GetAnimViewMode() const override;
+	virtual FGameplayTag GetAnimActionSet() const override { return ActiveActionSet; }
+	virtual const UVCCombatComponent* GetAnimCombatComponent() const override;
+
+	/**
+	 * The action set for what a character holds in its main hand: the item's own set when it names one under
+	 * Equipment.AnimSet, Tool for any other held item, Unarmed for none.
+	 * @param bHoldsItem     Whether the main hand holds an item
+	 * @param ItemActionSet  The item's Equipment fragment ActionSetTag (may be empty)
+	 * @return An Equipment.AnimSet.* tag
+	 */
+	static FGameplayTag PickActionSet(bool bHoldsItem, const FGameplayTag& ItemActionSet);
 
 	/**
 	 * Fuel of the carried light (the equipped light item's durability).
@@ -285,9 +301,12 @@ public:
 	// Equipment / Inventory State
 	// =================================================================
 
-	/** Animation archetype of the currently equipped main-hand item. Read by AnimInstance. */
+	/**
+	 * The action set of the main-hand item (Equipment.AnimSet.*), read by UVCAnimInstance. Set from the equipment's
+	 * change event, which fires on every machine (the replicated slots), so a remote player's set is right too.
+	 */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Equipment")
-	EVCEquipmentAnimType ActiveItemAnimType = EVCEquipmentAnimType::Unarmed;
+	FGameplayTag ActiveActionSet;
 
 	/** Currently selected hotbar slot index. */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Inventory")
@@ -664,7 +683,7 @@ protected:
 	UFUNCTION()
 	void HandleInteractableLost(AActor* InteractableActor);
 
-	/** Equipment changed — update animation type and visuals. */
+	/** An item was equipped: re-attach the visuals for the current view mode. */
 	UFUNCTION()
 	void HandleItemEquipped(const FItemInstance& Item, FGameplayTag SlotTag);
 
@@ -690,6 +709,13 @@ protected:
 
 	UFUNCTION()
 	void HandleItemUnequipped(const FItemInstance& Item, FGameplayTag SlotTag);
+
+	/** Equipment changed on this machine (an equip, or the replicated slots arriving): refresh the action set. */
+	UFUNCTION()
+	void HandleEquipmentChanged();
+
+	/** Sets ActiveActionSet from the main-hand slot. */
+	void RefreshActionSet();
 
 	/** Equipment manager reports a carried-light change: forward to OnCarriedLightChanged. */
 	UFUNCTION()
