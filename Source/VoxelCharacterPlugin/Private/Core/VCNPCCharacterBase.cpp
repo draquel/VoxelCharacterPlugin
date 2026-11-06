@@ -8,6 +8,7 @@
 #include "Core/VCCharacterAttributeSet.h"
 #include "Combat/VCCombatAttributeSet.h"
 #include "Combat/VCCombatComponent.h"
+#include "Core/VCGameplayTags.h"
 #include "Tags/CGFGameplayTags.h"
 #include "VoxelCharacterPlugin.h"
 #include "AbilitySystemComponent.h"
@@ -115,6 +116,16 @@ void AVCNPCCharacterBase::Tick(float DeltaSeconds)
 UAbilitySystemComponent* AVCNPCCharacterBase::GetAbilitySystemComponent() const
 {
 	return AbilitySystemComponent;
+}
+
+FGameplayTag AVCNPCCharacterBase::GetAnimActionSet() const
+{
+	return ActionSet.IsValid() ? ActionSet : VCGameplayTags::Equipment_AnimSet_Unarmed.GetTag();
+}
+
+const UVCCombatComponent* AVCNPCCharacterBase::GetAnimCombatComponent() const
+{
+	return CombatComponent;
 }
 
 bool AVCNPCCharacterBase::IsDead() const

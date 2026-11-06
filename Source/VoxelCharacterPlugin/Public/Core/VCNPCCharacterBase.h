@@ -7,6 +7,7 @@
 #include "AbilitySystemInterface.h"
 #include "GameplayTagContainer.h"
 #include "Types/CGFCombatTypes.h"
+#include "Core/VCAnimatedCharacter.h"
 #include "VCNPCCharacterBase.generated.h"
 
 class UAbilitySystemComponent;
@@ -30,7 +31,8 @@ class UVCNPCHealthBarWidget;
  * voxel-terrain awareness are added by subclasses / later features.
  */
 UCLASS()
-class VOXELCHARACTERPLUGIN_API AVCNPCCharacterBase : public ACharacter, public IAbilitySystemInterface
+class VOXELCHARACTERPLUGIN_API AVCNPCCharacterBase : public ACharacter, public IAbilitySystemInterface,
+	public IVCAnimatedCharacter
 {
 	GENERATED_BODY()
 
@@ -39,6 +41,11 @@ public:
 
 	// --- IAbilitySystemInterface ---
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
+
+	// --- IVCAnimatedCharacter (character animation P2): an NPC is always drawn in third person ---
+	virtual EVCViewMode GetAnimViewMode() const override { return EVCViewMode::ThirdPerson; }
+	virtual FGameplayTag GetAnimActionSet() const override;
+	virtual const UVCCombatComponent* GetAnimCombatComponent() const override;
 
 	// =================================================================
 	// Components
@@ -81,6 +88,10 @@ public:
 	/** Let the possessing AVCNPCAIController think and move (feature 5). False = a training dummy. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI")
 	bool bAIEnabled = true;
+
+	/** The action set the NPC animates with (Equipment.AnimSet.*): what it fights with. Unset = Unarmed. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation", meta = (Categories = "Equipment.AnimSet"))
+	FGameplayTag ActionSet;
 
 	/** Faction applied to the combat component at BeginPlay when set (Faction.Animal for wildlife); unset = the component's default (Monster). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (Categories = "Faction"))

@@ -4,14 +4,75 @@
 
 #include "CoreMinimal.h"
 #include "Animation/AnimInstance.h"
+#include "GameplayTagContainer.h"
 #include "Core/VCTypes.h"
 #include "VCAnimInstance.generated.h"
 
 /**
- * Animation instance proxy for the voxel character.
+ * What UVCAnimInstance reads from its character on the game thread, every vector in world space. The rest of the update
+ * works from this alone, on any thread (character animation P2).
+ */
+struct FVCAnimInput
+{
+	/** Seconds since the last update. */
+	float DeltaSeconds = 0.f;
+
+	/** Unit gravity direction: world -Z without custom gravity. */
+	FVector GravityDirection = FVector::DownVector;
+
+	/** Gravity's magnitude (uu/s^2, positive). */
+	float GravityAcceleration = 980.f;
+
+	FVector Velocity = FVector::ZeroVector;
+
+	/** The movement component's input acceleration (GetCurrentAcceleration). */
+	FVector Acceleration = FVector::ZeroVector;
+
+	float MaxAcceleration = 0.f;
+	float MaxBrakingDeceleration = 0.f;
+
+	FQuat ActorRotation = FQuat::Identity;
+
+	/** Where the character looks: the controller's rotation, else the replicated base aim rotation. */
+	FRotator ControlRotation = FRotator::ZeroRotator;
+
+	/** Walking on a floor (IsMovingOnGround); false while falling, swimming, flying or held (MOVE_None). */
+	bool bOnGround = false;
+
+	bool bFalling = false;
+	bool bCrouching = false;
+	bool bSwimming = false;
+	bool bSprinting = false;
+
+	/** The walking floor's surface normal; zero when there is no walkable floor. */
+	FVector FloorNormal = FVector::ZeroVector;
+
+	/** Distance from the capsule's bottom to the ground along gravity while falling: 0 on the ground, -1 when nothing is in range. */
+	float GroundDistance = 0.f;
+
+	EVCSurfaceType SurfaceType = EVCSurfaceType::Default;
+	float WaterDepth = 0.f;
+
+	/** How far the capsule is under water, 0 to 1 (UCharacterMovementComponent::ImmersionDepth). */
+	float Immersion = 0.f;
+
+	EVCViewMode ViewMode = EVCViewMode::ThirdPerson;
+	FGameplayTag ActionSet;
+	bool bDead = false;
+	bool bDowned = false;
+};
+
+/**
+ * The anim instance of every character: the player (AVCCharacterBase) and the NPCs (AVCNPCCharacterBase), or any
+ * ACharacter whose movement component is a UCharacterMovementComponent (UVCMovementComponent adds the surface and the
+ * sprint). What is not movement comes through IVCAnimatedCharacter.
  *
- * Populates BlueprintReadOnly properties each frame from the owning
- * character and its components. AnimBP graph reads these directly.
+ * Every value is measured in the character's gravity frame: local up is minus the gravity direction, so a value is the
+ * same walking on a plane and on any part of a planet. Nothing gravity-relative is kept across updates (the frame's yaw
+ * twists near the south pole); the state that is kept is world vectors, re-projected each update.
+ *
+ * NativeUpdateAnimation gathers FVCAnimInput on the game thread; NativeThreadSafeUpdateAnimation computes the values
+ * from it (ComputeValues). The anim graph reads the BlueprintReadOnly properties.
  */
 UCLASS()
 class VOXELCHARACTERPLUGIN_API UVCAnimInstance : public UAnimInstance
@@ -21,19 +82,32 @@ class VOXELCHARACTERPLUGIN_API UVCAnimInstance : public UAnimInstance
 public:
 	virtual void NativeInitializeAnimation() override;
 	virtual void NativeUpdateAnimation(float DeltaSeconds) override;
+	virtual void NativeThreadSafeUpdateAnimation(float DeltaSeconds) override;
+
+	/**
+	 * Computes every value from an input and the state kept from the last call. Touches only this instance, so it runs on
+	 * an animation worker thread; the tests call it directly.
+	 * @param Input What the character's state was this update
+	 */
+	void ComputeValues(const FVCAnimInput& Input);
+
+	/** Forgets the state kept across updates (the body heading, the last facing): the next update starts afresh. */
+	void ResetKeptState();
 
 	// ==================== Locomotion ====================
 
+	/** Speed across local up (uu/s). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float Speed = 0.f;
 
+	/** The horizontal velocity's angle from the facing (degrees, positive to the right): the strafe direction. */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float Direction = 0.f;
 
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	bool bIsFalling = false;
 
-	/** True for one frame when the character transitions from falling to grounded. */
+	/** True for one update when the character goes from falling to grounded. */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	bool bJustLanded = false;
 
@@ -43,6 +117,62 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	bool bIsAccelerating = false;
 
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	bool bIsSprinting = false;
+
+	/** Velocity in the facing's frame: X forward, Y right, Z up (uu/s). */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	FVector LocalVelocity = FVector::ZeroVector;
+
+	/** Input acceleration in the facing's frame: X forward, Y right, Z up (uu/s^2). */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	FVector LocalAcceleration = FVector::ZeroVector;
+
+	/**
+	 * The lean input: LocalAcceleration over the maximum acceleration while speeding up, over the braking deceleration
+	 * while slowing down, each axis -1 to 1 (Lyra's and GASP's relative acceleration).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	FVector RelativeAcceleration = FVector::ZeroVector;
+
+	/** Sideways lean, -1 (left) to 1 (right): RelativeAcceleration.Y. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float LeanAmount = 0.f;
+
+	/** How fast the facing turns about local up (degrees per second, positive to the right). */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float YawRate = 0.f;
+
+	// ==================== Ground ====================
+
+	/** The floor's rise ahead of the facing (degrees, positive uphill); 0 off the ground. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float SlopePitch = 0.f;
+
+	/** The floor's rise to the facing's right (degrees, positive when the right side is higher); 0 off the ground. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float SlopeRoll = 0.f;
+
+	/** Distance from the feet to the ground along gravity (uu): 0 on the ground, -1 falling with nothing in range. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float GroundDistance = 0.f;
+
+	/** Seconds until a falling character lands at its current velocity and gravity; -1 when not falling or nothing is in range. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float TimeToLand = -1.f;
+
+	// ==================== Turn in place ====================
+
+	/**
+	 * The body's heading from the facing (degrees, positive to the right): while the character stands on the ground, the
+	 * body keeps its heading as the facing turns, up to TurnInPlaceMaxOffset; once it moves, or leaves the ground, the
+	 * offset returns to 0. A turn past TurnInPlaceMaxOffset in one update is a rotation set by code (a teleport, a
+	 * restored save) and seats the body on the facing. The graph turns the root by it and plays a turn when it grows
+	 * (Lyra's root yaw offset).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float RootYawOffset = 0.f;
+
 	// ==================== View Mode ====================
 
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
@@ -50,16 +180,27 @@ public:
 
 	// ==================== Aim ====================
 
+	/** The look direction's pitch above the facing (degrees, -90 to 90). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float AimPitch = 0.f;
 
+	/** The look direction's yaw from the facing (degrees, -90 to 90, positive to the right). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float AimYaw = 0.f;
 
 	// ==================== Equipment ====================
 
+	/** The action set of what the character holds (Equipment.AnimSet.*): which layer and montages animate it. */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
-	EVCEquipmentAnimType ActiveItemAnimType = EVCEquipmentAnimType::Unarmed;
+	FGameplayTag ActionSet;
+
+	// ==================== Combat ====================
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	bool bIsDead = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	bool bIsDowned = false;
 
 	// ==================== Surface ====================
 
@@ -71,7 +212,49 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	bool bIsSwimming = false;
 
+	/** Swimming with the whole capsule under the water (a dive); false while swimming at the surface. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	bool bIsUnderwater = false;
+
 	/** Depth below water surface (world units). 0 when not underwater. */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float WaterDepth = 0.f;
+
+	// ==================== Tuning ====================
+
+	/** The largest turn-in-place offset (degrees): past it the body is dragged round with the facing. */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0", ClampMax = "180"))
+	float TurnInPlaceMaxOffset = 90.f;
+
+	/** How fast the turn-in-place offset returns to 0 once the character moves (FInterpTo speed). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0"))
+	float TurnInPlaceRecoverySpeed = 10.f;
+
+	/** Speed across local up below which the character counts as standing (uu/s). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0"))
+	float MovingSpeedThreshold = 10.f;
+
+	/** How far below a falling character the ground is looked for (uu). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0"))
+	float MaxGroundTraceDistance = 1000.f;
+
+	/** The immersion (0 to 1) at which a swimmer counts as under water. */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0", ClampMax = "1"))
+	float UnderwaterImmersion = 0.95f;
+
+private:
+	/** Fills Input from the owning character (game thread). @return False when there is no character to read */
+	bool GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) const;
+
+	/** The input gathered this update, for NativeThreadSafeUpdateAnimation. */
+	FVCAnimInput GatheredInput;
+	bool bHasGatheredInput = false;
+
+	/** The facing at the last update, in world space (for YawRate). */
+	FVector LastFacing = FVector::ZeroVector;
+
+	/** The body's heading in world space (for RootYawOffset), re-projected onto the local horizontal each update. */
+	FVector BodyHeading = FVector::ZeroVector;
+
+	bool bHasKeptState = false;
 };

@@ -45,21 +45,6 @@ enum class EVCVoxelModificationType : uint8
 	Place,
 };
 
-/** Animation archetype for the currently equipped item.
- *  Selects the upper-body animation layer in the AnimBP. */
-UENUM(BlueprintType)
-enum class EVCEquipmentAnimType : uint8
-{
-	Unarmed,
-	OneHandMelee,
-	TwoHandMelee,
-	Pickaxe,
-	Axe,
-	Bow,
-	Shield,
-	Tool,
-};
-
 /** What a combatant does when Health reaches zero (UVCCombatComponent::OutOfHealthPolicy). */
 UENUM(BlueprintType)
 enum class EVCOutOfHealthPolicy : uint8

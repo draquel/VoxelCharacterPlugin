@@ -1,7 +1,7 @@
 # Character Animation Plan
 
-> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0 under
-> way.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
+> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0-P2
+> done; P3 next.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
 > VoxelCharacterPlugin; content in VoxelWorldPOI's NPC tables, EquipmentPlugin's item data and the Blender pipeline.
 > Terms: `Documentation/GLOSSARY.md` at the project root; the decisions' numbers are from its `FINDINGS.md`.
 
@@ -354,6 +354,42 @@ bodies: P2-P4 show results on today's character before any MetaHuman exists.
 - Tests (`VoxelCharacter.Anim.*`): the gathered values equal the Z-up expressions without custom gravity and match
   them in the gravity frame on a planet (as `VoxelCharacter.Planet.GravityFrame` does for movement); the turn-in-place
   offset is stable across the south-pole twist.
+
+**P2 result (2026-11-06; VoxelCharacterPlugin and ItemInventoryPlugin).** The reference is `CHARACTER_SYSTEM.md`,
+Animation.
+- `UVCAnimInstance` serves the player and the NPCs: `IVCAnimatedCharacter` gives it the view mode, the action set and
+  the combat component, and `AVCCharacterBase` and `AVCNPCCharacterBase` implement it. The game thread gathers an
+  `FVCAnimInput` (with a trace along gravity for the ground under a falling character); `ComputeValues` does the rest
+  on the worker thread. The names `ABP_VoxelCharacter` reads are unchanged.
+- The new values: local velocity and acceleration, the relative acceleration and lean, yaw rate, the floor's pitch and
+  roll against the facing, ground distance and time to land, the turn-in-place offset, the action set, dead and downed,
+  sprinting, underwater swimming. The aim of a character with no controller here (a remote player, an NPC on a
+  client) now comes from its base aim rotation; before, it stayed at zero.
+- Every value is measured in a frame built each update from local up and the facing, and the kept state is world
+  vectors, so nothing depends on the gravity frame's yaw. Carried round a closed walk, the body heading turns against a
+  world-fixed facing by the solid angle the walk encloses (parallel transport): 0.014° per lap half a degree from the
+  pole, against the 20° per step the gravity frame's yaw jumps there.
+- `EVCEquipmentAnimType` is gone (no asset used it, so no redirect). `Equipment.AnimSet.Unarmed`, `Tool`, `SwordShield`,
+  `TwoHand` and `Bow` are native tags; the Equipment fragment carries `ActionSetTag`; `PickActionSet` gives the
+  item's set, `Tool` for an item that names none, `Unarmed` for an empty hand. It is set from `OnEquipmentChanged`,
+  which fires on clients too: the old anim type came from `OnItemEquipped`, which fires on the server only, so a
+  client never saw its own pawn's tool type. NPCs take an `ActionSet` property. No item names a set yet; P3 sets them
+  with the layers.
+- Hit reacts stay with P3: `UVCCombatComponent::OnDamaged` fires on the server only, and P3's montage path replicates
+  them.
+- Found in PIE: the first cut kept the body heading whenever the character was slow, and the spawn restores a saved
+  rotation while the pawn is held in `MOVE_None` for the terrain wait, so the player stood with a 90° offset. The body
+  now keeps its heading only on the ground, and a turn past the clamp in one update (a rotation set by code) seats it.
+- Tests `VoxelCharacter.Anim.*` (five): `PlaneValues` (500 random states: speed is `Size2D` bit for bit, direction,
+  aim and local velocity are the old expressions to 1e-5°, slopes, landing), `PlanetFrame` (seven sites with the poles,
+  three random twists about up, 120 updates each: the plane's values to 8e-6), `TurnInPlace` (held, clamped, returned
+  within a second, no offset while held off the ground, a code-set turn, the south-pole laps), `ActionSet`,
+  `GatherFromCharacter` (an NPC on three frames falling toward a slab: speed, local velocity, ground distance and time to
+  land as computed). The headless suite passes (797 of 797, the five new among them).
+- PIE in `VoxelDemo`: `BP_VCPlayer` with `ABP_VoxelCharacter` idles, runs and swims as before; read live, the values
+  are right (a dive at the saved spot under water, swimming at the surface, running at 600 with the local velocity
+  straight ahead, the offset 0 after the spawn and back to 0 when moving), and equipping a pickaxe sets
+  `Equipment.AnimSet.Tool`.
 
 ### P3: Layers and actions (VoxelCharacterPlugin, content, item data)
 
