@@ -3,7 +3,8 @@
 > State as of 2026-11-02 (code review CR5). Terms: `Documentation/GLOSSARY.md`.
 
 The player and NPC layer: character, controller, player state, game mode, movement, camera, input, combat on GAS, NPC
-AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; one runtime module, `VoxelCharacterPlugin`.
+AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; a runtime module, `VoxelCharacterPlugin`, and an
+editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the animation content).
 
 ## Reading order
 
@@ -29,7 +30,7 @@ calls.
 |---|---|
 | `AVCCharacterBase`, `AVCPlayerController`, `AVCPlayerState` (ASC host), `AVCGameModeBase`, `AVCNPCCharacterBase` (own ASC), `AVCNPCAIController` | `UInventoryComponent` (ItemInventoryPlugin), `UInteractionComponent` (InteractionPlugin), `UEquipmentManagerComponent` (EquipmentPlugin) |
 | `UVCMovementComponent`, `FVCGravityFrame`, `FVCTerrainQueryHelper` | VoxelWorlds' chunk manager, edit manager, scatter manager and surface navigation |
-| `UVCCameraManager` and its modes, `UVCAnimInstance`, `UVCInputConfig` | `UAbilitySystemComponent`, `UGameplayEffect`, `UGameplayAbility` (GAS) |
+| `UVCCameraManager` and its modes, `UVCAnimInstance`, `UVCActionMontageComponent` and `UVCActionAnimSet`, `UVCInputConfig` | `UAbilitySystemComponent`, `UGameplayEffect`, `UGameplayAbility` (GAS) |
 | `UVCCombatComponent` and the combat GAS classes, `UVCBlockInteractionComponent`, `UVCGatherTable` | `ICGFDamageableInterface`, `FCGFDamageContext`, `ICGFInventoryInterface`, `ICGFLightBearerInterface`, `ICGFRestPointInterface`, combat tags (CommonGameFramework) |
 | The HUD widgets, the map widgets, `UVCMapMarkerRegistry`, `UVCSettings` | Widget classes from the gameplay plugins (`UHotbarWidget`, `UItemCursorWidget`, ...) |
 

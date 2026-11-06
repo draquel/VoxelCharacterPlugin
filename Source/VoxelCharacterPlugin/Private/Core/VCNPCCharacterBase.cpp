@@ -8,6 +8,7 @@
 #include "Core/VCCharacterAttributeSet.h"
 #include "Combat/VCCombatAttributeSet.h"
 #include "Combat/VCCombatComponent.h"
+#include "Animation/VCActionMontageComponent.h"
 #include "Core/VCGameplayTags.h"
 #include "Tags/CGFGameplayTags.h"
 #include "VoxelCharacterPlugin.h"
@@ -57,6 +58,7 @@ AVCNPCCharacterBase::AVCNPCCharacterBase(const FObjectInitializer& ObjectInitial
 	CombatAttributes = CreateDefaultSubobject<UVCCombatAttributeSet>(TEXT("CombatAttributes"));
 
 	CombatComponent = CreateDefaultSubobject<UVCCombatComponent>(TEXT("CombatComponent"));
+	ActionMontages = CreateDefaultSubobject<UVCActionMontageComponent>(TEXT("ActionMontages"));
 	CombatComponent->FactionTag = CGFGameplayTags::Faction_Monster;
 
 	// Feature 5: every NPC gets the patrol / chase / attack brain unless bAIEnabled is cleared.

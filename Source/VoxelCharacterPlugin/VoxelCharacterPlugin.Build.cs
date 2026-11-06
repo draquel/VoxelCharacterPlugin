@@ -38,6 +38,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"VoxelStreaming",
 				"VoxelGeneration", // IVoxelWorldMode.h (VCTerrainQueryHelper.cpp)
 				"PhysicsCore", // CollisionShape.h
+				"GameplayTasks", // UAbilityTask_WaitDelay: the melee hit waits for its montage (character animation P3)
 				"VoxelNavigation", // UVCVoxelPathProvider (feature 10)
 				"VoxelScatter",
 				"JsonUtilities",

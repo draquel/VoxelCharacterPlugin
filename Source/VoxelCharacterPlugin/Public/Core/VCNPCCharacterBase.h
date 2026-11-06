@@ -14,6 +14,7 @@ class UAbilitySystemComponent;
 class UVCCharacterAttributeSet;
 class UVCCombatAttributeSet;
 class UVCCombatComponent;
+class UVCActionMontageComponent;
 class UGameplayAbility;
 class UWidgetComponent;
 class UVCNPCHealthBarWidget;
@@ -56,6 +57,10 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Combat")
 	TObjectPtr<UVCCombatComponent> CombatComponent;
+
+	/** Plays the NPC's action montages for every machine (character animation P3). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UVCActionMontageComponent> ActionMontages;
 
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|GAS")
 	UVCCharacterAttributeSet* GetCharacterAttributes() const { return CharacterAttributes; }

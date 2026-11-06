@@ -1,7 +1,7 @@
 # Character Animation Plan
 
-> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0-P2
-> done; P3 next.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
+> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0-P3
+> done; P4 next.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
 > VoxelCharacterPlugin; content in VoxelWorldPOI's NPC tables, EquipmentPlugin's item data and the Blender pipeline.
 > Terms: `Documentation/GLOSSARY.md` at the project root; the decisions' numbers are from its `FINDINGS.md`.
 
@@ -405,6 +405,37 @@ Animation.
   asset.
 - Tests: the hit time from a montage; the PIE dedicated-server test (D-CR23) extended so a simulated proxy receives the
   attack montage.
+
+**P3 result (2026-11-06; VoxelCharacterPlugin, the parent's content, script and test).** The reference is
+`CHARACTER_SYSTEM.md`, Animation.
+- `UVCActionMontageComponent` on both character classes plays the actions of `UVCActionAnimSet`s, one per action-set
+  tag: an attack combo, dig, chop, place, use, hit reacts and deaths by side, revive. The owner plays its own at once;
+  the server sends one unreliable multicast that the owner skips for those, so nothing plays twice (D49). Hit reacts,
+  deaths (for a body with no physics asset; the player's ragdolls as before) and get-ups come from the combat events on
+  the server.
+- The melee ability keeps its damage on the server and lands it at the montage's hit time, read from the asset (the
+  first `UVCAnimNotify_ActionHit`), through an ability task; with no montage it is immediate. NPCs list no sets yet, so
+  theirs stay immediate until P7 gives them bodies.
+- Layers: `ALI_VCCharacter` has one layer, `UpperBodyStance`; `ABP_VoxelCharacter` implements it (the base pose through)
+  and runs it before its slot; the swords link `ABP_VCLayer_SwordShield`, the pickaxes `ABP_VCLayer_Tool` (the
+  two-handed idle, a D51 stand-in). The Bow set and its layer wait for a bow item and a ranged ability; TwoHand's is
+  built and no item uses it yet.
+- The engine exposes no anim layer or graph editing to Python, so a new editor module, `VoxelCharacterEditor`, has
+  `UVCAnimAuthoringLibrary` (add a layer, implement an interface, add nodes, set node properties and pin defaults,
+  connect pins, point a linked layer node), and `Scripts/setup_character_layers.py` builds the content with it:
+  `/Game/CharacterAnimation` (the interface, three layers, 46 montages, four sets: a content pack, rebuilt by the
+  script), the layer in `ABP_VoxelCharacter`, the items' tags. A second run creates and saves nothing. Two findings on
+  the way: `ABP_VoxelCharacter` must implement the interface itself for its linked layer node to compile, and a linked
+  layer node keeps its layer name in a member reference besides its own fields.
+- VanillaLoop's samples are still not in: placing and using play nothing, the pickaxe digs with a two-handed strike, and
+  the downed crawl waits.
+- Tests `VoxelCharacter.Anim.*` (four more): `ActionHitTime`, `ActionSetLookup` (variants, fallbacks, the side of a hit
+  on a plane and a tilted frame), `AttackCombo` (the window and the play rate), `MeleeHitTime` (the damage at 0.3 s of a
+  swing, not at its start, the victim's flinch, immediate without a montage). The replication test gains two steps: an
+  attack montage reaches the client's copy of a server-owned actor (a simulated proxy) and resolves the same montage
+  there; the owning client skips an action it played itself and plays one it did not.
+- PIE in `VoxelDemo`: the sword's stance and the pickaxe's, the swing (the owner's, under `slomo`), the hit landing at
+  the hit time (0.40 s after the swing at the sword's speed), a hit react, a chop.
 
 ### P4: IK and warping (AnimBP content, small C++ for inputs)
 

@@ -7,7 +7,10 @@
 #include "Core/VCCharacterAttributeSet.h"
 #include "Core/VCPlayerController.h"
 #include "Core/VCGameModeBase.h"
+#include "Core/VCSettings.h"
 #include "Combat/VCCombatComponent.h"
+#include "Combat/VCMeleeAttackAbility.h"
+#include "Animation/VCActionMontageComponent.h"
 #include "Editing/VCBlockInteractionComponent.h"
 #include "Utilities/CGFCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
@@ -179,6 +182,7 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 
 	// --- Combat ---
 	CombatComponent = CreateDefaultSubobject<UVCCombatComponent>(TEXT("CombatComponent"));
+	ActionMontages = CreateDefaultSubobject<UVCActionMontageComponent>(TEXT("ActionMontages"));
 	CombatComponent->FactionTag = CGFGameplayTags::Faction_Player;
 
 	// --- Block feedback and timed breaking (cubic worlds) ---
@@ -288,6 +292,23 @@ void AVCCharacterBase::BeginPlay()
 	}
 #endif
 	RefreshActionSet();
+
+	// The player's montage sets come from the project settings unless the Blueprint lists its own.
+	if (ActionMontages && ActionMontages->ActionAnimSets.IsEmpty())
+	{
+		for (const TSoftObjectPtr<UVCActionAnimSet>& Set : UVCSettings::Get().PlayerActionAnimSets)
+		{
+			if (UVCActionAnimSet* Loaded = Set.LoadSynchronous())
+			{
+				ActionMontages->ActionAnimSets.Add(Loaded);
+			}
+			else if (!Set.IsNull())
+			{
+				UE_LOG(LogVoxelCharacter, Warning, TEXT("%s: the action set %s does not load (Scripts/setup_character_layers.py builds it)"),
+					*GetName(), *Set.ToString());
+			}
+		}
+	}
 
 	if (CombatComponent)
 	{
@@ -616,9 +637,43 @@ bool AVCCharacterBase::TryStartMeleeAttack()
 		return false;
 	}
 
+	// The owner swings at once (D49); the server's swing plays for everyone else and lands the hit at the montage's hit
+	// time. The same rate limit as the server's, so the owner does not swing where the server would refuse.
+	if (ActionMontages)
+	{
+		const AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
+		const UVCMeleeAttackAbility* Melee = PS && PS->MeleeAttackAbilityClass
+			? Cast<UVCMeleeAttackAbility>(PS->MeleeAttackAbilityClass->GetDefaultObject()) : nullptr;
+		const float AttackSpeed = Melee ? Melee->GetAttackSpeed(this) : 1.f;
+		const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		if (LastOwnSwingTime < 0.0 || Now - LastOwnSwingTime >= 1.0 / FMath::Max(AttackSpeed, 0.01f))
+		{
+			LastOwnSwingTime = Now;
+			float PlayRate = 1.f;
+			const int32 Variant = ActionMontages->ChooseAttack(AttackSpeed, PlayRate);
+			ActionMontages->PlayActionLocal(EVCAnimAction::Attack, Variant, PlayRate);
+		}
+	}
+
 	// The ability is ServerOnly: on a client this sends the activation request to the server,
 	// which does its own sweep, so a client cannot fabricate a hit.
 	return ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(CGFGameplayTags::Ability_Attack_Melee));
+}
+
+void AVCCharacterBase::PlayOwnAction(EVCAnimAction Action)
+{
+	if (ActionMontages && IsLocallyControlled())
+	{
+		ActionMontages->PlayActionLocal(Action);
+	}
+}
+
+void AVCCharacterBase::ShareOwnAction(EVCAnimAction Action)
+{
+	if (ActionMontages && HasAuthority())
+	{
+		ActionMontages->PlayActionForEveryone(Action, 0, 1.f, /*bOwnerPlayedIt*/ true);
+	}
 }
 
 void AVCCharacterBase::Incapacitate()
@@ -1595,6 +1650,7 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 	const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	if (BlockInteraction && ChunkMgr && UVCBlockInteractionComponent::UsesTimedBreaks(ChunkMgr->GetConfiguration()))
 	{
+		PlayOwnAction(EVCAnimAction::Dig);
 		BlockInteraction->StartHold();
 		return;
 	}
@@ -1603,6 +1659,7 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 	AVCPlayerController* PC = Cast<AVCPlayerController>(GetController());
 	if (PC && FindEditTarget(Hit, DigVoxel, PlaceVoxel))
 	{
+		PlayOwnAction(EVCAnimAction::Dig);
 		PC->Server_RequestVoxelModification(DigVoxel, EVCVoxelModificationType::Destroy, 0);
 	}
 }
@@ -1636,6 +1693,7 @@ void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 	AVCPlayerController* PC = Cast<AVCPlayerController>(GetController());
 	if (PC && FindEditTarget(Hit, DigVoxel, PlaceVoxel))
 	{
+		PlayOwnAction(EVCAnimAction::Place);
 		PC->Server_RequestVoxelModification(PlaceVoxel, EVCVoxelModificationType::Place, 2); // Stone
 	}
 }
@@ -1836,7 +1894,13 @@ bool AVCCharacterBase::UseItemInSlot(int32 SlotIndex)
 	UItemDefinition* Def = ItemDB ? ItemDB->GetDefinition(Item.ItemDefinitionId) : nullptr;
 	if (const UItemFragment_Placeable* Placeable = Def ? Def->FindFragment<UItemFragment_Placeable>() : nullptr)
 	{
-		return TryPlaceItem(SlotIndex, Item, *Placeable);
+		// The owner learns of a placement or a use from the server (it may be refused), so everyone plays it from here.
+		const bool bPlaced = TryPlaceItem(SlotIndex, Item, *Placeable);
+		if (bPlaced && ActionMontages)
+		{
+			ActionMontages->PlayActionForEveryone(EVCAnimAction::Place);
+		}
+		return bPlaced;
 	}
 	const UItemFragment_Consumable* Consumable = Def ? Def->FindFragment<UItemFragment_Consumable>() : nullptr;
 	if (!Consumable)
@@ -1907,6 +1971,10 @@ bool AVCCharacterBase::UseItemInSlot(int32 SlotIndex)
 	}
 
 	UE_LOG(LogVoxelCharacter, Log, TEXT("UseItemInSlot: used %s from slot %d."), *Item.ItemDefinitionId.PrimaryAssetName.ToString(), SlotIndex);
+	if (ActionMontages)
+	{
+		ActionMontages->PlayActionForEveryone(EVCAnimAction::Use);
+	}
 	return true;
 #else
 	return false;
