@@ -175,7 +175,7 @@ EquipmentPlugin: AnimLayerClass         ──▶       player: motion matching 
 | The gravity-frame trajectory predictor, motion-matching glue, `vc.Anim.*` diagnostics | **A new runtime module `VoxelCharacterAnimation`** in VoxelCharacterPlugin (depends on PoseSearch, Chooser, AnimationWarping, MotionWarping), so the core module and a project without motion matching carry none of it (D45) |
 | Item anim layers and action-set tags | EquipmentPlugin item data (content); no code change expected |
 | NPC classes in the spawn tables | VoxelWorldPOI content (`DA_SurfaceNPCTable`, dungeon enemies) |
-| Quadruped meshes, if authored here | `Tools/Blender/assets/characters/` (the policy's skeletal FBX kind) |
+| Quadruped meshes and clips | PROTOFACTOR's Animal Variety Pack, a content pack (D47); were they ever authored here, the Blender pipeline's skeletal FBX kind (`Tools/Blender/README.md`) |
 | QA commands that drive the pawn | The game module's `vox.*`, as today |
 
 ### Where the content goes
@@ -312,6 +312,36 @@ bodies: P2-P4 show results on today's character before any MetaHuman exists.
 - `setup_character_animation.py`; `content_packs.txt` gains `CharacterAnimation` and GASP's folder(s).
 - Done when: `BP_VCPlayer` and `ABP_VoxelCharacter` run unchanged on the canonical skeleton; nothing references the
   retired copies.
+
+**P1 result (2026-11-06; the parent's feature branch, no VoxelCharacterPlugin code).**
+- GASP is the content pack `GameAnimationSample` (`/Game/GameAnimationSample`, 3,809 assets, 5.3 GB, in
+  `content_packs.txt`). `Scripts/gather_game_animation_sample.py` gathers it in a copy of the GASP project: the move
+  as a commandlet works once the copy's config names the new paths and the MetaHuman poses' Control Rig errors are
+  caught; its check finds no asset under the folder that depends on a `/Game` path outside it or on a missing one.
+- Plugins (`VoxelEngine.uproject`): PoseSearch, Chooser, AnimationWarping, AnimationLocomotionLibrary, MotionWarping,
+  SmartObjects, GameplayInteractions, GameplayCameras, and DrawDebugLibrary and CurveExpression (experimental; GASP's
+  helper library and CMC AnimBP use them). With these, GASP's CMC character, its AnimBP and the Blueprints they use
+  compile clean. Not enabled: Mover and MovieSceneAnimMixer. GASP's Mover character, its AnimBP and one smart-object
+  StateTree task then do not compile; only GASP's own game mode and levels load them, and in a session that did, PIE
+  asks to play with "Blueprint Asset Compilation Errors". The MetaHuman settings and LiveLink wait for P6.
+- `Config/DefaultEngine.ini`: GASP's data-driven cvars (`DDCvar.*`, in `EDITOR_CONSOLE_GUIDE.md` §4), PoseSearch's
+  buffer size, `p.EnableCharacterAccelerationReplication=1`.
+- `Scripts/setup_character_animation.py` makes GASP's UE5 Mannequin (`/Game/GameAnimationSample/Characters/
+  UE5_Mannequins`) the canonical skeleton: its compatible list takes the UEFN Mannequin, `metahuman_base_skel` and the
+  five pack copies (template, CR, WaterAnimations, Bow, Sword and Shield); the UEFN and MetaHuman skeletons take the
+  canonical one and each other. A second run changes nothing.
+- Two items of the list above turned out unneeded:
+  - **Re-pointing the pack animations and retiring their skeleton copies.** A compatible list is only an editor
+    filter (`USkeleton::IsCompatibleForEditor` reads this skeleton's own list); at run time the engine remaps bones
+    between any two skeletons (today's player already runs `ABP_VoxelCharacter`, on the template's copy, on Grian's
+    mesh, on CR's copy, with no list at all). So only the canonical skeleton lists the others, and the packs' assets,
+    which live untracked in the main checkout with no history, are left as they are.
+  - **Equipment sockets.** The slots attach to bones, not sockets (`hand_r`, `hand_l`, `head`, `spine_03`, with an
+    offset per slot: `AVCCharacterBase`'s slot setup), and the UE5 Mannequin, the UEFN Mannequin and the MetaHuman body
+    all have those bones. Per-body offsets go in P6's appearance asset.
+- Unchanged: `BP_VCPlayer` (Grian on CR's copy) with `ABP_VoxelCharacter` idles, walks and swims in `VoxelDemo` as
+  before. The headless suite passes (787 of 787).
+- `content_packs.txt` gains `CharacterAnimation` when P3 puts something in it.
 
 ### P2: One anim instance for every character (VoxelCharacterPlugin)
 
