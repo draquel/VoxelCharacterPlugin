@@ -249,6 +249,32 @@ bodies: P2-P4 show results on today's character before any MetaHuman exists.
   GASP's own runtime-retargeted Manny, the converted character picks the same kinds of poses and its feet slide no more.
   Measure what the conversion of the whole set would take. If it fails, D50 falls back to (b).
 
+  **S4 result (2026-11-05, the spike branch): a cheaper way passes, so D50 is proposed as (a') (the user decides).**
+  - **S4a, no conversion.** The UEFN Mannequin and UE5 Manny skeletons marked compatible with each other (each
+    skeleton asset's `CompatibleSkeletons`). GASP's CMC AnimBP, its motion-matching databases and its UEFN
+    animations then drive a `SKM_Manny` mesh directly (`vox.Spike.Mesh`): the engine remaps bones between compatible
+    skeletons when it samples, and motion matching's pose history does too (`FSkeletonRemappingRegistry` in
+    `PoseSearchHistory.cpp`). On `PlanetTest` Manny runs, turns with the view and stops like the UEFN body. Nothing is
+    converted, and no second pose is evaluated each frame.
+  - Foot slide (`vox.Spike.FootSlide`: how far the balls of the feet move while within 2.5 uu of their flat-foot
+    height): too noisy to rank the bodies. The UEFN body's own run measured 110 and 36 uu/s in two identical runs;
+    Manny's 103 and 195. Both bodies' feet dip up to 7-11 uu below flat-foot height on this ground.
+  - The comparison with GASP's runtime retarget was not reproduced: a Manny under the animated mesh running
+    `ABP_GenericRetarget` (`vox.Spike.Retarget`) stays in a standing pose here. A hidden source mesh stops posing, and
+    GASP's visual override evidently sets up more than the attach parent and the component tag. GASP's own project
+    shows that path working; it is the reference to judge by eye.
+  - S4b, the conversion, was not run. `UIKRetargetBatchOperation::RunBatchRetarget` duplicates and retargets
+    sequences, blend spaces, montages and AnimBPs, but not motion-matching databases or choosers; a conversion would
+    also need a script to duplicate those and point them at the converted sequences.
+  - **Proposed D50 (a'):** the UE5 Mannequin is the one skeleton for bodies and our animations; GASP's set stays on
+    its UEFN skeleton and plays through skeleton compatibility; the conversion is done only if a body shows a fault it
+    causes (feet, hands on weapons). P1 then keeps GASP's content as it is.
+  - Also found: GASP's sample MetaHuman needs three renderer settings the project lacked
+    (`r.GPUSkin.Support16BitBoneIndex`, `r.GPUSkin.UnlimitedBoneInfluences`, `SkeletalMesh.UseExperimentalChunking`;
+    the editor's Missing Project Settings toast), and GASP sets `p.EnableCharacterAccelerationReplication=1`, which
+    motion matching on simulated proxies needs. All four are on the spike branch; P5 and P6 take them. A Live Coding
+    patch that changes a struct a running ticker uses crashes the editor: a restart, not a patch.
+
 ### P1: One skeleton, one content home (content and a script; parent PR)
 
 - `Content/Characters` with the canonical UE5 Mannequin (GASP's copy), every pack animation re-pointed to it, the
