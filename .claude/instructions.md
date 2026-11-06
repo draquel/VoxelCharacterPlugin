@@ -14,7 +14,9 @@ AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; one runtime mo
 3. `Documentation/EDITOR_CONSOLE_GUIDE.md` at the project root, §4 — every `vc.*` cvar and Exec function; the game
    module's `vox.*` commands drive this plugin's pawn for QA.
 4. `Documentation/FINDINGS.md` at the project root — open findings in this plugin (none since G75 closed, 2026-11-02).
-5. History only: `Documentation/CharacterController_Design.md` (the February design, frozen),
+5. `Documentation/CHARACTER_ANIMATION_PLAN.md` — the active plan (agreed 2026-11-05, D43-D51): animation, IK and
+   bodies for the player and the NPCs, MetaHumans among them; its phases and spikes.
+6. History only: `Documentation/CharacterController_Design.md` (the February design, frozen),
    `COMBAT_FOUNDATION_PLAN.md` and `EQUIPMENT_LOOP_PLAN.md` (frozen), `Documentation/Archive/ImplementationPlan.md`.
 
 Across plugins: `Plugins/CommonGameFramework/Documentation/ARCHITECTURE.md`; VoxelWorlds'
