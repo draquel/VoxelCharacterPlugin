@@ -242,6 +242,26 @@ bodies: P2-P4 show results on today's character before any MetaHuman exists.
 - **S2, a MetaHuman on the pawn.** One MetaHuman made in Creator on `BP_VCPlayer`: GASP's runtime retarget against
   direct playback on the MetaHuman body. Measure ms per character, visible offsets (hands, feet, sockets), the face's
   idle, the first-person view, disk and memory; check a dedicated server can drop face, groom and outfits.
+
+  **S2 result (2026-11-05, the spike branch; GASP's sample MetaHuman Kellan instead of a new one from Creator):
+  direct playback works, so the runtime retarget is not needed.**
+  - `vox.Spike.MetaHuman` makes Kellan's body (`m_med_nrw_body`, skeleton `metahuman_base_skel`, marked compatible
+    with the UEFN and UE5 Mannequins) the pawn's animated mesh. GASP's AnimBP and databases drive it directly. His
+    top, trousers and shoes follow it by leader pose; his face keeps its own AnimBP, which copies the head from its
+    attach parent, so it is re-attached under the animated body; the grooms ride on the face. On `PlanetTest` he
+    stands, runs and stops with the motion-matched body, the head, face and hair in place.
+  - What a MetaHuman needs in the project: the three renderer settings S4 found (and a round of skinning shader
+    compiles), the LiveLink and LiveLinkControlRig plugins (the face AnimBP has LiveLink nodes; without them Kellan's
+    Blueprint does not compile and spawns no components), RigLogic and HairStrands.
+  - On a planet the outfit physics falls along world −Z: the hoodie's drawstrings stand out sideways at the equator.
+    Cloth and rigid-body nodes on MetaHuman outfits need the movement's gravity each frame (P6).
+  - The MetaHuman body has no sockets: the equipment sockets go on `metahuman_base_skel` (or each body), with their
+    own attach offsets (P6).
+  - Kellan is an optimised MetaHuman (`*_Simplified` materials): 81 MB of his own, 220 MB shared (`MetaHumans/Common`).
+  - Not measured: the frame cost. Another editor shared the machine, and the game-thread counter read a constant 172 ms
+    in this setup; P6 measures it with `voxel.Bench.Run` on a quiet machine, against today's body. Not tested: a
+    dedicated server without face, grooms and outfits, the first-person view, MetaHuman Creator's own output.
+  - For D43 (the default look): the images are `Saved/Screenshots/Claudius/s2_*.png` in the spike worktree.
 - **S3, content audit. Done** (§2): the gaps are chopping, and placing and using.
 - **S4, GASP on the UE5 Mannequin.** In the copy of GASP: convert the walk, run and idle sets and their databases from
   the UEFN Mannequin to UE5 Manny (the IK retargeter's batch export for the sequences, a script that duplicates the
