@@ -1,6 +1,7 @@
 # Ranged Combat Plan: the Bow
 
-> **Agreed 2026-11-06: the user approved the plan as drafted, every decision as recommended (D52-D57, §6). B1 next.**
+> **Agreed 2026-11-06: the user approved the plan as drafted, every decision as recommended (D52-D57, §6). B1 done;
+> B2 next.**
 > Scope: a bow the player draws, aims and shoots, its
 > arrows as items, and the arrow's flight on a plane and on a planet. Owner: VoxelCharacterPlugin; one field each in
 > ItemInventoryPlugin and EquipmentPlugin; content and item data in the parent. It follows the character animation plan's
@@ -72,6 +73,21 @@ quivers), and the pack's own bow (`SM_Bow`, skeletal, its string a bone) and `SM
   none to the slot's).
 - `UItemFragment_RangedWeapon`; the items `ID_Weapon_Bow` (main hand, `hand_l`, the Bow set) and `ID_Ammo_Arrow`.
 - Docs: `ITEM_INVENTORY_SYSTEM.md`, `EQUIPMENT_SYSTEM.md`.
+
+**B1 result (2026-11-06; ItemInventoryPlugin, EquipmentPlugin, VoxelCharacterPlugin, the parent).**
+- `UItemFragment_Equipment::AttachBoneOverride`; EquipmentPlugin attaches the visual (and a torch's flame) to it, drops
+  the slot's correction there (`GetVisualAttachOffset` is the item's fit alone), and exposes the rule
+  (`ChooseAttachSocket`, `GetVisualAttachSocket`, `GetItemAttachBone`). `AVCCharacterBase::UpdateEquipmentAttachments`
+  keeps an item's own bone in both views.
+- `UItemFragment_RangedWeapon` with `GetDrawPower` (no shot below the shortest draw, `MinDrawPower` at it, linear to full).
+- `Scripts/configure_ranged_items.py` builds `ID_Weapon_Bow` (LowPolyRPGWeapons' `SM_Bow_01` in the main hand on `hand_l`,
+  pitched 90 so it stands upright in the fist; 15 damage at full draw, the iron sword's being 18; 150 shots of wear; 6000
+  uu/s at full draw over 0.25-1 s) and `ID_Ammo_Arrow` (stacks of 50); the tags `Item.Ammo` and `Item.Ammo.Arrow` are
+  config tags (`Config/DefaultGameplayTags.ini`). A second run saves nothing; it and `setup_character_layers.py` now refuse
+  to run during PIE, where the editor's asset library does not work (a run in PIE asked to overwrite the bow it could not see).
+- Tests: `ItemInventory.Fragments.RangedWeapon.DrawPower`, `Equipment.Visuals.AttachBoneOverride`.
+- PIE in `VoxelDemo`: the bow equipped from the hotbar rides `hand_l`, upright, the action set `Equipment.AnimSet.Bow`;
+  twenty arrows in the bag. The bow has no layer, montages or attack yet (B3, B4).
 
 ### B2: The arrow (VoxelCharacterPlugin)
 - `AVCArrowProjectile` and `UVCArrowMovementComponent`: flight, sticking, lifespan, damage on a pawn.
