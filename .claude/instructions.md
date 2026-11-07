@@ -5,7 +5,8 @@
 The player and NPC layer: character, controller, player state, game mode, movement, camera, input, combat on GAS, NPC
 AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; a runtime module, `VoxelCharacterPlugin`, a second
 runtime module, `VoxelCharacterAnimation` (the player's motion matching: PoseSearch stays out of the first, D45), and an
-editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the animation content).
+editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the animation content; the graph node of
+`FVCAnimNode_FootBoneIK`).
 
 ## Reading order
 
@@ -32,7 +33,7 @@ calls.
 |---|---|
 | `AVCCharacterBase`, `AVCPlayerController`, `AVCPlayerState` (ASC host), `AVCGameModeBase`, `AVCNPCCharacterBase` (own ASC), `AVCNPCAIController` | `UInventoryComponent` (ItemInventoryPlugin), `UInteractionComponent` (InteractionPlugin), `UEquipmentManagerComponent` (EquipmentPlugin) |
 | `UVCMovementComponent`, `FVCGravityFrame`, `FVCTerrainQueryHelper` | VoxelWorlds' chunk manager, edit manager, scatter manager and surface navigation |
-| `UVCCameraManager` and its modes, `UVCAnimInstance`, `UVCActionMontageComponent` and `UVCActionAnimSet`, `UVCInputConfig` | `UAbilitySystemComponent`, `UGameplayEffect`, `UGameplayAbility` (GAS) |
+| `UVCCameraManager` and its modes, `UVCAnimInstance`, `UVCActionMontageComponent` and `UVCActionAnimSet`, `UVCCharacterAppearance` and `UVCAppearanceComponent`, `FVCAnimNode_FootBoneIK`, `UVCInputConfig` | `UAbilitySystemComponent`, `UGameplayEffect`, `UGameplayAbility` (GAS) |
 | `UVCCombatComponent` and the combat GAS classes, `UVCBlockInteractionComponent`, `UVCGatherTable` | `ICGFDamageableInterface`, `FCGFDamageContext`, `ICGFInventoryInterface`, `ICGFLightBearerInterface`, `ICGFRestPointInterface`, combat tags (CommonGameFramework) |
 | The HUD widgets, the map widgets, `UVCMapMarkerRegistry`, `UVCSettings` | Widget classes from the gameplay plugins (`UHotbarWidget`, `UItemCursorWidget`, ...) |
 
@@ -54,6 +55,9 @@ calls.
   `State.Weather.Wet` / `Cold` (P5) read those cached values, so they need no include of their own.
 - VoxelWorlds is a hard dependency, but read its settings by name where a dependency would be upward
   (`voxel.Edit.PlayerInputs` is looked up, not linked).
+- MetaHumans are content, not a dependency: an appearance (`UVCCharacterAppearance`) names a MetaHuman's Blueprint as
+  its parts actor, and nothing links RigLogic, HairStrands or LiveLink (the project enables those plugins). Which body
+  a world gives the player is the project's data (`UVCSettings`' appearances, D43), never code.
 
 ### Naming and C++
 

@@ -12,6 +12,91 @@
 #include "GameplayEffect.h"
 #include "VoxelCharacterPlugin.h"
 #include "Net/UnrealNetwork.h"
+#include "Animation/VCAppearanceComponent.h"
+#include "Animation/VCCharacterAppearance.h"
+#include "Core/VCGameModeBase.h"
+#include "Core/VCSettings.h"
+#include "Engine/Engine.h"
+#include "EngineUtils.h"
+#include "HAL/IConsoleManager.h"
+#include "VoxelChunkManager.h"
+#include "VoxelWorldConfiguration.h"
+
+namespace
+{
+	/**
+	 * vc.Appearance: no argument lists what each player wears and the appearances the settings name; a name (part of an
+	 * appearance asset's name among those, or an asset path) dresses every player in it as their own choice, which is
+	 * saved; "rule" hands the choice back to the game mode and the settings. Acts on the authority's players.
+	 */
+	void OnAppearanceCommand(const TArray<FString>& Args)
+	{
+		const UVCSettings& Settings = UVCSettings::Get();
+		TArray<TSoftObjectPtr<UVCCharacterAppearance>> Known;
+		Known.AddUnique(Settings.DefaultPlayerAppearance);
+		for (const TPair<EMeshingMode, TSoftObjectPtr<UVCCharacterAppearance>>& Pair : Settings.PlayerAppearanceByMeshing)
+		{
+			Known.AddUnique(Pair.Value);
+		}
+		Known.RemoveAll([](const TSoftObjectPtr<UVCCharacterAppearance>& Each) { return Each.IsNull(); });
+
+		TSoftObjectPtr<UVCCharacterAppearance> Choice;
+		const bool bList = Args.Num() == 0;
+		if (!bList && !Args[0].Equals(TEXT("rule"), ESearchCase::IgnoreCase))
+		{
+			for (const TSoftObjectPtr<UVCCharacterAppearance>& Each : Known)
+			{
+				if (Each.GetAssetName().Contains(Args[0]))
+				{
+					Choice = Each;
+					break;
+				}
+			}
+			if (Choice.IsNull())
+			{
+				Choice = TSoftObjectPtr<UVCCharacterAppearance>(FSoftObjectPath(Args[0]));
+			}
+			if (!Choice.LoadSynchronous())
+			{
+				UE_LOG(LogVoxelCharacter, Warning, TEXT("vc.Appearance: no appearance %s"), *Args[0]);
+				return;
+			}
+		}
+		if (!GEngine)
+		{
+			return;
+		}
+		for (const FWorldContext& Context : GEngine->GetWorldContexts())
+		{
+			UWorld* World = Context.World();
+			if (!World || !World->IsGameWorld() || World->GetNetMode() == NM_Client)
+			{
+				continue;
+			}
+			for (TActorIterator<AVCPlayerState> It(World); It; ++It)
+			{
+				if (!bList)
+				{
+					It->SetChosenAppearance(Choice);
+				}
+				UE_LOG(LogVoxelCharacter, Display, TEXT("vc.Appearance: %s wears %s"), *It->GetPlayerName(),
+					It->GetAppearance().IsNull() ? TEXT("its own body") : *It->GetAppearance().GetAssetName());
+			}
+		}
+		if (bList)
+		{
+			for (const TSoftObjectPtr<UVCCharacterAppearance>& Each : Known)
+			{
+				UE_LOG(LogVoxelCharacter, Display, TEXT("vc.Appearance: available %s"), *Each.ToString());
+			}
+		}
+	}
+
+	FAutoConsoleCommand CmdAppearance(
+		TEXT("vc.Appearance"),
+		TEXT("[name|path|rule] The players' body (character animation P6): none lists; a name or path dresses every player in it as their own, saved choice; rule hands it back to the game mode and the settings."),
+		FConsoleCommandWithArgsDelegate::CreateStatic(&OnAppearanceCommand));
+}
 
 AVCPlayerState::AVCPlayerState()
 {
@@ -38,6 +123,44 @@ void AVCPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(AVCPlayerState, Progression);
+	DOREPLIFETIME(AVCPlayerState, Appearance);
+}
+
+void AVCPlayerState::OnRep_Appearance()
+{
+	OnAppearanceChanged.Broadcast();
+}
+
+void AVCPlayerState::SetChosenAppearance(const TSoftObjectPtr<UVCCharacterAppearance>& Choice)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	ChosenAppearance = Choice;
+	ResolveAppearance();
+}
+
+void AVCPlayerState::ResolveAppearance()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	const UWorld* World = GetWorld();
+	const AVCGameModeBase* GameMode = World ? World->GetAuthGameMode<AVCGameModeBase>() : nullptr;
+	const UVoxelChunkManager* ChunkManager = World ? UVoxelChunkManager::Find(World) : nullptr;
+	const UVoxelWorldConfiguration* Config = ChunkManager ? ChunkManager->GetConfiguration() : nullptr;
+	const UVCSettings& Settings = UVCSettings::Get();
+	const TSoftObjectPtr<UVCCharacterAppearance> Resolved = UVCAppearanceComponent::PickAppearance(ChosenAppearance,
+		GameMode ? GameMode->PlayerAppearance : TSoftObjectPtr<UVCCharacterAppearance>(), Settings.PlayerAppearanceByMeshing,
+		Settings.DefaultPlayerAppearance, Config != nullptr, Config ? Config->MeshingMode : EMeshingMode::Cubic);
+	if (Resolved != Appearance)
+	{
+		Appearance = Resolved;
+		ForceNetUpdate();
+		OnAppearanceChanged.Broadcast();
+	}
 }
 
 void AVCPlayerState::AddDungeonCleared(bool bBossKilled)
@@ -91,6 +214,7 @@ void AVCPlayerState::ExportSaveState(FVCPlayerSaveState& OutState) const
 	OutState.Progression = Progression;
 	OutState.bHasRespawnPoint = bHasRespawnPoint;
 	OutState.RespawnPoint = RespawnPoint;
+	OutState.ChosenAppearance = ChosenAppearance.ToSoftObjectPath();
 
 	if (const AVCCharacterBase* Avatar = Cast<AVCCharacterBase>(GetPawn()))
 	{
@@ -167,6 +291,9 @@ void AVCPlayerState::ImportSaveState(const FVCPlayerSaveState& State)
 
 	bHasRespawnPoint = State.bHasRespawnPoint;
 	RespawnPoint = State.RespawnPoint;
+
+	ChosenAppearance = TSoftObjectPtr<UVCCharacterAppearance>(State.ChosenAppearance);
+	ResolveAppearance();
 
 	bHasPendingSpawnTransform = State.bHasLastTransform;
 	PendingSpawnTransform = State.LastTransform;

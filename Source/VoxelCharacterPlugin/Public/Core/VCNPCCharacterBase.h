@@ -15,6 +15,8 @@ class UVCCharacterAttributeSet;
 class UVCCombatAttributeSet;
 class UVCCombatComponent;
 class UVCActionMontageComponent;
+class UVCAppearanceComponent;
+class UVCCharacterAppearance;
 class UGameplayAbility;
 class UWidgetComponent;
 class UVCNPCHealthBarWidget;
@@ -61,6 +63,14 @@ public:
 	/** Plays the NPC's action montages for every machine (character animation P3). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UVCActionMontageComponent> ActionMontages;
+
+	/** Dresses the mesh in Appearance on every machine (character animation P6). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UVCAppearanceComponent> AppearanceComponent;
+
+	/** The NPC's body (character animation P6); empty: the Blueprint's own mesh. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Appearance")
+	TSoftObjectPtr<UVCCharacterAppearance> Appearance;
 
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|GAS")
 	UVCCharacterAttributeSet* GetCharacterAttributes() const { return CharacterAttributes; }

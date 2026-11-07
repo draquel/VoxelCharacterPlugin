@@ -21,6 +21,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"CommonGameFramework",
 				"AIModule",
 				"VoxelCore", // FVoxelWorldBounds in UVCMovementComponent's header (world edge push-back)
+				"AnimGraphRuntime", // FAnimNode_SkeletalControlBase: FVCAnimNode_FootBoneIK (character animation P6)
 			}
 		);
 
@@ -39,6 +40,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"VoxelGeneration", // IVoxelWorldMode.h (VCTerrainQueryHelper.cpp)
 				"PhysicsCore", // CollisionShape.h
 				"GameplayTasks", // UAbilityTask_WaitDelay: the melee hit waits for its montage (character animation P3)
+				"AnimationCore", // AnimationCore::SolveTwoBoneIK: FVCAnimNode_FootBoneIK (character animation P6)
 				"VoxelNavigation", // UVCVoxelPathProvider (feature 10)
 				"VoxelScatter",
 				"JsonUtilities",

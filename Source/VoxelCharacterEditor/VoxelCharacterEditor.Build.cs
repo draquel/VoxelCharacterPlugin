@@ -5,7 +5,8 @@ using UnrealBuildTool;
 /**
  * Editor-only helpers for the character's animation content (character animation P3): anim layers in an interface,
  * implementing an interface, adding and wiring graph nodes and setting their properties, so a script builds the
- * content. Type "Editor" in VoxelCharacterPlugin.uplugin: compiled only for editor targets, never cooked.
+ * content; and the graph node of FVCAnimNode_FootBoneIK (P6). Type "Editor" in VoxelCharacterPlugin.uplugin: compiled
+ * only for editor targets, never cooked.
  */
 public class VoxelCharacterEditor : ModuleRules
 {
@@ -26,6 +27,8 @@ public class VoxelCharacterEditor : ModuleRules
 			"BlueprintGraph", // UK2Node, UEdGraphSchema_K2
 			"AnimGraph",      // UAnimationGraph, UAnimationGraphSchema
 			"AssetTools",     // CopyAssetsWithReferences (character animation P5)
+			"AnimGraphRuntime",     // FAnimNode_SkeletalControlBase (character animation P6)
+			"VoxelCharacterPlugin", // FVCAnimNode_FootBoneIK: its graph node, UVCAnimGraphNode_FootBoneIK
 		});
 	}
 }
