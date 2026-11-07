@@ -1,7 +1,7 @@
 # Character Animation Plan
 
-> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0-P4
-> done; P5 next.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
+> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0-P5
+> done; P6 next.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
 > VoxelCharacterPlugin; content in VoxelWorldPOI's NPC tables, EquipmentPlugin's item data and the Blender pipeline.
 > Terms: `Documentation/GLOSSARY.md` at the project root; the decisions' numbers are from its `FINDINGS.md`.
 
@@ -493,6 +493,39 @@ Animation.
   under gravity; motion matching waits for an engine fix.
 - Tests: the predictor's samples lie on the tangent plane and turn about local up; without custom gravity they equal
   the engine's own prediction.
+
+**P5 result (2026-11-07; VoxelCharacterPlugin, the parent's script and settings).** The reference is
+`CHARACTER_SYSTEM.md`, Animation. S1 passed, so motion matching:
+- `Scripts/setup_character_locomotion.py` copies GASP's `SandboxCharacter_CMC_ABP` and the five choosers whose context is
+  its class to `/Game/CharacterAnimation/Locomotion` (GASP's pack reaches every checkout through one junction, so it is
+  copied, not changed), every reference among the copies pointed at the copies. An Evaluate Chooser node names its
+  context pin for the context's class, so the pin GASP's graph linked to Self is moved to the copy's. The copy is
+  reparented to `UVCMotionMatchingAnimInstance` (a `UVCAnimInstance`, in the new runtime module `VoxelCharacterAnimation`,
+  D45), which fills GASP's `CharacterProperties` from our pawn; GASP's fill through its pawn interface is emptied.
+- GASP's reads became our values where they hide world Z: three `VSizeXY`, two `CalculateDirection`, six
+  `NormalizedDeltaRotator`, the trajectory generation, and two Euler yaw sums (the root transform's 90 degrees, the
+  strafe's offset) call the parent's gravity-frame functions of the same pins, the engine's own arithmetic where up is
+  world Z (test `VoxelCharacter.Anim.MotionMatchingFrame`). The trajectory is spike S1's predictor, made production code
+  (`UVCGravityTrajectoryPredictor`; tests `VoxelCharacter.Anim.Trajectory.MatchesEngineOnPlane` and `.PlanetFrame`:
+  samples on the tangent plane, upright, turning about local up; the engine's prediction on a plane to 0.01 uu).
+- The copy's AnimGraph gained swimming (`AS_Swim`), the item's `UpperBodyStance` layer before the slot, and P4's look-at
+  and off-hand IK after GASP's foot placement and leg IK, which `FootIKAlpha` now drives. GASP's own turn in place, starts,
+  stops, pivots, jumps, landings and crouching come with it; GASP's camera does not (the character keeps
+  `UVCCameraManager`).
+- `UVCSettings::PlayerLocomotionAnimClass` names the copy; `AVCCharacterBase::ApplyLocomotionAnimClass` sets it at
+  BeginPlay (not on a dedicated server, not in the automation tests) and again on `vc.Anim.MotionMatching`, re-linking
+  the equipped items' layers. Without the copy the player keeps `ABP_VoxelCharacter`, with one warning.
+- `UVCAnimAuthoringLibrary` gains `CopyAssetsWithReferences`, `RenameMemberVariable`, `RemoveGraphNodes`,
+  `ReplaceFunctionCalls`, `RecombinePin` and `GetPinLinks`.
+- PIE: on `VoxelDemo` idle, run, stop, a sword's stance and swing, the bow's draw, swimming; on `Review_Cubic` the 75 uu
+  block step (with `vc.Anim.FootIK 0` the lower foot hangs in the air, with it on it reaches the lower block); on
+  `PlanetTest` at the equator running north (along world Z) the speed reads 600 (world Z's `VSizeXY` would read about
+  25) and a start, a reversal and a stop pick a run start, run loops, a 180-degree pivot and the idle; at the south pole
+  the samples stand upright (up . up 1.000; the engine's -0.9995) and the same input picks run loops, a pivot and the
+  idle, where the engine's trajectory picks spin transitions (cost -0.86) and a 180-degree turn in place on the stop
+  (-1.20). Crouching, which the state machine never posed (G140), plays GASP's crouch idle and walk.
+- Cost for one running player (the CSV profiler): 0.50 ms game thread and 1.39 ms on the animation worker, against 0.22
+  and 0.33 ms for `ABP_VoxelCharacter`.
 
 ### P6: Appearance and MetaHumans (VoxelCharacterPlugin, content)
 

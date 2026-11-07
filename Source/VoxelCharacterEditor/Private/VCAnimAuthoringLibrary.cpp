@@ -15,6 +15,12 @@
 #include "Engine/Blueprint.h"
 #include "Engine/MemberReference.h"
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
+#include "K2Node_CallFunction.h"
+#include "Misc/PackageName.h"
+#include "Serialization/ArchiveReplaceObjectRef.h"
+#include "UObject/UObjectHash.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogVoxelCharacterEditor, Log, All);
 
@@ -572,4 +578,247 @@ bool UVCAnimAuthoringLibrary::SetMontageSlot(UAnimMontage* Montage, FName SlotNa
 	Montage->PostEditChange();
 	Montage->MarkPackageDirty();
 	return true;
+}
+
+TArray<FString> UVCAnimAuthoringLibrary::CopyAssetsWithReferences(const TMap<FString, FString>& SourceToDestination)
+{
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	auto Load = [](const FString& PackagePath) -> UObject*
+	{
+		return LoadObject<UObject>(nullptr, *(PackagePath + TEXT(".") + FPackageName::GetShortName(PackagePath)));
+	};
+
+	// Copy what is missing; each source's objects stand for the copy's (a blueprint's class and default object too)
+	TMap<UObject*, UObject*> Replacements;
+	TArray<UObject*> Copies;
+	TArray<FString> Made;
+	for (const TPair<FString, FString>& Pair : SourceToDestination)
+	{
+		UObject* Source = Load(Pair.Key);
+		if (!Source)
+		{
+			UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("CopyAssetsWithReferences: %s does not load"), *Pair.Key);
+			return {};
+		}
+		UObject* Copy = FPackageName::DoesPackageExist(Pair.Value) ? Load(Pair.Value) : nullptr;
+		if (!Copy)
+		{
+			Copy = AssetTools.DuplicateAsset(FPackageName::GetShortName(Pair.Value), FPackageName::GetLongPackagePath(Pair.Value), Source);
+		}
+		if (!Copy || Copy->GetClass() != Source->GetClass())
+		{
+			UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("CopyAssetsWithReferences: %s did not copy to %s"), *Pair.Key, *Pair.Value);
+			return {};
+		}
+		Replacements.Add(Source, Copy);
+		const UBlueprint* SourceBlueprint = Cast<UBlueprint>(Source);
+		const UBlueprint* CopyBlueprint = Cast<UBlueprint>(Copy);
+		if (SourceBlueprint && CopyBlueprint && SourceBlueprint->GeneratedClass && CopyBlueprint->GeneratedClass)
+		{
+			Replacements.Add(SourceBlueprint->GeneratedClass, CopyBlueprint->GeneratedClass);
+			Replacements.Add(SourceBlueprint->GeneratedClass->GetDefaultObject(), CopyBlueprint->GeneratedClass->GetDefaultObject());
+			if (SourceBlueprint->SkeletonGeneratedClass && CopyBlueprint->SkeletonGeneratedClass)
+			{
+				Replacements.Add(SourceBlueprint->SkeletonGeneratedClass, CopyBlueprint->SkeletonGeneratedClass);
+			}
+		}
+		Copies.Add(Copy);
+		Made.Add(Pair.Value);
+	}
+
+	// Point every reference inside each copy (and its subobjects) at the copies
+	for (UObject* Copy : Copies)
+	{
+		TArray<UObject*> Objects;
+		GetObjectsWithOuter(Copy->GetOutermost(), Objects, EGetObjectsFlags::IncludeNestedObjects);
+		int32 Replaced = 0;
+		for (UObject* Object : Objects)
+		{
+			FArchiveReplaceObjectRef<UObject> Replacer(Object, Replacements,
+				EArchiveReplaceObjectFlags::IgnoreOuterRef | EArchiveReplaceObjectFlags::IgnoreArchetypeRef);
+			Replaced += Replacer.GetCount();
+		}
+		if (UBlueprint* Blueprint = Cast<UBlueprint>(Copy))
+		{
+			FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+		}
+		Copy->MarkPackageDirty();
+		UE_LOG(LogVoxelCharacterEditor, Log, TEXT("CopyAssetsWithReferences: %s, %d references pointed at the copies"), *Copy->GetPathName(), Replaced);
+	}
+	return Made;
+}
+
+bool UVCAnimAuthoringLibrary::RenameMemberVariable(UBlueprint* Blueprint, FName OldName, FName NewName)
+{
+	if (!Blueprint)
+	{
+		return false;
+	}
+	if (FBlueprintEditorUtils::FindNewVariableIndex(Blueprint, OldName) != INDEX_NONE)
+	{
+		FBlueprintEditorUtils::RenameMemberVariable(Blueprint, OldName, NewName);
+	}
+	const bool bRenamed = FBlueprintEditorUtils::FindNewVariableIndex(Blueprint, NewName) != INDEX_NONE;
+	UE_CLOG(!bRenamed, LogVoxelCharacterEditor, Warning, TEXT("RenameMemberVariable: %s has no variable %s or %s"),
+		*Blueprint->GetName(), *OldName.ToString(), *NewName.ToString());
+	return bRenamed;
+}
+
+int32 UVCAnimAuthoringLibrary::RemoveGraphNodes(UBlueprint* Blueprint, FName GraphName, const TArray<FString>& NodeNames)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraph* Graph = FindGraph(Blueprint, GraphName);
+	int32 Removed = 0;
+	for (const FString& Name : NodeNames)
+	{
+		if (UEdGraphNode* Node = FindNode(Graph, Name))
+		{
+			FBlueprintEditorUtils::RemoveNode(Blueprint, Node, /*bDontRecompile=*/ true);
+			++Removed;
+		}
+		else
+		{
+			UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("RemoveGraphNodes: no node %s in %s.%s"), *Name, *GetNameSafe(Blueprint), *GraphName.ToString());
+		}
+	}
+	if (Removed > 0)
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	}
+	return Removed;
+}
+
+int32 UVCAnimAuthoringLibrary::ReplaceFunctionCalls(UBlueprint* Blueprint, FName OldFunctionName, UClass* NewOwner, FName NewFunctionName)
+{
+	UFunction* NewFunction = NewOwner ? NewOwner->FindFunctionByName(NewFunctionName) : nullptr;
+	if (!Blueprint || !NewFunction)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ReplaceFunctionCalls: no blueprint, or %s has no function %s"),
+			*GetNameSafe(NewOwner), *NewFunctionName.ToString());
+		return -1;
+	}
+	const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+	TArray<UEdGraph*> Graphs;
+	Blueprint->GetAllGraphs(Graphs);
+	int32 Replaced = 0;
+	for (UEdGraph* Graph : Graphs)
+	{
+		TArray<UK2Node_CallFunction*> Calls;
+		Graph->GetNodesOfClass(Calls);
+		for (UK2Node_CallFunction* Old : Calls)
+		{
+			if (Old->FunctionReference.GetMemberName() != OldFunctionName)
+			{
+				continue;
+			}
+			Graph->Modify();
+			UK2Node_CallFunction* New = NewObject<UK2Node_CallFunction>(Graph, NAME_None, RF_Transactional);
+			New->SetFromFunction(NewFunction);
+			New->NodePosX = Old->NodePosX;
+			New->NodePosY = Old->NodePosY;
+			Graph->AddNode(New, /*bFromUI=*/ false, /*bSelectNewNode=*/ false);
+			New->CreateNewGuid();
+			New->PostPlacedNewNode();
+			New->AllocateDefaultPins();
+
+			// Split the new node's pins as the old node's are, then move each pin's links and default across by name
+			for (UEdGraphPin* OldPin : TArray<UEdGraphPin*>(Old->Pins))
+			{
+				if (OldPin && OldPin->SubPins.Num() > 0 && !OldPin->ParentPin)
+				{
+					UEdGraphPin* NewPin = New->FindPin(OldPin->PinName, OldPin->Direction);
+					if (NewPin && NewPin->SubPins.Num() == 0)
+					{
+						Schema->SplitPin(NewPin, /*bNotify=*/ false);
+					}
+				}
+			}
+			for (UEdGraphPin* OldPin : Old->Pins)
+			{
+				if (!OldPin || OldPin->SubPins.Num() > 0 || OldPin->PinName == UEdGraphSchema_K2::PN_Self)
+				{
+					continue;
+				}
+				UEdGraphPin* NewPin = New->FindPin(OldPin->PinName, OldPin->Direction);
+				if (!NewPin)
+				{
+					UE_CLOG(OldPin->LinkedTo.Num() > 0, LogVoxelCharacterEditor, Warning,
+						TEXT("ReplaceFunctionCalls: %s has no pin %s; its links in %s.%s are dropped"),
+						*NewFunctionName.ToString(), *OldPin->PinName.ToString(), *Blueprint->GetName(), *Graph->GetName());
+					continue;
+				}
+				if (OldPin->LinkedTo.Num() == 0)
+				{
+					NewPin->DefaultValue = OldPin->DefaultValue;
+					NewPin->DefaultObject = OldPin->DefaultObject;
+					NewPin->DefaultTextValue = OldPin->DefaultTextValue;
+				}
+				for (UEdGraphPin* Linked : TArray<UEdGraphPin*>(OldPin->LinkedTo))
+				{
+					OldPin->BreakLinkTo(Linked);
+					NewPin->MakeLinkTo(Linked);
+				}
+			}
+			FBlueprintEditorUtils::RemoveNode(Blueprint, Old, /*bDontRecompile=*/ true);
+			++Replaced;
+		}
+	}
+	if (Replaced > 0)
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	}
+	return Replaced;
+}
+
+bool UVCAnimAuthoringLibrary::RecombinePin(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, const FString& PinName)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraphNode* Node = FindNode(FindGraph(Blueprint, GraphName), NodeName);
+	UEdGraphPin* Pin = FindPin(Node, PinName, EGPD_Input);
+	const EEdGraphPinDirection Direction = Pin ? EGPD_Input : EGPD_Output;
+	if (!Pin)
+	{
+		Pin = FindPin(Node, PinName, EGPD_Output);
+	}
+	if (!Pin)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("RecombinePin: no pin %s on %s in %s.%s"), *PinName, *NodeName, *GetNameSafe(Blueprint), *GraphName.ToString());
+		return false;
+	}
+	if (Pin->SubPins.Num() > 0)
+	{
+		GetDefault<UEdGraphSchema_K2>()->RecombinePin(Pin->SubPins[0]);
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	}
+	const UEdGraphPin* After = FindPin(Node, PinName, Direction);
+	return After && After->SubPins.Num() == 0;
+}
+
+TArray<FString> UVCAnimAuthoringLibrary::GetPinLinks(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, const FString& PinName)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraphNode* Node = FindNode(FindGraph(Blueprint, GraphName), NodeName);
+	UEdGraphPin* Pin = FindPin(Node, PinName, EGPD_Input);
+	if (!Pin)
+	{
+		Pin = FindPin(Node, PinName, EGPD_Output);
+	}
+	TArray<FString> Links;
+	if (!Pin)
+	{
+		return Links;
+	}
+	TArray<const UEdGraphPin*> Pins = { Pin };
+	Pins.Append(Pin->SubPins);
+	for (const UEdGraphPin* Each : Pins)
+	{
+		for (const UEdGraphPin* Linked : Each->LinkedTo)
+		{
+			if (Linked && Linked->GetOwningNode())
+			{
+				Links.Add(Linked->GetOwningNode()->GetName() + TEXT(".") + Linked->PinName.ToString());
+			}
+		}
+	}
+	return Links;
 }

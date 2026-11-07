@@ -23,6 +23,11 @@
 			"Name": "VoxelCharacterEditor",
 			"Type": "Editor",
 			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "VoxelCharacterAnimation",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
 		}
 	],
 	"Plugins": [
@@ -40,6 +45,10 @@
 		},
 		{
 			"Name": "EnhancedInput",
+			"Enabled": true
+		},
+		{
+			"Name": "PoseSearch",
 			"Enabled": true
 		},
 		{

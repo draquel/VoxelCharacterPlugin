@@ -84,6 +84,13 @@ public:
 	static FGameplayTag PickActionSet(bool bHoldsItem, const FGameplayTag& ItemActionSet);
 
 	/**
+	 * Gives the mesh the locomotion vc.Anim.MotionMatching names (character animation P5): the motion-matching AnimBP of
+	 * UVCSettings::PlayerLocomotionAnimClass when it is on and loads, else the Blueprint's own anim class; a dedicated
+	 * server and the automation tests keep the Blueprint's. Re-links the equipped items' layers after a change.
+	 */
+	void ApplyLocomotionAnimClass();
+
+	/**
 	 * Fuel of the carried light (the equipped light item's durability).
 	 * @param OutFuel     Seconds left (0 when the light needs no fuel).
 	 * @param OutMaxFuel  Capacity (0 when the light needs no fuel).
@@ -817,6 +824,13 @@ protected:
 
 	/** Sets ActiveActionSet from the main-hand slot. */
 	void RefreshActionSet();
+
+	/** Links the equipped items' anim layers again (after the mesh's anim class changed). */
+	void RelinkEquipmentAnimLayers();
+
+	/** The mesh's anim class from the Blueprint, before ApplyLocomotionAnimClass first ran (vc.Anim.MotionMatching 0 plays it). */
+	UPROPERTY(Transient)
+	TSubclassOf<UAnimInstance> BlueprintAnimClass;
 
 	/** Equipment manager reports a carried-light change: forward to OnCarriedLightChanged. */
 	UFUNCTION()

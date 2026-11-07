@@ -26,8 +26,9 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Core | `UVCAnimInstance`, `IVCAnimatedCharacter` | The anim instance of the player and the NPCs, every value in the gravity frame (Animation, below); the interface it reads a character's view mode, action set and combat state through |
 | Core | `UVCAnimLayerInstance` | The parent of a stance layer that aims or plays montages of its own (the bow's): the body's montages in the layer's slots, the body's aim and upper-body montage weight copied each update |
 | Animation | `UVCActionMontageComponent`, `UVCActionAnimSet`, `UVCAnimNotify_ActionHit` | The action montages of both character classes: the owner's at input, everyone else's by multicast, hit reacts, deaths and get-ups from the combat events; a set's montages per action; the moment an action lands |
-| Editor | `UVCAnimAuthoringLibrary` (`VoxelCharacterEditor`) | Anim layers, interfaces, graph nodes, pins and properties, a montage's sections and slot from Python, which the engine does not expose: `Scripts/setup_character_layers.py` builds the content with it |
-| Core | `UVCSettings` | Project Settings > Plugins > Voxel Character (CR4): `NPCHealthBars`, overridden by `vc.UI.NPCHealthBars` once set |
+| Animation | `UVCMotionMatchingAnimInstance`, `UVCGravityTrajectoryPredictor` (`VoxelCharacterAnimation`) | The player's motion matching: the parent of the Game Animation Sample's CMC AnimBP, which fills it from our pawn and does its world-Z arithmetic in the gravity frame; the trajectory predictor that turns about local up (Animation, below) |
+| Editor | `UVCAnimAuthoringLibrary` (`VoxelCharacterEditor`) | Anim layers, interfaces, graph nodes, pins and properties, a montage's sections and slot, copies of assets with their references among them, from Python, which the engine does not expose: `Scripts/setup_character_layers.py`, `setup_character_ik.py` and `setup_character_locomotion.py` build the content with it |
+| Core | `UVCSettings` | Project Settings > Plugins > Voxel Character (CR4): `NPCHealthBars`, overridden by `vc.UI.NPCHealthBars` once set; the player's action sets and motion-matching AnimBP |
 | Core | `VCTypes.h`, `VCGameplayTags.h` | `EVCViewMode`, `EVCSurfaceType`, `EVCVoxelModificationType`, `EVCOutOfHealthPolicy`, `EVCNPCBehavior`, `EVCNPCTemperament`, `EVCRespawnPolicy`, `FVCTerrainContext`, `FVCEquipmentSocketMapping`, `FVCItemSnapshot`, `FVCProgressionStats`, `FVCPlayerSaveState`; the native tags |
 | Movement | `UVCMovementComponent` | Voxel-aware character movement (players and NPCs): terrain context, swimming, sprint, planet gravity, block steps, embed resolve, world-edge push-back, debug flight |
 | Movement | `FVCGravityFrame` | Conversions between world space and the gravity frame |
@@ -308,6 +309,31 @@ it reads through `IVCAnimatedCharacter` (`VCAnimatedCharacter.h`), which both ch
   - `vc.Anim.FootIK`, `vc.Anim.SprintPace`, `vc.Anim.LookAt` and `vc.Anim.HandIK` switch each off for an A/B;
     `vc.Anim.Debug 1` draws each character's look-at target and weights and turns on the engine's foot placement draw.
     `Scripts/setup_character_ik.py` builds the chain and the play rate; a crouched character has no pose yet (G140).
+- **Motion matching** (the player; the plan's P5). The player's mesh plays `ABP_VCPlayerMotionMatching`, the Game
+  Animation Sample's CMC AnimBP that `Scripts/setup_character_locomotion.py` copies with its choosers
+  (`UVCSettings::PlayerLocomotionAnimClass`). `AVCCharacterBase::ApplyLocomotionAnimClass` gives it to the mesh at
+  BeginPlay on every machine that draws the player; a dedicated server and the automation tests keep the Blueprint's
+  `ABP_VoxelCharacter`, and `vc.Anim.MotionMatching 0` gives that back at once, the held items' layers linked again. It
+  plays GASP's databases unconverted through skeleton compatibility (D50): starts, stops, pivots, turns in place, jumps
+  and landings, walking, running and sprinting, and crouching (the state machine's Crouch state has no pose, G140).
+  - Its parent, `UVCMotionMatchingAnimInstance`, lives in the module `VoxelCharacterAnimation`, which carries PoseSearch
+    so the runtime module does not (D45). It is a `UVCAnimInstance`, so the layers, the montages and the IK work as on
+    `ABP_VoxelCharacter`. GASP's graph reads its character through one struct, `CharacterProperties`; the parent fills
+    it from our pawn by its fields' names (the velocity, the input acceleration, the aim, the gait from the sprint and
+    the maximum speed, the stance, the rotation mode, the landing), and the copy's own fill through GASP's pawn interface
+    is emptied.
+  - The gravity frame. GASP's arithmetic takes world Z as up (`VSizeXY`, `CalculateDirection`, rotator deltas, two Euler
+    yaw sums, the engine's trajectory prediction); the script swaps each such node for the parent's function of the same
+    pins, which measures in the gravity frame and is the engine's own arithmetic where up is world Z. The trajectory is
+    `UVCGravityTrajectoryPredictor`'s, which turns about local up (spike S1's); the engine's collision pass already
+    follows the movement's gravity. `vc.Anim.GravityTrajectory 0` is the A/B with the engine's prediction, and
+    `vc.Anim.Debug 1` draws the trajectory and writes what motion matching plays (`GetMotionMatchingSelection`).
+  - The copy's AnimGraph gets what `ABP_VoxelCharacter` has: a swimmer plays `AS_Swim` in place of the locomotion, the
+    held item's `UpperBodyStance` layer runs before GASP's slot, and after GASP's foot placement and leg IK (which
+    `FootIKAlpha` drives) come P4's look-at and off-hand IK. GASP's member `RelativeAcceleration` is
+    `RootRelativeAcceleration` in the copy (`UVCAnimInstance` has one of that name).
+  - Cost for one running player (the CSV profiler): 0.50 ms of animation on the game thread and 1.39 ms on the animation
+    worker, against 0.22 and 0.33 ms for `ABP_VoxelCharacter`.
 - **The content.** `Scripts/setup_character_layers.py` builds the interface, the layers, the montages (from the
   template mannequin's, Sword & Shield's, Bow and Arrow's and GASP's sequences, a hit notify at the strike; the bow's
   draw a raise, a pull and a held loop in sections, `UVCAnimAuthoringLibrary::AppendMontageSegment`) and the five sets
@@ -618,7 +644,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 
 ## Console variables
 
-`vc.*` groups: `vc.AI.*` (NPC AI), `vc.Anim.*` (the IK and pace switches, the debug draw), `vc.Dig.*` (the cubic break times' scale, the highlight), `vc.Minimap.*` (the
+`vc.*` groups: `vc.AI.*` (NPC AI), `vc.Anim.*` (the IK, pace and motion-matching switches, the debug draw), `vc.Dig.*` (the cubic break times' scale, the highlight), `vc.Minimap.*` (the
 minimap's refill stats), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
 and `ToggleVoxelDebug` are on the controller and the character. Every name, default and meaning:
 `Documentation/EDITOR_CONSOLE_GUIDE.md` §4 at the project root. The `vox.*` QA commands that drive this plugin's pawn
