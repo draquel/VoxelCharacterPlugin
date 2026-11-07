@@ -48,6 +48,9 @@ calls.
 - Cross-plugin contracts go through CommonGameFramework's `ICGF*` interfaces and gameplay tags; resolve at runtime with
   interface casts or `FindComponentByClass`.
 - The plugin must compile and run (movement, camera, input, combat) with all three absent.
+- WorldWeatherPlugin is optional the same way (`WITH_WORLD_WEATHER`, the weather plan's P4): the movement component
+  reads the weather's conditions at the pawn in its `.cpp` only (the wind push, the wet grip); without the plugin the
+  wind is zero and the ground dry.
 - VoxelWorlds is a hard dependency, but read its settings by name where a dependency would be upward
   (`voxel.Edit.PlayerInputs` is looked up, not linked).
 

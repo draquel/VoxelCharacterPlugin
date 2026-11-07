@@ -182,6 +182,45 @@ public:
 	static FVector ApplyWorldEdgePushBack(const FVoxelWorldBounds& Bounds, const FVector& Location, const FVector& Velocity,
 		float MaxSpeed, float BandWidth, float PushSpeed, float& OutProximity);
 
+	// --- Weather (the weather plan's P4) ---
+	// The wind leans on the pawn and wet ground loses grip. Both read the weather at the pawn once per terrain-context
+	// refresh (UpdateVoxelTerrainContext, WorldWeatherPlugin's GetConditionsAt) and apply inside the movement simulation,
+	// so the client's prediction and the server agree (the sync point is the same on both; the trace's exposure may
+	// differ a frame). Without WorldWeatherPlugin (WITH_WORLD_WEATHER 0) nothing changes. Flying is exempt, as the edge is.
+
+	/** The fraction of the wind's speed the pawn drifts at in the open (a storm's 900 uu/s carries it at 90). 0 turns the push off. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float WindPushFactor = 0.1f;
+
+	/** How much of the ground's grip full wetness takes away (the ground friction's factor is 1 - wetness x this). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0", ClampMax = "0.95"))
+	float WetGripFactor = 0.4f;
+
+	/** The wind at the pawn as last read (world uu/s, tangent to the local up; zero without the weather plugin). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Weather")
+	FVector GetWeatherWind() const { return CachedWeatherWind; }
+
+	/** The pawn's exposure to the sky as last read (1 in the open, 0 sheltered). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Weather")
+	float GetWeatherExposure() const { return CachedWeatherExposure; }
+
+	/** The ground's wetness under the pawn as last read (0 dry, 1 soaked). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Weather")
+	float GetWeatherWetness() const { return CachedWeatherWetness; }
+
+	/**
+	 * Pure: the wind's drift on the pawn, Wind x Factor x Exposure: a current the pawn rides whatever it does itself, so a
+	 * standing pawn drifts at it and a pawn walking against the wind is slowed by it. CalcVelocity takes the previous
+	 * tick's drift off the velocity before the braking and the friction (which would otherwise eat it: a standing pawn
+	 * would never move) and puts this tick's back on after them. The wind itself blends over a front's transition, so
+	 * the drift needs no ramp of its own. A zero wind, factor or exposure is no drift.
+	 * @param Wind     The wind at the pawn, world uu/s
+	 * @param Factor   WindPushFactor
+	 * @param Exposure The pawn's exposure to the sky (0..1)
+	 * @return The drift, world uu/s
+	 */
+	static FVector ComputeWindDrift(const FVector& Wind, float Factor, float Exposure);
+
 	// --- Planet gravity (VoxelWorlds SPHERICAL_PLANET_REQUIREMENTS.md SP-F1; WORLD_MODES_REVIEW_PLAN.md §17, WM-W1) ---
 	// On a planet (the voxel world's bounds are a shell) gravity points at the centre: the engine's custom gravity
 	// direction (UE 5.4+), set from the position at the start of every move (PerformMovement), so the server's replay,
@@ -412,6 +451,13 @@ protected:
 	/** The voxel world's bounds (WM-I5), cached once the chunk manager is found; unbounded until then. */
 	FVoxelWorldBounds CachedWorldBounds;
 	bool bHasWorldBounds = false;
+
+	/** The weather at the pawn as UpdateVoxelTerrainContext last read it (P4). */
+	FVector CachedWeatherWind = FVector::ZeroVector;
+	float CachedWeatherExposure = 1.f;
+	float CachedWeatherWetness = 0.f;
+	/** The wind drift on the velocity since the last CalcVelocity (ComputeWindDrift), taken off before the next one's braking. */
+	FVector WindDrift = FVector::ZeroVector;
 
 	/** Push-back band proximity, 0..1 (see GetWorldEdgeProximity). */
 	float WorldEdgeProximity = 0.f;
