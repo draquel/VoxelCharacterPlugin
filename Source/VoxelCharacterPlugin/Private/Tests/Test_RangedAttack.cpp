@@ -8,6 +8,7 @@
 #include "Combat/VCArrowProjectile.h"
 #include "Combat/VCCombatComponent.h"
 #include "Combat/VCRangedAttackAbility.h"
+#include "Core/VCCharacterBase.h"
 #include "Core/VCGameplayTags.h"
 #include "Core/VCNPCCharacterBase.h"
 #include "Components/EquipmentManagerComponent.h"
@@ -313,6 +314,33 @@ bool FVCRanged_ReleaseWithoutArrowRefused::RunTest(const FString& Parameters)
 	const UVCRangedAttackAbility* Ability = Instance(S);
 	TestFalse(TEXT("The ability ended"), Ability && Ability->IsActive());
 	TestFalse(TEXT("And no draw starts now"), StartDraw(S));
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// While a bow is drawn (B4) the player's body turns toward the view in third person, and back to facing where it moves
+// once the draw ends.
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCRanged_FacesAimWhileDrawn, "VoxelCharacter.Combat.Ranged.FacesAimWhileDrawn", VC_RANGED_FLAGS)
+bool FVCRanged_FacesAimWhileDrawn::RunTest(const FString& Parameters)
+{
+	FRangedWorld W;
+	const FTransform Stand(FVector(0, 0, 1000));
+	AVCCharacterBase* Player = W.World->SpawnActorDeferred<AVCCharacterBase>(AVCCharacterBase::StaticClass(), Stand, nullptr, nullptr,
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (!TestNotNull(TEXT("The player spawns"), Player))
+	{
+		return false;
+	}
+	Player->bWaitForTerrain = false;
+	Player->FinishSpawning(Stand);
+	const UCharacterMovementComponent* Move = Player->GetCharacterMovement();
+	TestTrue(TEXT("Third person: the body faces where it moves"), Move->bOrientRotationToMovement && !Move->bUseControllerDesiredRotation);
+	Player->SetFacesAim(true);
+	TestTrue(TEXT("Drawn: the body turns toward the view"), !Move->bOrientRotationToMovement && Move->bUseControllerDesiredRotation);
+	Player->SetFacesAim(false);
+	TestTrue(TEXT("Released: back to where it moves"), Move->bOrientRotationToMovement && !Move->bUseControllerDesiredRotation);
 	return true;
 }
 

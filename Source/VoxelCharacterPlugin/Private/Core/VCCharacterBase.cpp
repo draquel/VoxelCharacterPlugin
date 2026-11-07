@@ -717,6 +717,7 @@ bool AVCCharacterBase::TryStartRangedAttack()
 	}
 	bDrawingRangedWeapon = true;
 	OwnDrawStartTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	SetFacesAim(true);
 	PlayOwnAction(EVCAnimAction::Draw);
 	return true;
 }
@@ -728,6 +729,7 @@ void AVCCharacterBase::ReleaseRangedAttack()
 		return;
 	}
 	bDrawingRangedWeapon = false;
+	SetFacesAim(false);
 	// The owner's look follows its own clock; the server's measure decides the shot.
 	if (ActionMontages && IsLocallyControlled())
 	{
@@ -742,6 +744,18 @@ void AVCCharacterBase::ReleaseRangedAttack()
 		}
 	}
 	UVCRangedAttackAbility::ReleaseDraw(GetAbilitySystemComponent());
+}
+
+void AVCCharacterBase::SetFacesAim(bool bFaceAim)
+{
+	UCharacterMovementComponent* Move = GetCharacterMovement();
+	if (!Move || CurrentViewMode == EVCViewMode::FirstPerson)
+	{
+		return;
+	}
+	// The engine's turn toward the controller's rotation keeps the body upright in a custom gravity frame.
+	Move->bOrientRotationToMovement = !bFaceAim;
+	Move->bUseControllerDesiredRotation = bFaceAim;
 }
 
 void AVCCharacterBase::PlayOwnAction(EVCAnimAction Action)

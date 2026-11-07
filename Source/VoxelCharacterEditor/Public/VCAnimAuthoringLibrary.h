@@ -7,14 +7,17 @@
 #include "VCAnimAuthoringLibrary.generated.h"
 
 class UAnimBlueprint;
+class UAnimMontage;
+class UAnimSequenceBase;
 class UBlueprint;
 
 /**
- * Editor scripting for anim blueprints that the engine does not expose to Python (character animation P3): add an
- * animation layer to an anim layer interface, implement an interface, add graph nodes of any class, set a node's
- * properties or a pin's default from text, connect pins and describe a graph. Scripts/setup_character_layers.py builds
- * the character's layers and montages with it. Every function returns false (or an empty string) and logs a warning
- * when it cannot do what it was asked; none compiles or saves (the caller does, once).
+ * Editor scripting for anim blueprints and montages that the engine does not expose to Python (character animation P3,
+ * ranged combat plan B4): add an animation layer to an anim layer interface, implement an interface, add graph nodes of
+ * any class, set a node's properties or a pin's default from text, connect pins and describe a graph; append a montage's
+ * sequences in sections and choose its slot. Scripts/setup_character_layers.py builds the character's layers and
+ * montages with it. Every function returns false (or an empty string) and logs a warning when it cannot do what it was
+ * asked; none compiles or saves (the caller does, once).
  */
 UCLASS()
 class VOXELCHARACTEREDITOR_API UVCAnimAuthoringLibrary : public UBlueprintFunctionLibrary
@@ -136,4 +139,25 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
 	static FString GetGraphGuid(UBlueprint* Blueprint, FName GraphName);
+
+	/**
+	 * Appends a sequence to a montage's first slot track, after what it plays already, in a section of its own that the
+	 * section before it leads into (ranged combat plan B4: a draw's start, then its hold looping until it is stopped).
+	 * @param Montage      The montage
+	 * @param Sequence     The sequence to play next (the montage's skeleton)
+	 * @param SectionName  The new section's name (unique in the montage)
+	 * @param bLoopSection Whether the new section leads into itself, playing until the montage is stopped or jumps
+	 * @return True when the sequence and its section were added
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static bool AppendMontageSegment(UAnimMontage* Montage, UAnimSequenceBase* Sequence, FName SectionName, bool bLoopSection);
+
+	/**
+	 * Sets the slot a montage's first track plays in (a montage the factory makes plays in DefaultSlot).
+	 * @param Montage  The montage
+	 * @param SlotName The slot ("UpperBody"); a slot node of that name plays it
+	 * @return True when the montage plays in the slot afterwards
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static bool SetMontageSlot(UAnimMontage* Montage, FName SlotName);
 };

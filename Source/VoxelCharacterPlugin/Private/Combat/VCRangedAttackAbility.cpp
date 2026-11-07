@@ -3,6 +3,7 @@
 #include "Combat/VCRangedAttackAbility.h"
 #include "Combat/VCArrowProjectile.h"
 #include "Animation/VCActionMontageComponent.h"
+#include "Core/VCCharacterBase.h"
 #include "Core/VCGameplayTags.h"
 #include "Tags/CGFGameplayTags.h"
 #include "VoxelCharacterPlugin.h"
@@ -231,6 +232,11 @@ void UVCRangedAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Ha
 	// The draw is timed here, on the server, from now to the input release (InputReleased).
 	DrawStartTime = World->GetTimeSeconds();
 	bDrawing = true;
+	// The server turns the body toward the view as the owner does, so its moves and the others' view agree.
+	if (AVCCharacterBase* Character = Cast<AVCCharacterBase>(Avatar))
+	{
+		Character->SetFacesAim(true);
+	}
 	if (UVCActionMontageComponent* Montages = Avatar->FindComponentByClass<UVCActionMontageComponent>())
 	{
 		const APawn* Pawn = Cast<APawn>(Avatar);
@@ -272,6 +278,10 @@ void UVCRangedAttackAbility::InputReleased(const FGameplayAbilitySpecHandle Hand
 void UVCRangedAttackAbility::EndAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	const FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled)
 {
+	if (AVCCharacterBase* Character = Cast<AVCCharacterBase>(ActorInfo ? ActorInfo->AvatarActor.Get() : nullptr))
+	{
+		Character->SetFacesAim(false);
+	}
 	// Cancelled mid-draw (killed, knocked out): the draw stops everywhere, the owner's too.
 	if (bDrawing)
 	{

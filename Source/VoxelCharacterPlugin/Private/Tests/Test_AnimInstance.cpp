@@ -5,6 +5,7 @@
 #if WITH_AUTOMATION_TESTS
 
 #include "Core/VCAnimInstance.h"
+#include "Core/VCAnimLayerInstance.h"
 #include "Core/VCCharacterBase.h"
 #include "Core/VCNPCCharacterBase.h"
 #include "Core/VCGameplayTags.h"
@@ -26,6 +27,7 @@
 //   gravity-relative yaw would see never reaches it.
 // - The action set: Unarmed with nothing held, Tool for an item without a set, the item's own set otherwise.
 // - The gather from a spawned character on a tilted frame: gravity, velocity, the ground below while falling.
+// - The aiming stance layer reads the body's aim (ranged combat plan B4).
 // ---------------------------------------------------------------------------
 
 namespace VCAnimTestHelpers
@@ -522,6 +524,34 @@ bool FVCAnim_GatherFromCharacter::RunTest(const FString& Parameters)
 	}
 	GEngine->DestroyWorldContext(World);
 	World->DestroyWorld(false);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The aiming stance layer (ranged combat plan B4): it plays the body's montages in its own slots, and reads the body's
+// aim and its upper-body slot's montage weight; with no body it reads nothing.
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCAnim_LayerInstance, "VoxelCharacter.Anim.LayerInstance", VC_ANIM_FLAGS)
+bool FVCAnim_LayerInstance::RunTest(const FString& Parameters)
+{
+	using namespace VCAnimTestHelpers;
+	TestTrue(TEXT("The layer's slots play the body's montages"),
+		GetDefault<UVCAnimLayerInstance>()->IsUsingMainInstanceMontageEvaluationData());
+	TestEqual(TEXT("The upper-body slot"), GetDefault<UVCAnimLayerInstance>()->UpperBodySlot, FName(TEXT("UpperBody")));
+
+	UVCAnimInstance* Body = NewAnimInstance();
+	Body->AimPitch = 25.f;
+	Body->AimYaw = -40.f;
+	UVCAnimLayerInstance* Layer = NewObject<UVCAnimLayerInstance>(Body->GetOuter());
+	Layer->CopyBodyValues(Body);
+	TestEqual(TEXT("The body's pitch"), Layer->AimPitch, 25.f);
+	TestEqual(TEXT("The body's yaw"), Layer->AimYaw, -40.f);
+	TestEqual(TEXT("No montage playing: no weight"), Layer->UpperBodyMontageWeight, 0.f);
+
+	Layer->CopyBodyValues(nullptr);
+	TestEqual(TEXT("No body: pitch 0"), Layer->AimPitch, 0.f);
+	TestEqual(TEXT("No body: yaw 0"), Layer->AimYaw, 0.f);
 	return true;
 }
 
