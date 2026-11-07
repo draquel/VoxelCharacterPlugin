@@ -36,4 +36,8 @@ namespace VCGameplayTags
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stat_InteractionRange);
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stat_AttackPower);
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stat_Defense);
+
+	// The weather on the character (the weather plan's P5): loose tags the server sets, replicated
+	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Weather_Wet);
+	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Weather_Cold);
 }
