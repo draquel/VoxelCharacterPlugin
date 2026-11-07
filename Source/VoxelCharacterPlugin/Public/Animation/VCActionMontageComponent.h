@@ -86,6 +86,21 @@ public:
 	 */
 	void PlayActionForEveryone(EVCAnimAction Action, int32 Variant = 0, float PlayRate = 1.f, bool bOwnerPlayedIt = false);
 
+	/**
+	 * Stops an action's montage on this machine (a bow's draw let go before it can shoot).
+	 * @param Action The action
+	 * @return True when its montage was playing
+	 */
+	bool StopActionLocal(EVCAnimAction Action);
+
+	/**
+	 * Authority: stops an action on every machine that draws the character, through one reliable multicast (a lost stop
+	 * would leave a looping draw playing).
+	 * @param Action          The action
+	 * @param bOwnerStoppedIt True when the owning player already stopped it at input: its machine skips it
+	 */
+	void StopActionForEveryone(EVCAnimAction Action, bool bOwnerStoppedIt = false);
+
 	/** How many actions this machine was asked to play (locally or by the multicast), for tests. */
 	int32 GetActionsPlayed() const { return ActionsPlayed; }
 
@@ -103,6 +118,9 @@ public:
 protected:
 	UFUNCTION(NetMulticast, Unreliable)
 	void Multicast_PlayAction(EVCAnimAction Action, uint8 Variant, float PlayRate, bool bOwnerPlayedIt);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_StopAction(EVCAnimAction Action, bool bOwnerStoppedIt);
 
 	/** Server: a hit landed on the owner. */
 	UFUNCTION()

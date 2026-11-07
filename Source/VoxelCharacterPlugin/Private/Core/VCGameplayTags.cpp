@@ -11,6 +11,8 @@ namespace VCGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Equipment_AnimSet_TwoHand,     "Equipment.AnimSet.TwoHand",     "Action set: a two-handed melee weapon");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Equipment_AnimSet_Bow,         "Equipment.AnimSet.Bow",         "Action set: a bow");
 
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Attack_Ranged,         "Ability.Attack.Ranged",         "The bow's attack: hold to draw, release to shoot (UVCRangedAttackAbility)");
+
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Stat_MaxHealth,          "SetByCaller.Stat.MaxHealth",          "Equipment stat key: UVCCharacterAttributeSet::MaxHealth");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Stat_MaxStamina,         "SetByCaller.Stat.MaxStamina",         "Equipment stat key: UVCCharacterAttributeSet::MaxStamina");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Stat_MoveSpeedMultiplier,"SetByCaller.Stat.MoveSpeedMultiplier","Equipment stat key: UVCCharacterAttributeSet::MoveSpeedMultiplier");

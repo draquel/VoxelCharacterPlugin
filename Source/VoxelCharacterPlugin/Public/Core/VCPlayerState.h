@@ -47,6 +47,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
 	TSubclassOf<UGameplayAbility> MeleeAttackAbilityClass;
 
+	/**
+	 * The bow's attack, granted with the melee attack (ranged combat plan B3). Defaults to UVCRangedAttackAbility; None
+	 * disables shooting.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
+	TSubclassOf<UGameplayAbility> RangedAttackAbilityClass;
+
 	// --- Death / Respawn ---
 
 	/** GameplayEffect applied on respawn to reset vitals to max. */

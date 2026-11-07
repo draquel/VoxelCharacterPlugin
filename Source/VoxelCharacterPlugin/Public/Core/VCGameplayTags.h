@@ -14,6 +14,9 @@
  * Equipment.AnimSet.<Set>: the action set of what a character holds, which picks its anim layer and montages
  * (character animation P2/P3). An item says its set in its definition's ItemTags; an item without one is a Tool, a
  * character holding nothing is Unarmed.
+ *
+ * Ability.Attack.Ranged: the bow's attack (UVCRangedAttackAbility, ranged combat plan B3), beside CommonGameFramework's
+ * Ability.Attack.Melee.
  */
 namespace VCGameplayTags
 {
@@ -23,6 +26,8 @@ namespace VCGameplayTags
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Equipment_AnimSet_SwordShield);
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Equipment_AnimSet_TwoHand);
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Equipment_AnimSet_Bow);
+
+	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Attack_Ranged);
 
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stat_MaxHealth);
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stat_MaxStamina);

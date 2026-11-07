@@ -263,6 +263,26 @@ public:
 	bool TryStartMeleeAttack();
 
 	/**
+	 * Start drawing the main hand's ranged weapon (ranged combat plan B3): the owner's check that there is an arrow
+	 * (UVCRangedAttackAbility::CanStartDraw; a toast says none), its own draw montage, and the ability's activation on the
+	 * server. Step 0 of the primary-action chain: a ranged weapon in hand takes the press, arrows or not; also callable
+	 * from Blueprint / debug commands and scripts (a client's own pawn in a networked PIE).
+	 * @return True when the main hand holds a ranged weapon (the chain stops)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Combat")
+	bool TryStartRangedAttack();
+
+	/**
+	 * Release a draw started by TryStartRangedAttack: the owner's release montage when the draw was long enough to shoot
+	 * (its draw stops otherwise), and the release sent to the server, which decides the shot. Nothing without a draw.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Combat")
+	void ReleaseRangedAttack();
+
+	/** @return True between TryStartRangedAttack and ReleaseRangedAttack on this machine */
+	bool IsDrawingRangedWeapon() const { return bDrawingRangedWeapon; }
+
+	/**
 	 * Plays an action's montage at once on this machine: the owning player's own dig, chop or place, at input.
 	 * Cosmetic; the server's path decides what happens.
 	 * @param Action The action
@@ -745,6 +765,10 @@ protected:
 
 	/** World time of the owner's last swing played at input (the server's rate limit, mirrored). */
 	double LastOwnSwingTime = -1.0;
+
+	/** A draw this machine started (TryStartRangedAttack) and its world time, for the owner's release montage. */
+	bool bDrawingRangedWeapon = false;
+	double OwnDrawStartTime = -1.0;
 
 	/** Equipment manager removed a worn-out item (authority): a burnt-out torch tells the owner. */
 	UFUNCTION()

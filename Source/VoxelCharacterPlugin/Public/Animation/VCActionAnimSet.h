@@ -22,6 +22,10 @@ enum class EVCAnimAction : uint8
 	HitReact,
 	Death,
 	Revive,
+	/** Drawing a bow and holding it drawn (ranged combat plan B3): its montage loops until the release or a stop. */
+	Draw,
+	/** Loosing the arrow. */
+	Release,
 };
 
 /** The side a hit came from, in the victim's gravity frame (the variant of a hit react or a death). */
@@ -122,6 +126,14 @@ public:
 	/** Getting up when revived. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UAnimMontage> Revive;
+
+	/** Drawing a bow and holding it drawn: the draw, then a loop held until the release (ranged combat plan B3). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UAnimMontage> Draw;
+
+	/** Loosing the arrow. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UAnimMontage> Release;
 
 	/**
 	 * The montage for an action.
