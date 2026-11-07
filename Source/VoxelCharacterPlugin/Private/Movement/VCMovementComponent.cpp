@@ -18,6 +18,9 @@
 #include "AbilitySystemInterface.h"
 #include "Combat/VCCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
+#if WITH_WORLD_WEATHER
+#include "WorldWeatherSubsystem.h"
+#endif
 
 namespace
 {
@@ -497,6 +500,10 @@ FVector UVCMovementComponent::ApplyWorldEdgePushBack(const FVoxelWorldBounds& Bo
 
 void UVCMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration)
 {
+	// The last tick's wind drift comes off before the braking and the friction, which would otherwise eat it (a standing
+	// pawn would never move); this tick's goes back on after them, below.
+	Velocity -= WindDrift;
+	WindDrift = FVector::ZeroVector;
 	Super::CalcVelocity(DeltaTime, Friction, bFluid, BrakingDeceleration);
 
 	// The current before the world's edge (WM-I5). Inside the movement simulation, so the client's prediction and the
@@ -507,6 +514,23 @@ void UVCMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bF
 		Velocity = ApplyWorldEdgePushBack(CachedWorldBounds, UpdatedComponent->GetComponentLocation(), Velocity, GetMaxSpeed(),
 			WorldEdgePushBackDistance, WorldEdgePushBackSpeed, Proximity);
 	}
+
+	// The wind's drift (the weather plan's P4), from the weather read with the terrain context; flying exempt as above.
+	if (WindPushFactor > 0.f && MovementMode != MOVE_Flying && MovementMode != MOVE_None && !CachedWeatherWind.IsNearlyZero())
+	{
+		WindDrift = ComputeWindDrift(CachedWeatherWind, WindPushFactor, CachedWeatherExposure);
+		Velocity += WindDrift;
+	}
+}
+
+FVector UVCMovementComponent::ComputeWindDrift(const FVector& Wind, float Factor, float Exposure)
+{
+	const float Open = FMath::Clamp(Exposure, 0.f, 1.f);
+	if (Factor <= 0.f || Open <= 0.f || Wind.IsNearlyZero())
+	{
+		return FVector::ZeroVector;
+	}
+	return Wind * (Factor * Open);
 }
 
 // ---------------------------------------------------------------------------
@@ -657,8 +681,20 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 
 	CurrentSurfaceType = CachedTerrainContext.SurfaceType;
 
-	// Apply surface friction to ground friction
-	GroundFriction = 8.f * CachedTerrainContext.FrictionMultiplier * VoxelSurfaceGripMultiplier;
+	// The weather at the pawn (P4): the wind for CalcVelocity's push, the exposure, the ground's wetness for the grip.
+#if WITH_WORLD_WEATHER
+	if (const UWorldWeatherSubsystem* Weather = UWorldWeatherSubsystem::Get(this))
+	{
+		const FWorldWeatherConditions Conditions = Weather->GetConditionsAt(Owner->GetActorLocation(), Owner);
+		CachedWeatherWind = Conditions.WindVector;
+		CachedWeatherExposure = Conditions.Exposure;
+		CachedWeatherWetness = Conditions.Wetness;
+	}
+#endif
+
+	// Apply surface friction to ground friction; wet ground keeps less of it (the weather's wetness, P4)
+	GroundFriction = 8.f * CachedTerrainContext.FrictionMultiplier * VoxelSurfaceGripMultiplier
+		* (1.f - FMath::Clamp(CachedWeatherWetness * WetGripFactor, 0.f, 0.95f));
 
 	// --- Swimming mode transition ---
 	// Not while flying: debug flight (vox.Fly) and the streaming benchmark's fly pawn cross the sea on purpose. Not while

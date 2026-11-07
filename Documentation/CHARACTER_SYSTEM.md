@@ -180,6 +180,15 @@ re-mesh).
   changed (`UVoxelEditManager::GetBroadcastEditBounds`, G55).
 - **The world's edge.** In the band of `WorldEdgePushBackDistance` before a bounded world's edge a current carries the
   pawn back (`ApplyWorldEdgePushBack`; `IsNearWorldEdge` drives the HUD hint).
+- **The weather** (the weather plan's P4, 2026-11-07; behind `WITH_WORLD_WEATHER`, so the plugin stays optional).
+  `UpdateVoxelTerrainContext` reads WorldWeatherPlugin's conditions at the pawn with the terrain context (every 0.1 s)
+  and keeps the wind, the exposure and the ground's wetness. `CalcVelocity` adds the wind's drift, `ComputeWindDrift`
+  (a pure static beside the edge's push-back: the wind x `WindPushFactor` (0.1) x the exposure, a current the pawn
+  rides whatever it does itself), after the braking and the friction, and takes the previous tick's off before them,
+  which would otherwise eat it: a standing pawn drifts at it, a pawn walking into the wind is slowed by it; flying is
+  exempt. The ground friction loses `Wetness x WetGripFactor` (0.4) of itself. Both run inside the predicted movement,
+  so the client and the server agree (the weather's sync point is the same on both). Test
+  `VoxelCharacter.Movement.WindPush`.
 - **Debug flight.** `SetDebugFlight` (QA tooling, not replicated): `MOVE_Flying` in the gravity frame, a climb along
   local up (`SetFlightClimb`), the altitude held otherwise (`GetFlightLevel`); the game module's `vox.Fly`, `vox.FlyTo`
   and `vox.TPLatLon ... hold=1` drive it.

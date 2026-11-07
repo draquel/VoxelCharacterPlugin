@@ -58,10 +58,19 @@ public class VoxelCharacterPlugin : ModuleRules
 		bool bHasInventory = Directory.Exists(Path.Combine(PluginsRoot, "ItemInventoryPlugin"));
 		bool bHasInteraction = Directory.Exists(Path.Combine(PluginsRoot, "InteractionPlugin"));
 		bool bHasEquipment = Directory.Exists(Path.Combine(PluginsRoot, "EquipmentPlugin"));
+		// The weather (the weather plan's P4): the wind's push and the wet grip read UWorldWeatherSubsystem; without the
+		// plugin the movement is as before.
+		bool bHasWeather = Directory.Exists(Path.Combine(PluginsRoot, "WorldWeatherPlugin"));
 
 		PublicDefinitions.Add("WITH_INVENTORY_PLUGIN=" + (bHasInventory ? "1" : "0"));
 		PublicDefinitions.Add("WITH_INTERACTION_PLUGIN=" + (bHasInteraction ? "1" : "0"));
 		PublicDefinitions.Add("WITH_EQUIPMENT_PLUGIN=" + (bHasEquipment ? "1" : "0"));
+		PublicDefinitions.Add("WITH_WORLD_WEATHER=" + (bHasWeather ? "1" : "0"));
+
+		if (bHasWeather)
+		{
+			PrivateDependencyModuleNames.Add("WorldWeather");
+		}
 
 		if (bHasInventory)
 		{

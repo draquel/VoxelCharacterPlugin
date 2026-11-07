@@ -56,6 +56,11 @@
 			"Name": "EquipmentPlugin",
 			"Enabled": true,
 			"Optional": true
+		},
+		{
+			"Name": "WorldWeatherPlugin",
+			"Enabled": true,
+			"Optional": true
 		}
 	]
 }
