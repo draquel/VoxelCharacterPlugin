@@ -191,10 +191,10 @@ re-mesh).
 - **The weather** (the weather plan's P4, 2026-11-07; behind `WITH_WORLD_WEATHER`, so the plugin stays optional).
   `UpdateVoxelTerrainContext` reads WorldWeatherPlugin's conditions at the pawn with the terrain context (every 0.1 s)
   and keeps the wind, the exposure and the ground's wetness. `CalcVelocity` adds the wind's drift, `ComputeWindDrift`
-  (a pure static beside the edge's push-back: the wind x `WindPushFactor` (0.1) x the exposure, a current the pawn
-  rides whatever it does itself), after the braking and the friction, and takes the previous tick's off before them,
-  which would otherwise eat it: a standing pawn drifts at it, a pawn walking into the wind is slowed by it; flying is
-  exempt. The ground friction loses `Wetness x WetGripFactor` (0.4) of itself. Both run inside the predicted movement,
+  (a pure static beside the edge's push-back: the wind x `WindPushFactor` (0.1) x the exposure, scaled by the pawn's
+  own speed over its max speed, or full in the air), after the braking and the friction, and takes the previous
+  tick's off before them, which would otherwise eat it: a standing pawn idles in any wind, a pawn walking into the
+  wind is slowed by it and one walking with it helped, a fall is carried; flying is exempt. The ground friction loses `Wetness x WetGripFactor` (0.4) of itself. Both run inside the predicted movement,
   so the client and the server agree (the weather's sync point is the same on both). Test
   `VoxelCharacter.Movement.WindPush`. The same read keeps the air temperature and a wet level (P5, `AdvanceWetLevel`):
   the rain reaching the pawn (its rate times the exposure, snow at a third) soaks it over `WetSoakSeconds` (12), a swim

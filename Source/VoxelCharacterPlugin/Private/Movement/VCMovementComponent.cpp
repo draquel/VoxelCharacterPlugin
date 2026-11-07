@@ -501,8 +501,8 @@ FVector UVCMovementComponent::ApplyWorldEdgePushBack(const FVoxelWorldBounds& Bo
 
 void UVCMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration)
 {
-	// The last tick's wind drift comes off before the braking and the friction, which would otherwise eat it (a standing
-	// pawn would never move); this tick's goes back on after them, below.
+	// The last tick's wind drift comes off before the braking and the friction, which would otherwise eat it; this
+	// tick's goes back on after them, below, scaled by the pawn's own motion.
 	Velocity -= WindDrift;
 	WindDrift = FVector::ZeroVector;
 	Super::CalcVelocity(DeltaTime, Friction, bFluid, BrakingDeceleration);
@@ -517,9 +517,10 @@ void UVCMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bF
 	}
 
 	// The wind's drift (the weather plan's P4), from the weather read with the terrain context; flying exempt as above.
+	// On the pawn's own motion and on a fall only: a standing pawn idles in any wind.
 	if (WindPushFactor > 0.f && MovementMode != MOVE_Flying && MovementMode != MOVE_None && !CachedWeatherWind.IsNearlyZero())
 	{
-		WindDrift = ComputeWindDrift(CachedWeatherWind, WindPushFactor, CachedWeatherExposure);
+		WindDrift = ComputeWindDrift(CachedWeatherWind, WindPushFactor, CachedWeatherExposure, static_cast<float>(Velocity.Size()), GetMaxSpeed(), IsFalling());
 		Velocity += WindDrift;
 	}
 }
@@ -543,14 +544,15 @@ float UVCMovementComponent::AdvanceWetLevel(float Level, float RateOnPawn, bool 
 	return FMath::Clamp(Level, 0.f, 1.f);
 }
 
-FVector UVCMovementComponent::ComputeWindDrift(const FVector& Wind, float Factor, float Exposure)
+FVector UVCMovementComponent::ComputeWindDrift(const FVector& Wind, float Factor, float Exposure, float OwnSpeed, float MaxSpeed, bool bAirborne)
 {
 	const float Open = FMath::Clamp(Exposure, 0.f, 1.f);
-	if (Factor <= 0.f || Open <= 0.f || Wind.IsNearlyZero())
+	const float Motion = bAirborne ? 1.f : FMath::Clamp(OwnSpeed / FMath::Max(MaxSpeed, 1.f), 0.f, 1.f);
+	if (Factor <= 0.f || Open <= 0.f || Motion <= 0.f || Wind.IsNearlyZero())
 	{
 		return FVector::ZeroVector;
 	}
-	return Wind * (Factor * Open);
+	return Wind * (Factor * Open * Motion);
 }
 
 // ---------------------------------------------------------------------------
