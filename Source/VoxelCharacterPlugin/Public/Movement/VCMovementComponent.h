@@ -196,6 +196,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0", ClampMax = "0.95"))
 	float WetGripFactor = 0.4f;
 
+	/**
+	 * Seconds in the air before the wind's full drift takes the pawn (a jump, a real drop): a floor lost for a frame or
+	 * two on rough voxel ground does not count, so an idle pawn stays put.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0"))
+	float WindAirborneDelay = 0.35f;
+
 	/** The wind at the pawn as last read (world uu/s, tangent to the local up; zero without the weather plugin). */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Weather")
 	FVector GetWeatherWind() const { return CachedWeatherWind; }
@@ -253,7 +260,7 @@ public:
 	 * @param Exposure  The pawn's exposure to the sky (0..1)
 	 * @param OwnSpeed  The pawn's own speed this tick (after the braking and the friction, before the drift), uu/s
 	 * @param MaxSpeed  The speed at which the drift is full (GetMaxSpeed)
-	 * @param bAirborne Falling: the full drift whatever the speed
+	 * @param bAirborne In the air past WindAirborneDelay: the full drift whatever the speed
 	 * @return The drift, world uu/s
 	 */
 	static FVector ComputeWindDrift(const FVector& Wind, float Factor, float Exposure, float OwnSpeed, float MaxSpeed, bool bAirborne);
@@ -498,6 +505,8 @@ protected:
 	double LastWeatherReadSeconds = -1.0;
 	/** The wind drift on the velocity since the last CalcVelocity (ComputeWindDrift), taken off before the next one's braking. */
 	FVector WindDrift = FVector::ZeroVector;
+	/** Seconds the pawn has been falling (0 on the ground): the full drift past WindAirborneDelay. */
+	float WindAirborneSeconds = 0.f;
 
 	/** Push-back band proximity, 0..1 (see GetWorldEdgeProximity). */
 	float WorldEdgeProximity = 0.f;

@@ -517,10 +517,13 @@ void UVCMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bF
 	}
 
 	// The wind's drift (the weather plan's P4), from the weather read with the terrain context; flying exempt as above.
-	// On the pawn's own motion and on a fall only: a standing pawn idles in any wind.
+	// On the pawn's own motion and on a sustained fall only (a floor lost for a frame on rough voxel ground is not a
+	// fall): a standing pawn idles in any wind.
+	WindAirborneSeconds = IsFalling() ? WindAirborneSeconds + FMath::Max(DeltaTime, 0.f) : 0.f;
 	if (WindPushFactor > 0.f && MovementMode != MOVE_Flying && MovementMode != MOVE_None && !CachedWeatherWind.IsNearlyZero())
 	{
-		WindDrift = ComputeWindDrift(CachedWeatherWind, WindPushFactor, CachedWeatherExposure, static_cast<float>(Velocity.Size()), GetMaxSpeed(), IsFalling());
+		WindDrift = ComputeWindDrift(CachedWeatherWind, WindPushFactor, CachedWeatherExposure, static_cast<float>(Velocity.Size()), GetMaxSpeed(),
+			WindAirborneSeconds >= WindAirborneDelay);
 		Velocity += WindDrift;
 	}
 }
