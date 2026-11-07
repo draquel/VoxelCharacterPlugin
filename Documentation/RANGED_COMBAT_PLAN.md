@@ -152,7 +152,7 @@ quivers), and the pack's own bow (`SM_Bow`, skeletal, its string a bone) and `SM
   no arrows no draw started and the toast showed. With a dedicated server and a client (the editor's play settings), the
   client's own primary action (`Input.+action IA_PrimaryAction`) activated the ability on the server, the release came
   in order, the server shot after its own measure of the draw and used an arrow, and the arrow stuck on both machines.
-  The client's arrow count stayed at 20 while the server's went to 19: G133, a framework replication bug (a stack's count
+  The client's arrow count stayed at 20 while the server's went to 19: G134, a framework replication bug (a stack's count
   changed in place is never sent), not the attack's. Python cannot drive a client's server RPCs (it calls every function
   under the editor's script guard, where an RPC runs locally); a key or action forced into the client's input can.
 
