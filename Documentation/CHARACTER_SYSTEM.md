@@ -24,8 +24,9 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Core | `AVCNPCCharacterBase` | NPC pawn with its own ASC and attribute sets, behaviour and temperament, a floating health bar (`UVCNPCHealthBarWidget`); implements `IVCAnimatedCharacter` |
 | Core | `UVCCharacterAttributeSet` | Health, Stamina, Breath (each with a max), MoveSpeedMultiplier, MiningSpeed, InteractionRange, IncomingDamage (meta) |
 | Core | `UVCAnimInstance`, `IVCAnimatedCharacter` | The anim instance of the player and the NPCs, every value in the gravity frame (Animation, below); the interface it reads a character's view mode, action set and combat state through |
+| Core | `UVCAnimLayerInstance` | The parent of a stance layer that aims or plays montages of its own (the bow's): the body's montages in the layer's slots, the body's aim and upper-body montage weight copied each update |
 | Animation | `UVCActionMontageComponent`, `UVCActionAnimSet`, `UVCAnimNotify_ActionHit` | The action montages of both character classes: the owner's at input, everyone else's by multicast, hit reacts, deaths and get-ups from the combat events; a set's montages per action; the moment an action lands |
-| Editor | `UVCAnimAuthoringLibrary` (`VoxelCharacterEditor`) | Anim layers, interfaces, graph nodes, pins and properties from Python, which the engine does not expose: `Scripts/setup_character_layers.py` builds the content with it |
+| Editor | `UVCAnimAuthoringLibrary` (`VoxelCharacterEditor`) | Anim layers, interfaces, graph nodes, pins and properties, a montage's sections and slot from Python, which the engine does not expose: `Scripts/setup_character_layers.py` builds the content with it |
 | Core | `UVCSettings` | Project Settings > Plugins > Voxel Character (CR4): `NPCHealthBars`, overridden by `vc.UI.NPCHealthBars` once set |
 | Core | `VCTypes.h`, `VCGameplayTags.h` | `EVCViewMode`, `EVCSurfaceType`, `EVCVoxelModificationType`, `EVCOutOfHealthPolicy`, `EVCNPCBehavior`, `EVCNPCTemperament`, `EVCRespawnPolicy`, `FVCTerrainContext`, `FVCEquipmentSocketMapping`, `FVCItemSnapshot`, `FVCProgressionStats`, `FVCPlayerSaveState`; the native tags |
 | Movement | `UVCMovementComponent` | Voxel-aware character movement (players and NPCs): terrain context, swimming, sprint, planet gravity, block steps, embed resolve, world-edge push-back, debug flight |
@@ -205,7 +206,12 @@ it reads through `IVCAnimatedCharacter` (`VCAnimatedCharacter.h`), which both ch
 - **Layers.** `ABP_VoxelCharacter` runs the layer `UpperBodyStance` of `ALI_VCCharacter` between its state machine and
   its slot, and implements it itself (the base pose through). An item's Equipment fragment links its stance layer on
   equip (`AnimLayerClass`, EquipmentPlugin's `LinkAnimClassLayers`): `ABP_VCLayer_SwordShield`, `_TwoHand` and `_Tool`
-  lay the set's idle over `spine_01` and below it. Montages play in the slot above, over the stance.
+  lay the set's idle over `spine_01` and below it. Montages play in the slot above, over the stance. `ABP_VCLayer_Bow`
+  (ranged combat plan B4) also aims: its parent `UVCAnimLayerInstance` plays the body's montages in the layer's own
+  slots (`bUseMainInstanceMontageEvaluationData`) and copies the body's `AimPitch` and `AimYaw` and its montage weight in
+  the `UpperBody` slot each update; the bow idle follows the view through the stand aim offset, the draw and the release
+  play in the `UpperBody` slot inside the layer (the upper body only, so the legs keep walking), and the drawn aim
+  offset on that slot, weighted by its montage, points the drawn bow where the view looks.
 - **Action montages.** `UVCActionMontageComponent` (on both character classes) plays an action from the
   `UVCActionAnimSet` of what the character holds: `ChooseAttack` steps through the set's combo within its window and
   picks the play rate that fits one swing into an attack's interval; `PlayActionLocal` plays on this machine (a dig or a
@@ -217,15 +223,19 @@ it reads through `IVCAnimatedCharacter` (`VCAnimatedCharacter.h`), which both ch
   limit mirrored); the server's ability sends it to the others and lands the sweep and the damage at the montage's hit
   time, the first `UVCAnimNotify_ActionHit` (`GetHitTime`; 40% of the length without one), and at once with no montage.
   Dig, place and chop: the owner at input, the others once the server accepted the edit or the chop. Use and placing an
-  item: everyone, from the server, since the server may refuse.
+  item: everyone, from the server, since the server may refuse. The bow's draw and release: as the melee attack (ranged
+  combat plan B3); while drawn in third person the body turns toward the view at the movement's rotation rate
+  (`SetFacesAim`: the controller's desired rotation instead of the movement's direction, upright in the gravity frame),
+  set by the owner at its draw and release and by the server's ranged attack at its start and end.
 - **Where the sets come from.** The player's are `UVCSettings::PlayerActionAnimSets` (Project Settings > Voxel
   Character, `Config/DefaultGame.ini`) unless its Blueprint lists its own; an NPC lists its own (none yet: its attacks
   land at once, as before).
 - **The content.** `Scripts/setup_character_layers.py` builds the interface, the layers, the montages (from the
-  template mannequin's, Sword & Shield's and GASP's sequences, a hit notify at the strike) and the four sets under
-  `/Game/CharacterAnimation` (a content pack), puts the layer into `ABP_VoxelCharacter` and tags the swords and the
-  pickaxes. Stand-ins (D51) until VanillaLoop's samples: the pickaxe digs with a two-handed strike and holds the
-  two-handed idle; nothing plays for placing and using.
+  template mannequin's, Sword & Shield's, Bow and Arrow's and GASP's sequences, a hit notify at the strike; the bow's
+  draw a raise, a pull and a held loop in sections, `UVCAnimAuthoringLibrary::AppendMontageSegment`) and the five sets
+  under `/Game/CharacterAnimation` (a content pack), puts the layer into `ABP_VoxelCharacter` and tags the swords, the
+  pickaxes and the bow. Stand-ins (D51) until VanillaLoop's samples: the pickaxe digs with a two-handed strike and holds the
+  two-handed idle; placing and using by hand (and with the bow) play the bow pack's pickup and potion.
 
 ## Camera
 

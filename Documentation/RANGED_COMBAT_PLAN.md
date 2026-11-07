@@ -1,7 +1,7 @@
 # Ranged Combat Plan: the Bow
 
-> **Agreed 2026-11-06: the user approved the plan as drafted, every decision as recommended (D52-D57, §6). B1-B3 done;
-> B4 next.**
+> **Agreed 2026-11-06: the user approved the plan as drafted, every decision as recommended (D52-D57, §6). B1-B4 done;
+> B5 next.**
 > Scope: a bow the player draws, aims and shoots, its
 > arrows as items, and the arrow's flight on a plane and on a planet. Owner: VoxelCharacterPlugin; one field each in
 > ItemInventoryPlugin and EquipmentPlugin; content and item data in the parent. It follows the character animation plan's
@@ -160,6 +160,39 @@ quivers), and the pack's own bow (`SM_Bow`, skeletal, its string a bone) and `SM
 - The Bow set and `ABP_VCLayer_Bow` (stance and aim offset) in `setup_character_layers.py`; the bow's montages; P3's
   Place and Use from the pack's pickup and potion.
 - PIE: draw, aim up and down, shoot the dummy in `VoxelDemo` and on `PlanetTest` (an arrow's arc toward the planet).
+
+**B4 result (2026-11-07; VoxelCharacterPlugin, the parent).**
+- `setup_character_layers.py` builds the Bow set from Essential Bow and Arrow: the stance `UE5_A_Idle`; the draw one
+  montage of three sections, the bow raised (`Aim_A_Begin`, 0.33 s), the string pulled (`Draw_A_Begin`, 0.5 s) and the
+  hold (`Draw_A_Loop`) looping until the release or a stop: full at 0.83 s against the bow's full draw of 1 s; the
+  release `Release_A` (1 s, the hand back to the bow, ready to nock); the bow's hurts (front, left, right), its fall from
+  standing and its get-up; the pickup and the potion as Place and Use, for the Bow set and for Unarmed (P3's gaps). No
+  reload: `Release_A` ends where the next draw starts. The draw and the release play in the slot `UpperBody`, which only
+  the bow's layer has, so the legs keep their locomotion.
+- `ABP_VCLayer_Bow`'s parent is a new `UVCAnimLayerInstance`: its slots play the body's montages
+  (`bUseMainInstanceMontageEvaluationData`; the engine leaves it off for a linked layer) and it copies the body's
+  `AimPitch`, `AimYaw` and `UpperBody` montage weight each update. Its graph: the idle through the stand aim offset
+  (`AO_Stand_A`), the `UpperBody` slot, the drawn aim offset (`AO_Aim_A`, its base the bow raised) on the slot weighted by
+  that montage, all over `spine_01` and below. The pack's `AO_Draw_A` names no base pose and swelled the upper body out of
+  shape on the body in PIE; `AO_Aim_A` does not. `UVCAnimAuthoringLibrary` gains `AppendMontageSegment` and
+  `SetMontageSlot` (Python reaches neither a montage's sections nor its slot); the slot is not registered with the pack's
+  skeleton, which stays unchanged (the montage falls in the default slot group, as every action's).
+- Feel: while drawn in third person the body turns toward the view (`AVCCharacterBase::SetFacesAim`: the movement's
+  controller-desired rotation at its rotation rate, which the engine keeps upright in a custom gravity frame), set by the
+  owner at its draw and release and by the server's ranged attack at its start and end, then back to facing where it
+  moves. Without it a draw with the view 90 degrees off the body twisted the drawn aim offset to its clamp.
+- Tests: `VoxelCharacter.Anim.LayerInstance` (the layer plays the body's montages; it copies the body's aim, none without
+  a body), `VoxelCharacter.Combat.Ranged.FacesAimWhileDrawn` (third person: facing the view while drawn, the movement's
+  direction after).
+- PIE in `VoxelDemo`: the draw raised, pulled and held the bow on the dummy, aimed level, 35 degrees up and 35 down with
+  the upper body following; the release loosed and returned to the idle; the arrow hit the dummy for 30 (a critical hit
+  at full draw). A draw with the body facing 90 degrees from the view turned the body onto the aim (`AimYaw` 0, the
+  montage weight 1 in the loop). Drawing while walking sideways: the legs strode, the upper body held the draw and the
+  body kept facing the aim. On `PlanetTest` (gravity across the world axes): the same draw upright in the local frame,
+  the dummy hit for 15; an arrow loosed 30 degrees up rose 5,200 uu above the shooter, its speed away from the centre
+  falling by about 880 uu/s each second, and came down to stick 337 m out on higher ground. Not checked: the draw and
+  the turn on a client in a networked session (the server's turn is the same code the owner runs, from the activation
+  the replication test already covers).
 
 ### B5: Closing
 - `CHARACTER_SYSTEM.md` (combat, animation, multiplayer), the console guide (`vox.Shoot`), the QA rows; this plan's

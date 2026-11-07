@@ -284,6 +284,15 @@ public:
 	bool IsDrawingRangedWeapon() const { return bDrawingRangedWeapon; }
 
 	/**
+	 * Turns the body toward the view while a bow is drawn (ranged combat plan B4): in third person the movement turns
+	 * the body toward the control rotation at its rotation rate instead of toward where it moves, in the gravity frame;
+	 * first person faces the view already. The owner calls it at its draw and its release, the ranged attack on the
+	 * server at its start and its end, so both turn the body alike.
+	 * @param bFaceAim Whether the body follows the view
+	 */
+	void SetFacesAim(bool bFaceAim);
+
+	/**
 	 * Plays an action's montage at once on this machine: the owning player's own dig, chop or place, at input.
 	 * Cosmetic; the server's path decides what happens.
 	 * @param Action The action

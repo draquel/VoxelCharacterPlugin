@@ -4,6 +4,8 @@
 #include "AnimationGraph.h"
 #include "AnimationGraphSchema.h"
 #include "Animation/AnimBlueprint.h"
+#include "Animation/AnimMontage.h"
+#include "Animation/AnimSequenceBase.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
@@ -381,4 +383,71 @@ FString UVCAnimAuthoringLibrary::GetGraphGuid(UBlueprint* Blueprint, FName Graph
 {
 	const UEdGraph* Graph = VCAnimAuthoring::FindGraph(Blueprint, GraphName);
 	return Graph ? Graph->GraphGuid.ToString() : FString();
+}
+
+bool UVCAnimAuthoringLibrary::AppendMontageSegment(UAnimMontage* Montage, UAnimSequenceBase* Sequence, FName SectionName, bool bLoopSection)
+{
+	if (!Montage || !Sequence || SectionName.IsNone() || Montage->SlotAnimTracks.Num() == 0 || Montage->CompositeSections.Num() == 0)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AppendMontageSegment: no montage, no sequence, no section name, or %s has no track"),
+			*GetNameSafe(Montage));
+		return false;
+	}
+	if (Montage->GetSectionIndex(SectionName) != INDEX_NONE)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AppendMontageSegment: %s already has a section %s"), *Montage->GetName(), *SectionName.ToString());
+		return false;
+	}
+	FAnimTrack& Track = Montage->SlotAnimTracks[0].AnimTrack;
+	const float Start = Track.GetLength();
+
+	// The section playing at the montage's end so far: the one the new section follows.
+	FName Previous = Montage->CompositeSections[0].SectionName;
+	float PreviousTime = -1.f;
+	for (const FCompositeSection& Section : Montage->CompositeSections)
+	{
+		if (Section.GetTime() < Start && Section.GetTime() > PreviousTime)
+		{
+			Previous = Section.SectionName;
+			PreviousTime = Section.GetTime();
+		}
+	}
+
+	Montage->Modify();
+	FAnimSegment Segment;
+	Segment.SetAnimReference(Sequence, /*bInitialize*/ true);
+	Segment.StartPos = Start;
+	Track.AnimSegments.Add(Segment);
+	Montage->SetCompositeLength(Track.GetLength());
+	if (Montage->AddAnimCompositeSection(SectionName, Start) == INDEX_NONE)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AppendMontageSegment: %s refused the section %s"), *Montage->GetName(), *SectionName.ToString());
+		return false;
+	}
+	// By name: adding a section may reorder them.
+	Montage->CompositeSections[Montage->GetSectionIndex(Previous)].NextSectionName = SectionName;
+	if (bLoopSection)
+	{
+		Montage->CompositeSections[Montage->GetSectionIndex(SectionName)].NextSectionName = SectionName;
+	}
+	Montage->UpdateLinkableElements();
+	Montage->PostEditChange();
+	Montage->MarkPackageDirty();
+	return true;
+}
+
+bool UVCAnimAuthoringLibrary::SetMontageSlot(UAnimMontage* Montage, FName SlotName)
+{
+	if (!Montage || SlotName.IsNone() || Montage->SlotAnimTracks.Num() == 0)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetMontageSlot: no montage, no slot name, or %s has no track"), *GetNameSafe(Montage));
+		return false;
+	}
+	// The slot is not registered with the skeleton (a content pack's asset, left unchanged): the layer's slot node
+	// registers it in memory when it is built or loaded, and the montage plays in the skeleton's default slot group.
+	Montage->Modify();
+	Montage->SlotAnimTracks[0].SlotName = SlotName;
+	Montage->PostEditChange();
+	Montage->MarkPackageDirty();
+	return true;
 }
