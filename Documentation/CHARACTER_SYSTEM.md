@@ -19,16 +19,18 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 |---|---|---|
 | Core | `AVCCharacterBase` | The player pawn: components, view mode, input, the primary-action chain, voxel edit targets, the terrain wait, leaving the world, surface gameplay. Implements `IAbilitySystemInterface` (a pass-through to the player state), `ICGFInventoryInterface`, `ICGFLightBearerInterface` and `IVCAnimatedCharacter` |
 | Core | `AVCPlayerController` | HUD and panels, the click-to-move item state machine, the voxel edit server path, gathering, chopping, rest and crafting RPCs, rotation in the gravity frame |
-| Core | `AVCPlayerState` | Hosts the ASC and both attribute sets; item snapshot across death, progression, rest point, save state |
-| Core | `AVCGameModeBase` | Respawn (`RespawnPolicy`, `RespawnDelay`), the corpse kept per player (`bKeepCorpse`), log-in / log-out events, save requests |
+| Core | `AVCPlayerState` | Hosts the ASC and both attribute sets; item snapshot across death, progression, rest point, save state; the player's appearance (replicated; the player's own choice saved) |
+| Core | `AVCGameModeBase` | Respawn (`RespawnPolicy`, `RespawnDelay`), the corpse kept per player (`bKeepCorpse`), log-in / log-out events, save requests; the players' appearance on its map (`PlayerAppearance`) |
 | Core | `AVCNPCCharacterBase` | NPC pawn with its own ASC and attribute sets, behaviour and temperament, a floating health bar (`UVCNPCHealthBarWidget`); implements `IVCAnimatedCharacter` |
 | Core | `UVCCharacterAttributeSet` | Health, Stamina, Breath (each with a max), MoveSpeedMultiplier, MiningSpeed, InteractionRange, IncomingDamage (meta) |
 | Core | `UVCAnimInstance`, `IVCAnimatedCharacter` | The anim instance of the player and the NPCs, every value in the gravity frame (Animation, below); the interface it reads a character's view mode, action set and combat state through |
 | Core | `UVCAnimLayerInstance` | The parent of a stance layer that aims or plays montages of its own (the bow's): the body's montages in the layer's slots, the body's aim and upper-body montage weight copied each update |
 | Animation | `UVCActionMontageComponent`, `UVCActionAnimSet`, `UVCAnimNotify_ActionHit` | The action montages of both character classes: the owner's at input, everyone else's by multicast, hit reacts, deaths and get-ups from the combat events; a set's montages per action; the moment an action lands |
+| Animation | `UVCCharacterAppearance`, `UVCAppearanceComponent` | A body as data (a mesh, or a MetaHuman's Blueprint whose parts dress it) and the component that dresses both character classes in one (Appearance, below) |
+| Animation | `FVCAnimNode_FootBoneIK` (its graph node `UVCAnimGraphNode_FootBoneIK` in `VoxelCharacterEditor`) | Foot placement on the foot bones, for a body without the Mannequin's `ik_foot` bones (a MetaHuman's) |
 | Animation | `UVCMotionMatchingAnimInstance`, `UVCGravityTrajectoryPredictor` (`VoxelCharacterAnimation`) | The player's motion matching: the parent of the Game Animation Sample's CMC AnimBP, which fills it from our pawn and does its world-Z arithmetic in the gravity frame; the trajectory predictor that turns about local up (Animation, below) |
 | Editor | `UVCAnimAuthoringLibrary` (`VoxelCharacterEditor`) | Anim layers, interfaces, graph nodes, pins and properties, a montage's sections and slot, copies of assets with their references among them, from Python, which the engine does not expose: `Scripts/setup_character_layers.py`, `setup_character_ik.py` and `setup_character_locomotion.py` build the content with it |
-| Core | `UVCSettings` | Project Settings > Plugins > Voxel Character (CR4): `NPCHealthBars`, overridden by `vc.UI.NPCHealthBars` once set; the player's action sets and motion-matching AnimBP |
+| Core | `UVCSettings` | Project Settings > Plugins > Voxel Character (CR4): `NPCHealthBars`, overridden by `vc.UI.NPCHealthBars` once set; the player's action sets, motion-matching AnimBP and appearances |
 | Core | `VCTypes.h`, `VCGameplayTags.h` | `EVCViewMode`, `EVCSurfaceType`, `EVCVoxelModificationType`, `EVCOutOfHealthPolicy`, `EVCNPCBehavior`, `EVCNPCTemperament`, `EVCRespawnPolicy`, `FVCTerrainContext`, `FVCEquipmentSocketMapping`, `FVCItemSnapshot`, `FVCProgressionStats`, `FVCPlayerSaveState`; the native tags |
 | Movement | `UVCMovementComponent` | Voxel-aware character movement (players and NPCs): terrain context, swimming, sprint, planet gravity, block steps, embed resolve, world-edge push-back, debug flight |
 | Movement | `FVCGravityFrame` | Conversions between world space and the gravity frame |
@@ -298,6 +300,15 @@ it reads through `IVCAnimatedCharacter` (`VCAnimatedCharacter.h`), which both ch
     the Graph speed mode (a foot plants when its ball stops in the pose; our clips carry no contact curves) and traces
     along the mesh's own down, so it plants on a planet as on a plane; the pelvis drops at most 50 uu, so one foot on a
     75 uu block step bends that leg instead of crouching the body.
+  - Feet on a body without `ik_foot` bones (a MetaHuman's; the engine's node skips there, P6): `FVCAnimNode_FootBoneIK`
+    after the leg IK, weighted by `FootBoneIKAlpha` (`FootIKAlpha` on such a body, 0 on one with the bones, so no body
+    is placed twice). Each foot traces the ground under it along the mesh's own down (a small sphere sweep on the
+    animation worker, as the engine's node traces), the pelvis drops to the lowest foot's ground (at most
+    `MaxPelvisDrop`, 50), each leg reaches its ground by two-bone IK from the animated pose (the lengths from that pose,
+    so the shin never stretches) and a foot near the ground tilts to its normal (at most 30 degrees); the heights ease at
+    `InterpSpeed`. On a 28-degree slope in `VoxelDemo` Kellan's feet stand 11 and 33 uu over the ground without it and
+    0.6 and 1.4 with it; on `Review_Cubic`'s 75 uu block step the upper leg bends and the lower foot reaches down 52 uu,
+    25 short of the lower block (his legs are short for the 50 uu pelvis drop, where the low-poly body's reach; G145).
   - Pace: past `LocomotionReferenceSpeed` (600, the blend space's top) the clips play at the speed over it (1.6 at a
     sprint), so the feet keep pace with the ground. Stride warping measured nothing here (the jog's feet are near the
     legs' reach, where it clamps) and orientation warping is not needed (eight directions).
@@ -341,6 +352,52 @@ it reads through `IVCAnimatedCharacter` (`VCAnimatedCharacter.h`), which both ch
   under `/Game/CharacterAnimation` (a content pack), puts the layer into `ABP_VoxelCharacter` and tags the swords, the
   pickaxes and the bow. Stand-ins (D51) until VanillaLoop's samples: the pickaxe digs with a two-handed strike and holds the
   two-handed idle; placing and using by hand (and with the bow) play the bow pack's pickup and potion.
+
+## Appearance
+
+A character's body is data (the plan's P6): `UVCCharacterAppearance` (`Animation/VCCharacterAppearance.h`, a primary
+data asset) names the mesh the character animates (`BodyMesh`), an actor whose skeletal meshes dress it
+(`PartsActorClass`, a MetaHuman's Blueprint) and its component that lends the body (`PartsBodyComponent`), the parts
+that animate themselves (`PartsWithOwnAnimation`), an anim class (`AnimClass`, else
+`UVCSettings::PlayerLocomotionAnimClass`) and whether the body has the Mannequin's `ik_foot` bones
+(`bHasIKFootBones`). Nothing links to the MetaHuman modules: a MetaHuman arrives as content.
+
+- **Dressing.** `UVCAppearanceComponent` ("Appearance", on both character classes) applies one. The character's `Mesh`
+  stays the animated mesh and takes the body's mesh and materials. The parts actor is spawned (transient, without
+  collision, owned by the character), its body component hidden and its other skeletal meshes attached to the `Mesh`:
+  they follow it by leader pose, except the parts in `PartsWithOwnAnimation`, which run their own AnimBP on the new
+  parent (Kellan's face copies the head and runs RigLogic, his grooms on it; his hoodie's post-process AnimBP copies the
+  body's pose and simulates the drawstrings). A null appearance gives the class's own body and materials back. In first
+  person the parts are hidden with the mesh.
+- **Which body.** The project's choice, never the plugin's (D43): `UVCSettings::DefaultPlayerAppearance` and
+  `PlayerAppearanceByMeshing` (one per world meshing mode), a game mode's `PlayerAppearance` for its map, and the
+  player's own choice. `UVCAppearanceComponent::PickAppearance` takes the player's choice, then the game mode's, then
+  the world meshing mode's, then the default; none at all is the Blueprint's own body. This project: Kellan in smooth
+  worlds (Marching Cubes and Dual Contouring), the low-poly body in cubic ones (`Config/DefaultGame.ini`). An NPC names
+  its own (`AVCNPCCharacterBase::Appearance`).
+- **The player's.** The server resolves it (`AVCPlayerState::ResolveAppearance`: when the pawn is possessed, at
+  BeginPlay for a pawn possessed before play began, since the world's meshing mode is known only then, and when the
+  save loads) and replicates it from the player state (`Appearance`, `OnAppearanceChanged`); every machine dresses the
+  pawn, swaps the anim class and links the held items' layers again. `SetChosenAppearance` (server) sets the player's
+  choice, saved in `FVCPlayerSaveState::ChosenAppearance`; a save without one takes the rule.
+- **A dedicated server** spawns no parts and draws nothing: the body is the appearance's `BodyMesh`, else the mesh of
+  the parts class's own body component (read from the class), so the server animates the skeleton its clients do.
+- **Outfit physics** falls along the movement's gravity: each tick while there are any, the component points the
+  gravity of every rigid-body node in the worn meshes' anim and post-process instances, and of their cloth, along the
+  movement's. The engine's take world Z, so at a planet's equator the hoodie's drawstrings stood out sideways; now they
+  hang toward the planet's centre.
+- **Sockets.** None: equipment attaches to the `hand_r`, `hand_l`, `head` and `spine_03` bones, which the MetaHuman
+  skeleton has and orients as the Mannequin does (the sword sits in Kellan's hand as in the low-poly body's).
+- **Cost** (one player, in-editor PIE). Standing, the CSV profiler: Kellan adds 3.0 to 3.7 ms of game thread a frame
+  (11.5 against 8.5 ms at `PlanetTest`'s equator, 17.4 against 13.7 in `VoxelDemo`) and 0.2 to 0.7 ms of GPU. Most of
+  it is animation-worker time the game thread waits for at the frame's end: the body's post-process AnimBP (the
+  MetaHuman's corrective pose drivers, 2.3 ms), the face's RigLogic (0.9 ms), the hoodie's simulation (0.6 ms).
+  `voxel.Bench.Run`'s `VoxelDemo` chord, three runs each, gives the frame's median 1 to 3 ms above the low-poly
+  body's. The body's correctives are the one large item: a project that does without them sets the mesh's
+  `bDisablePostProcessBlueprint` (no setting here yet).
+- `vc.Appearance [name|path|rule]` sets every player's choice on the server (an appearance the settings name, by its
+  name, or a path; `rule` clears it; no argument lists them). `Scripts/setup_character_appearances.py` builds
+  `DA_VCAppearance_LowPoly` and `DA_VCAppearance_Kellan` (`/Game/CharacterAnimation/Appearances`).
 
 ## Camera
 
@@ -637,6 +694,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 | Progression | Server | `Progression` on the player state |
 | View mode | The local player's machine | Not replicated (G87); other machines draw third person |
 | Action set | Server (the equipment) | Derived on every machine from the replicated equipment slots |
+| Appearance | Server (`AVCPlayerState::ResolveAppearance`: the player's choice, the game mode's, the settings') | `Appearance` on the player state; every machine dresses the pawn; a dedicated server sets the body mesh only |
 | Action montages | The owner at input; the server for what it accepted | One unreliable multicast, skipped by the owner for its own actions (D49); the melee damage on the server at the montage's hit time; a draw let go too early stopped by a reliable multicast |
 | The bow's draw and shot | Server (`UVCRangedAttackAbility`: the draw's time, the arrow used, the spawn) | The activation and the input release over the ability system component, in order; the owner's montages at input, the others' from the server |
 | Arrows | Server (spawned there, no client prediction, D54) | A replicated actor: its flight, mesh and stuck state; hits and damage on the server |

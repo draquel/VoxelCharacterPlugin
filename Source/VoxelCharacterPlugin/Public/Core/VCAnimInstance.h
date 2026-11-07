@@ -9,6 +9,7 @@
 #include "VCAnimInstance.generated.h"
 
 class UVCActionMontageComponent;
+class UVCAppearanceComponent;
 
 /**
  * What UVCAnimInstance reads from its character on the game thread, every vector in world space. The rest of the update
@@ -76,6 +77,12 @@ struct FVCAnimInput
 	/** The held action set's off-hand grip (UVCActionAnimSet::bOffHandIK, OffHandGrip): the off wrist in hand_r's space. */
 	bool bOffHandIK = false;
 	FVector OffHandGrip = FVector::ZeroVector;
+
+	/**
+	 * The worn body has no ik_foot bones (UVCAppearanceComponent::HasIKFootBones false: a MetaHuman's), so its feet plant
+	 * through the foot bones (FVCAnimNode_FootBoneIK).
+	 */
+	bool bFootBonesOnly = false;
 
 	/** The IK and pace switches (vc.Anim.FootIK, SprintPace, LookAt, HandIK), read on the game thread. */
 	bool bFootIKEnabled = true;
@@ -261,6 +268,13 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float FootIKAlpha = 0.f;
 
+	/**
+	 * How far the foot-bone placement (FVCAnimNode_FootBoneIK) applies: FootIKAlpha on a body without ik_foot bones (a
+	 * MetaHuman's), else 0, so no body is placed twice (character animation P6).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float FootBoneIKAlpha = 0.f;
+
 	/** The walk/run clips' play rate: ComputeLocomotionPlayRate on the ground, 1 otherwise (vc.Anim.SprintPace). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float LocomotionPlayRate = 1.f;
@@ -344,6 +358,9 @@ private:
 
 	/** The character's montage component (its held action set), found once. */
 	mutable TWeakObjectPtr<const UVCActionMontageComponent> CachedMontages;
+
+	/** The character's appearance component (whether its body has ik_foot bones), found once. */
+	mutable TWeakObjectPtr<const UVCAppearanceComponent> CachedAppearance;
 
 	/** vc.Anim.Debug: the look-at target and the IK values drawn over the character (game thread). */
 	void DrawDebug() const;

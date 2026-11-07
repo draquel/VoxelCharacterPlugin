@@ -4,10 +4,12 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
+#include "VoxelCoreTypes.h"
 #include "VCSettings.generated.h"
 
 class UAnimInstance;
 class UVCActionAnimSet;
+class UVCCharacterAppearance;
 
 /**
  * The character plugin's project-wide settings (Project Settings > Plugins > Voxel Character; code review CR4, the plan's
@@ -42,4 +44,18 @@ public:
 	 */
 	UPROPERTY(config, EditAnywhere, Category = "Animation")
 	TSoftClassPtr<UAnimInstance> PlayerLocomotionAnimClass;
+
+	/**
+	 * The player's body where nothing more particular names one (character animation P6): the project's choice, by its
+	 * style. Empty: the player Blueprint's own body. A game mode's PlayerAppearance and the player's own choice come first.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Appearance")
+	TSoftObjectPtr<UVCCharacterAppearance> DefaultPlayerAppearance;
+
+	/**
+	 * The player's body by the voxel world's meshing mode, over DefaultPlayerAppearance (this project: a MetaHuman in
+	 * smooth worlds, the low-poly body in cubic ones). A mode not listed takes the default.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Appearance")
+	TMap<EMeshingMode, TSoftObjectPtr<UVCCharacterAppearance>> PlayerAppearanceByMeshing;
 };

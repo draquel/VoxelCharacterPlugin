@@ -22,6 +22,8 @@ class UVoxelWorldConfiguration;
 class UVCCombatComponent;
 class UVCBlockInteractionComponent;
 class UVCActionMontageComponent;
+class UVCAppearanceComponent;
+class UVCCharacterAppearance;
 class UVCUnderwaterPostProcess;
 enum class EVCAnimAction : uint8;
 struct FInputActionValue;
@@ -199,6 +201,10 @@ public:
 	/** Plays the action montages: the owning player's at input, everyone else's by multicast (character animation P3). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UVCActionMontageComponent> ActionMontages;
+
+	/** Dresses the mesh in the player state's appearance (character animation P6). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UVCAppearanceComponent> AppearanceComponent;
 
 	/**
 	 * Cubic worlds (world modes review §22): the block highlight, the placement preview and timed block breaking (the
@@ -827,6 +833,19 @@ protected:
 
 	/** Links the equipped items' anim layers again (after the mesh's anim class changed). */
 	void RelinkEquipmentAnimLayers();
+
+	/**
+	 * Wears the player state's appearance (character animation P6), then the anim class it plays, the items' layers again
+	 * and the first-person visibility. Nothing to do when it already wears it.
+	 */
+	void ApplyPlayerAppearance();
+
+	/** The player state's appearance changed (resolved on the server, replicated to clients). */
+	UFUNCTION()
+	void HandleAppearanceChanged();
+
+	/** Whether ApplyPlayerAppearance has dressed the mesh once (the first time applies even the class's own body). */
+	bool bAppearanceApplied = false;
 
 	/** The mesh's anim class from the Blueprint, before ApplyLocomotionAnimClass first ran (vc.Anim.MotionMatching 0 plays it). */
 	UPROPERTY(Transient)

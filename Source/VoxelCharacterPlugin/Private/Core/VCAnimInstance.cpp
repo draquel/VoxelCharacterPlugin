@@ -5,6 +5,7 @@
 #include "Core/VCGameplayTags.h"
 #include "Animation/VCActionAnimSet.h"
 #include "Animation/VCActionMontageComponent.h"
+#include "Animation/VCAppearanceComponent.h"
 #include "Combat/VCCombatComponent.h"
 #include "Interfaces/CGFDamageableInterface.h"
 #include "Movement/VCMovementComponent.h"
@@ -202,6 +203,12 @@ bool UVCAnimInstance::GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) co
 		OutInput.OffHandGrip = Set->OffHandGrip;
 	}
 
+	if (!CachedAppearance.IsValid())
+	{
+		CachedAppearance = Character->FindComponentByClass<UVCAppearanceComponent>();
+	}
+	OutInput.bFootBonesOnly = CachedAppearance.IsValid() && !CachedAppearance->HasIKFootBones();
+
 	OutInput.bFootIKEnabled = CVarAnimFootIK.GetValueOnGameThread() != 0;
 	OutInput.bSprintPaceEnabled = CVarAnimSprintPace.GetValueOnGameThread() != 0;
 	OutInput.bLookAtEnabled = CVarAnimLookAt.GetValueOnGameThread() != 0;
@@ -377,6 +384,7 @@ void UVCAnimInstance::ComputeValues(const FVCAnimInput& Input)
 	};
 	const bool bAble = !Input.bDead && !Input.bDowned;
 	FootIKAlpha = Ease(FootIKAlpha, Input.bFootIKEnabled && bAble && Input.bOnGround && !Input.bSwimming && !Input.bFlying);
+	FootBoneIKAlpha = Input.bFootBonesOnly ? FootIKAlpha : 0.f;
 	LocomotionPlayRate = Input.bSprintPaceEnabled && Input.bOnGround ? ComputeLocomotionPlayRate(Speed, LocomotionReferenceSpeed) : 1.f;
 
 	// The look-at fades for a target behind the body; the node itself clamps how far the head turns.

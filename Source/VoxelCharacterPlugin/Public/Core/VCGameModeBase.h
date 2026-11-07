@@ -15,6 +15,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCPlayerLoggingOut, AVCPlayerStat
 /** A player asked to save the world (the pause menu's Save; QA R20). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCSaveRequested, AController*, RequestedBy);
 
+class UVCCharacterAppearance;
+
 /**
  * Game mode base that owns player respawn for the voxel character.
  *
@@ -73,6 +75,13 @@ public:
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Respawn")
 	bool bKeepCorpse = true;
+
+	/**
+	 * The body every player wears in this game mode's maps, over the project settings' (character animation P6); a
+	 * player's own choice still comes first. Empty: the settings decide.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Appearance")
+	TSoftObjectPtr<UVCCharacterAppearance> PlayerAppearance;
 
 	/**
 	 * Called by the dying pawn on authority. Schedules the respawn.

@@ -28,7 +28,7 @@
 // - The action set: Unarmed with nothing held, Tool for an item without a set, the item's own set otherwise.
 // - The gather from a spawned character on a tilted frame: gravity, velocity, the ground below while falling.
 // - The aiming stance layer reads the body's aim (ranged combat plan B4).
-// - The IK and pace values (character animation P4).
+// - The IK and pace values (character animation P4), and the foot-bone placement's weight (P6).
 // ---------------------------------------------------------------------------
 
 namespace VCAnimTestHelpers
@@ -555,6 +555,12 @@ bool FVCAnim_IKValues::RunTest(const FString& Parameters)
 	UVCAnimInstance* Anim = NewAnimInstance();
 	Settle(Anim, Ground);
 	TestEqual(TEXT("On the ground: foot IK on"), Anim->FootIKAlpha, 1.f);
+	TestEqual(TEXT("A body with ik_foot bones: no foot-bone placement"), Anim->FootBoneIKAlpha, 0.f);
+	FVCAnimInput FootBones = Ground;
+	FootBones.bFootBonesOnly = true;
+	Settle(Anim, FootBones);
+	TestEqual(TEXT("A body without them (a MetaHuman's): the foot-bone placement at the foot IK's weight"), Anim->FootBoneIKAlpha, 1.f);
+	Settle(Anim, Ground);
 	TestEqual(TEXT("A target ahead: the head looks"), Anim->LookAtAlpha, 1.f);
 	TestEqual(TEXT("The look-at's location is the target"), Anim->LookAtLocation, Ground.LookTarget);
 	TestEqual(TEXT("No two-handed set: no hand IK"), Anim->HandIKAlpha, 0.f);

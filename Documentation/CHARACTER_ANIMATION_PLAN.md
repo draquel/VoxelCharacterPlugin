@@ -1,7 +1,7 @@
 # Character Animation Plan
 
-> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0-P5
-> done; P6 next.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
+> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0-P6
+> done; P7 next.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
 > VoxelCharacterPlugin; content in VoxelWorldPOI's NPC tables, EquipmentPlugin's item data and the Blender pipeline.
 > Terms: `Documentation/GLOSSARY.md` at the project root; the decisions' numbers are from its `FINDINGS.md`.
 
@@ -539,6 +539,58 @@ Animation.
 - Done when: the player plays as a MetaHuman and as the low-poly body, switched by data, on a listen server and a
   dedicated server; `voxel.Bench.Run` shows the MetaHuman's frame cost against today's body.
 
+**P6 result (2026-11-07): done.** `CHARACTER_SYSTEM.md` "Appearance" has the rules.
+
+- `UVCCharacterAppearance` holds the body mesh, the parts actor (a MetaHuman's Blueprint) and its body component, the
+  parts that animate themselves, the anim class and whether the body has the Mannequin's `ik_foot` bones.
+  `UVCAppearanceComponent` dresses both character classes in one. What the first bullet listed and P6 did not need: the
+  physics asset comes with the mesh; S2 played GASP's set on the body directly, so there is no retarget mode; socket
+  overrides were not needed (equipment attaches to bones the MetaHuman skeleton has, oriented as the Mannequin's); LOD
+  and budget settings are P7's, with the NPCs.
+- D43, the default look, decided by the user after S2: for this project's demos a MetaHuman in smooth worlds and the
+  low-poly body in cubic ones; for the plugins it is the project's data. `UVCSettings` names a default and one per
+  world meshing mode, a game mode may name one for its map, and the player's own choice (saved) comes first;
+  `Config/DefaultGame.ini` names Kellan for Marching Cubes and Dual Contouring and the low-poly body for Cubic and by
+  default. `vc.Appearance` switches it live.
+- The player's appearance is resolved on the server and replicated from the player state; the choice is saved in
+  `FVCPlayerSaveState::ChosenAppearance`. A pawn possessed before play began resolves at BeginPlay: the world's meshing
+  mode is known only once the voxel world has begun.
+- Multiplayer (PIE in one process, `VoxelDemo`): a dedicated server with one and with two clients, a listen server with
+  one. Every machine that draws dresses every player, its own and the others, in Kellan with his parts and motion
+  matching; the dedicated server animates Kellan's body alone, on `ABP_VoxelCharacter`; `vc.Appearance LowPoly` and
+  `rule` on the server switch every machine both ways. A dedicated server took the body from the parts actor, which it
+  does not spawn, so it kept the low-poly body at first; it reads the parts class's body component now. The first
+  dedicated-server run found G144 (VoxelWorlds: every world's biome lookup made under one name, so a second world in one
+  process replaced the first's while it was held and the editor stopped on the engine's check); fixed here, with a
+  test.
+- Feet: a MetaHuman body has no `ik_foot` bones, so the engine's foot placement skips it.
+  `FVCAnimNode_FootBoneIK` places the feet through the foot bones (a trace per foot along the mesh's down, the pelvis
+  to the lower foot, two-bone IK from the animated pose, the foot tilted to the ground); both AnimBPs run it after their
+  leg IK, weighted by `FootBoneIKAlpha`. On a 28-degree slope in `VoxelDemo` Kellan's feet stand 11 and 33 uu over the
+  ground without it and 0.6 and 1.4 uu with it. On `Review_Cubic`'s 75 uu block step the upper leg bends and the lower
+  foot reaches down 52 uu, 25 short of the lower block: Kellan's legs are short for the 50 uu pelvis drop, where the
+  low-poly body's reach (a MetaHuman is not this project's cubic body; G145).
+- Outfit physics: Kellan's hoodie runs its post-process AnimBP, which copies the body's pose (Copy Pose From Mesh) and
+  simulates the drawstrings in a rigid-body node; under leader pose it never ran. The component points every rigid-body
+  node's gravity, and any cloth's, along the movement's each tick: at `PlanetTest`'s equator the strings hang toward
+  the planet's centre, where S2 saw them stand out sideways.
+- What a MetaHuman needs in the project: RigLogic, HairStrands, LiveLink and LiveLinkControlRig, and the three
+  renderer settings in `DefaultEngine.ini`; `Scripts/setup_character_appearances.py` builds the two appearances.
+- Cost for one player, in-editor PIE on a quiet machine. `voxel.Bench.Run`'s `VoxelDemo` chord (1,500 uu/s over
+  40,000 uu), Kellan and the low-poly body interleaved, three runs each: with the hoodie under leader pose the frame's
+  median was 29.3 against 26.3 ms and its P95 47.4 against 44.2 ms (the game thread 29.2 against 26.3, the GPU 5.97
+  against 5.70); with the hoodie simulating, in a later session, 18.4 against 17.4 ms (the game thread 18.4 against
+  16.5, the GPU 5.40 against 5.21), the P95s inside the low-poly runs' spread (25.5 to 36.0 ms). Standing, the CSV
+  profiler: 3.0 to 3.7 ms more game thread a frame and 0.2 to 0.7 ms more GPU, most of it animation-worker time the
+  game thread waits for: the body's post-process AnimBP (the MetaHuman's corrective pose drivers) 2.3 ms, the face's
+  RigLogic 0.9 ms (both measured by switching each off), the hoodie's simulation 0.6 ms. The correctives are the one
+  large item, a project's choice to keep (P7's budget does not cover the player).
+- Tests: `VoxelCharacter.Appearance.*` (the pick order, the save round trip, dressing and undressing, the foot IK's
+  pelvis drop and tilt) and `VoxelCharacter.Anim.IKValues`' foot-bone weight; `VoxelWorlds.Rendering.BiomeLookup.TwoWorlds`
+  (G144).
+- Not done: a character-creation screen (out of scope); first person keeps the arms mesh (D48), the parts hidden from
+  the owner with the body; no NPC wears an appearance yet (P7).
+
 ### P7: NPC bodies and the budget (content, VoxelCharacterPlugin config, VoxelWorldPOI tables)
 
 - The dungeon skeleton skinned to the Mannequin skeleton, sharing the player's layers and action sets.
@@ -579,7 +631,7 @@ D44 is (a); S4 found a cheaper way than D50's (a), and the user took it: (a')).
 
 | ID | Decision | Options | Decided |
 |---|---|---|---|
-| D43 | MetaHumans' role | (a) every humanoid; (b) one supported body type, the default look decided after S2; (c) stylised only | **(b)**: the architecture does not bet on it; the art direction is yours once S2 shows one in the world |
+| D43 | MetaHumans' role | (a) every humanoid; (b) one supported body type, the default look decided after S2; (c) stylised only | **(b)**: the architecture does not bet on it; the art direction is yours once S2 shows one in the world. The default look (the user, 2026-11-07): a MetaHuman in smooth worlds and the low-poly body in cubic ones for this project's demos; for the plugins the project's data (P6) |
 | D44 | Player locomotion | (a) motion matching (GASP); (b) state machine with blend spaces | **(a) if S1 passes**, else (b); NPCs (b) either way |
 | D45 | Code placement | (a) a new module `VoxelCharacterAnimation`; (b) the deps in the core module | **(a)** |
 | D46 | Content home | (a) untracked pack folders in `content_packs.txt` (`CharacterAnimation`, GASP's content, `MetaHumans`; the names as D50 left them); (b) tracked under LFS | **(a)**, the existing policy |

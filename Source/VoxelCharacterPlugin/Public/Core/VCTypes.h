@@ -276,6 +276,10 @@ struct VOXELCHARACTERPLUGIN_API FVCPlayerSaveState
 
 	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
 	float Stamina = 0.f;
+
+	/** The body the player chose (AVCPlayerState::SetChosenAppearance; character animation P6); empty: the rules decide. */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	FSoftObjectPath ChosenAppearance;
 };
 
 /** The carried light changed (feature 7): lit / dark, fuel seconds left and capacity (0 / 0 when it needs no fuel). */

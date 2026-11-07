@@ -12,6 +12,8 @@
 #include "Combat/VCMeleeAttackAbility.h"
 #include "Combat/VCRangedAttackAbility.h"
 #include "Animation/VCActionMontageComponent.h"
+#include "Animation/VCAppearanceComponent.h"
+#include "Animation/VCCharacterAppearance.h"
 #include "Editing/VCBlockInteractionComponent.h"
 #include "Utilities/CGFCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
@@ -212,6 +214,7 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 	// --- Combat ---
 	CombatComponent = CreateDefaultSubobject<UVCCombatComponent>(TEXT("CombatComponent"));
 	ActionMontages = CreateDefaultSubobject<UVCActionMontageComponent>(TEXT("ActionMontages"));
+	AppearanceComponent = CreateDefaultSubobject<UVCAppearanceComponent>(TEXT("Appearance"));
 	CombatComponent->FactionTag = CGFGameplayTags::Faction_Player;
 
 	// --- Block feedback and timed breaking (cubic worlds) ---
@@ -299,6 +302,17 @@ void AVCCharacterBase::BeginPlay()
 	Super::BeginPlay();
 	UpdateMeshVisibility();
 	ApplyLocomotionAnimClass();
+
+	// The body, once the voxel world is up (a pawn possessed before play began; a later one does it at possession)
+	if (AVCPlayerState* VCPS = GetPlayerState<AVCPlayerState>())
+	{
+		VCPS->OnAppearanceChanged.AddUniqueDynamic(this, &AVCCharacterBase::HandleAppearanceChanged);
+		if (HasAuthority())
+		{
+			VCPS->ResolveAppearance();
+		}
+		ApplyPlayerAppearance();
+	}
 
 	// --- Bind integration delegates ---
 
@@ -634,6 +648,18 @@ void AVCCharacterBase::PossessedBy(AController* NewController)
 			}
 		}
 	}
+
+	// The body: the server resolves the player's appearance (it replicates to the clients) and wears it. A pawn possessed
+	// before play begins (the first spawn of a PIE session) waits for BeginPlay: the voxel world's meshing mode is known then.
+	if (AVCPlayerState* VCPS = GetPlayerState<AVCPlayerState>())
+	{
+		VCPS->OnAppearanceChanged.AddUniqueDynamic(this, &AVCCharacterBase::HandleAppearanceChanged);
+		if (HasActorBegunPlay())
+		{
+			VCPS->ResolveAppearance();
+			ApplyPlayerAppearance();
+		}
+	}
 }
 
 void AVCCharacterBase::NotifyControllerChanged()
@@ -682,7 +708,40 @@ void AVCCharacterBase::OnRep_PlayerState()
 				CombatComponent->InitializeWithAbilitySystem(ASC);
 			}
 		}
+
+		// The body the server resolved, now and whenever it changes
+		PS->OnAppearanceChanged.AddUniqueDynamic(this, &AVCCharacterBase::HandleAppearanceChanged);
+		ApplyPlayerAppearance();
 	}
+}
+
+void AVCCharacterBase::HandleAppearanceChanged()
+{
+	ApplyPlayerAppearance();
+}
+
+void AVCCharacterBase::ApplyPlayerAppearance()
+{
+	const AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
+	if (!PS || !AppearanceComponent)
+	{
+		return;
+	}
+	const UVCCharacterAppearance* Wanted = PS->GetAppearance().LoadSynchronous();
+	if (bAppearanceApplied && AppearanceComponent->GetAppearance() == Wanted)
+	{
+		return;
+	}
+	if (!PS->GetAppearance().IsNull() && !Wanted)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("%s: the appearance %s does not load (Scripts/setup_character_appearances.py builds it)"),
+			*GetName(), *PS->GetAppearance().ToString());
+	}
+	AppearanceComponent->ApplyAppearance(Wanted);
+	bAppearanceApplied = true;
+	ApplyLocomotionAnimClass();
+	RelinkEquipmentAnimLayers();
+	UpdateMeshVisibility();
 }
 
 void AVCCharacterBase::BindAttributeChangeDelegates(UAbilitySystemComponent* ASC)
@@ -1103,6 +1162,10 @@ void AVCCharacterBase::UpdateMeshVisibility()
 		GetMesh()->SetOwnerNoSee(bIsLocalFP);
 		GetMesh()->bCastHiddenShadow = bIsLocalFP;
 	}
+	if (AppearanceComponent)
+	{
+		AppearanceComponent->SetPartsOwnerNoSee(bIsLocalFP, bIsLocalFP);
+	}
 
 	if (FirstPersonArmsMesh)
 	{
@@ -1452,10 +1515,15 @@ void AVCCharacterBase::ApplyLocomotionAnimClass()
 		BlueprintAnimClass = MeshComponent->GetAnimClass();
 	}
 
-	// Motion matching on every machine that draws the player; a dedicated server and the automation tests keep the
-	// Blueprint's state machine (nothing there reads a pose, and the databases are large to load)
+	// The appearance's anim class, else the project's motion matching (character animation P6), on every machine that
+	// draws the player; a dedicated server and the automation tests keep the Blueprint's state machine (nothing there
+	// reads a pose, and the databases are large to load)
 	TSubclassOf<UAnimInstance> Wanted = BlueprintAnimClass;
-	const TSoftClassPtr<UAnimInstance>& MotionMatching = UVCSettings::Get().PlayerLocomotionAnimClass;
+	TSoftClassPtr<UAnimInstance> MotionMatching = UVCSettings::Get().PlayerLocomotionAnimClass;
+	if (const UVCCharacterAppearance* Worn = AppearanceComponent ? AppearanceComponent->GetAppearance() : nullptr; Worn && !Worn->AnimClass.IsNull())
+	{
+		MotionMatching = Worn->AnimClass;
+	}
 	if (CVarAnimMotionMatching.GetValueOnGameThread() != 0 && !MotionMatching.IsNull()
 		&& GetNetMode() != NM_DedicatedServer && !GIsAutomationTesting)
 	{
@@ -1478,6 +1546,10 @@ void AVCCharacterBase::ApplyLocomotionAnimClass()
 	}
 	MeshComponent->SetAnimInstanceClass(Wanted);
 	RelinkEquipmentAnimLayers();
+	if (AppearanceComponent)
+	{
+		AppearanceComponent->RefreshSimulations(); // the new instances' rigid-body nodes fall along the movement's gravity
+	}
 }
 
 void AVCCharacterBase::RelinkEquipmentAnimLayers()
