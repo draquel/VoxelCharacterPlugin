@@ -4,7 +4,11 @@
 
 #if WITH_AUTOMATION_TESTS
 
+#include "Core/VCCharacterAttributeSet.h"
+#include "Core/VCCharacterBase.h"
+#include "Core/VCWeatherEffects.h"
 #include "Movement/VCMovementComponent.h"
+#include "UI/VCVitalsWidget.h"
 
 // ---------------------------------------------------------------------------
 // The wind's drift on the pawn (the weather plan's P4): a fraction of the wind, a current the pawn rides whatever it does
@@ -51,6 +55,60 @@ bool FVCWindPushTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Against the wind: slowed by the drift"), Velocity.Equals(East * -210.0, 1.0e-3));
 	Velocity = FVector(0.0, 400.0, 0.0) + Drift;
 	TestTrue(TEXT("Across: the cross speed kept, the drift added"), Velocity.Equals(FVector(90.0, 400.0, 0.0), 1.0e-3));
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The wet level (the weather plan's P5): soaked by the rain over WetSoakSeconds, at once by a swim, dry again over
+// WetDrySeconds; and the character's hysteresis for the wet and cold states.
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCWetLevelTest, "VoxelCharacter.Movement.WetLevel",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FVCWetLevelTest::RunTest(const FString& Parameters)
+{
+	const float Soak = 12.f, Dry = 90.f;
+	// Full rain, exposed: soaked in SoakSeconds, never over 1.
+	float Level = 0.f;
+	for (int32 i = 0; i < 120; ++i)
+	{
+		Level = UVCMovementComponent::AdvanceWetLevel(Level, 1.f, false, 0.1f, Soak, Dry);
+	}
+	TestEqual(TEXT("Twelve seconds of full rain soak"), Level, 1.f, 1.0e-3f);
+	TestEqual(TEXT("Never over 1"), UVCMovementComponent::AdvanceWetLevel(1.f, 1.f, false, 5.f, Soak, Dry), 1.f, 1.0e-6f);
+	// Half the rain (a drizzle, or half sheltered): half the pace.
+	TestEqual(TEXT("Half the rain, half the pace"), UVCMovementComponent::AdvanceWetLevel(0.f, 0.5f, false, 6.f, Soak, Dry), 0.25f, 1.0e-4f);
+	// Nothing falling: dry in DrySeconds; never under 0.
+	TestEqual(TEXT("Half dry after 45 s"), UVCMovementComponent::AdvanceWetLevel(1.f, 0.f, false, 45.f, Soak, Dry), 0.5f, 1.0e-4f);
+	TestEqual(TEXT("Never under 0"), UVCMovementComponent::AdvanceWetLevel(0.1f, 0.f, false, 60.f, Soak, Dry), 0.f, 1.0e-6f);
+	// A swim soaks at once; a zero or negative step changes nothing.
+	TestEqual(TEXT("Swimming: soaked"), UVCMovementComponent::AdvanceWetLevel(0.f, 0.f, true, 0.1f, Soak, Dry), 1.f, 1.0e-6f);
+	TestEqual(TEXT("No step: no change"), UVCMovementComponent::AdvanceWetLevel(0.4f, 1.f, false, 0.f, Soak, Dry), 0.4f, 1.0e-6f);
+	TestEqual(TEXT("A negative step: no change"), UVCMovementComponent::AdvanceWetLevel(0.4f, 0.f, false, -1.f, Soak, Dry), 0.4f, 1.0e-6f);
+
+	// The hysteresis: wet goes on at 0.6 and off under 0.2; cold on at 0 C and off over 2 C.
+	TestFalse(TEXT("Dry, 0.5: still off"), AVCCharacterBase::HysteresisOn(false, 0.5f, 0.6f, 0.2f, true));
+	TestTrue(TEXT("Dry, 0.6: on"), AVCCharacterBase::HysteresisOn(false, 0.6f, 0.6f, 0.2f, true));
+	TestTrue(TEXT("Wet, 0.3: still on"), AVCCharacterBase::HysteresisOn(true, 0.3f, 0.6f, 0.2f, true));
+	TestFalse(TEXT("Wet, 0.2: off"), AVCCharacterBase::HysteresisOn(true, 0.2f, 0.6f, 0.2f, true));
+	TestFalse(TEXT("Warm, 1 C: still off"), AVCCharacterBase::HysteresisOn(false, 1.f, 0.f, 2.f, false));
+	TestTrue(TEXT("Warm, 0 C: on"), AVCCharacterBase::HysteresisOn(false, 0.f, 0.f, 2.f, false));
+	TestTrue(TEXT("Cold, 1.5 C: still on"), AVCCharacterBase::HysteresisOn(true, 1.5f, 0.f, 2.f, false));
+	TestFalse(TEXT("Cold, 2 C: off"), AVCCharacterBase::HysteresisOn(true, 2.f, 0.f, 2.f, false));
+
+	// The cold's effect: one additive modifier on the move speed multiplier, the penalty's size.
+	const UVCWeatherColdEffect* Cold = GetDefault<UVCWeatherColdEffect>();
+	if (TestNotNull(TEXT("The cold effect's default object"), Cold) && TestEqual(TEXT("One modifier"), Cold->Modifiers.Num(), 1))
+	{
+		float Magnitude = 0.f;
+		TestTrue(TEXT("On the move speed multiplier"), Cold->Modifiers[0].Attribute == UVCCharacterAttributeSet::GetMoveSpeedMultiplierAttribute());
+		TestTrue(TEXT("A static magnitude"), Cold->Modifiers[0].ModifierMagnitude.GetStaticMagnitudeIfPossible(1.f, Magnitude));
+		TestEqual(TEXT("The penalty"), Magnitude, -UVCWeatherColdEffect::SpeedPenalty, 1.0e-6f);
+		TestTrue(TEXT("Infinite"), Cold->DurationPolicy == EGameplayEffectDurationType::Infinite);
+	}
+	TestTrue(TEXT("Both states' text"), UVCVitalsWidget::FormatWeather(true, true).ToString() == TEXT("Soaked and cold"));
+	TestTrue(TEXT("Neither: empty"), UVCVitalsWidget::FormatWeather(false, false).IsEmpty());
 	return true;
 }
 

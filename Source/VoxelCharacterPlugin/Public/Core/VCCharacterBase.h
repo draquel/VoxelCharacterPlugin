@@ -574,6 +574,43 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement")
 	bool IsNearWorldEdge() const { return bNearWorldEdge; }
 
+	// --- Weather (the weather plan's P5) ---
+
+	/** The wet level (UVCMovementComponent::GetWeatherWetLevel) at which State.Weather.Wet goes on. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Weather", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float WetOnLevel = 0.6f;
+
+	/** The wet level under which State.Weather.Wet goes off again (under WetOnLevel: no flicker at the edge). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Weather", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float WetOffLevel = 0.2f;
+
+	/** The air temperature (C) at and under which State.Weather.Cold goes on, with UVCWeatherColdEffect's speed penalty. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Weather")
+	float ColdBelowC = 0.f;
+
+	/** Degrees over ColdBelowC the air must warm to before the cold goes off again. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Weather", meta = (ClampMin = "0.0"))
+	float ColdHysteresisC = 2.f;
+
+	/** Soaked (State.Weather.Wet on the ability system; every machine once replicated). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Weather")
+	bool IsWet() const;
+
+	/** In the cold (State.Weather.Cold on the ability system; every machine once replicated). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Weather")
+	bool IsCold() const;
+
+	/**
+	 * Pure: whether a state with hysteresis is on after a reading.
+	 * @param bWasOn  The state before
+	 * @param Value   The reading
+	 * @param OnAt    The reading at which it goes on (and over, when bHighIsOn)
+	 * @param OffAt   The reading at which it goes off again (short of OnAt)
+	 * @param bHighIsOn High readings turn it on (the wet level); false: low readings do (the temperature)
+	 * @return The state after
+	 */
+	static bool HysteresisOn(bool bWasOn, float Value, float OnAt, float OffAt, bool bHighIsOn);
+
 	// =================================================================
 	// Debug
 	// =================================================================
@@ -609,6 +646,10 @@ public:
 	virtual void OnEquipmentAbilitiesChanged(const FGameplayTag& SlotTag);
 
 protected:
+	/** Server, every half second: the weather's state tags and the cold's effect from the movement component's weather read. */
+	void UpdateWeatherEffects();
+	float WeatherEffectsTimer = 0.f;
+
 	// --- Lifecycle ---
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

@@ -33,6 +33,8 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Net/UnrealNetwork.h"
+#include "Core/VCGameplayTags.h"
+#include "Core/VCWeatherEffects.h"
 #include "VoxelCoordinates.h"
 #include "VoxelWorldConfiguration.h"
 #include "VoxelChunkManager.h"
@@ -345,6 +347,84 @@ void AVCCharacterBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
+static TAutoConsoleVariable<int32> CVarWeatherLog(
+	TEXT("vc.Weather.Log"), 0,
+	TEXT("Log each player's wet level, air temperature and weather states every half second (the weather plan's P5)"),
+	ECVF_Default);
+
+bool AVCCharacterBase::IsWet() const
+{
+	const UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	return ASC && ASC->HasMatchingGameplayTag(VCGameplayTags::State_Weather_Wet);
+}
+
+bool AVCCharacterBase::IsCold() const
+{
+	const UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	return ASC && ASC->HasMatchingGameplayTag(VCGameplayTags::State_Weather_Cold);
+}
+
+bool AVCCharacterBase::HysteresisOn(bool bWasOn, float Value, float OnAt, float OffAt, bool bHighIsOn)
+{
+	if (bHighIsOn)
+	{
+		return bWasOn ? Value > OffAt : Value >= OnAt;
+	}
+	return bWasOn ? Value < OffAt : Value <= OnAt;
+}
+
+void AVCCharacterBase::UpdateWeatherEffects()
+{
+	UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	const UVCMovementComponent* Movement = Cast<UVCMovementComponent>(GetCharacterMovement());
+	if (!ASC || !Movement)
+	{
+		return;
+	}
+	using namespace VCGameplayTags;
+	// The states are read back from the ability system, not kept here: a player's lives on the player state and
+	// outlives this avatar, so a respawn finds the old tags and clears them if the new body is dry and warm.
+	const bool bAlive = !bIsCorpse && !IsIncapacitated();
+	const bool bWasWet = ASC->HasMatchingGameplayTag(State_Weather_Wet);
+	const bool bWasCold = ASC->HasMatchingGameplayTag(State_Weather_Cold);
+	const bool bWet = bAlive && HysteresisOn(bWasWet, Movement->GetWeatherWetLevel(), WetOnLevel, WetOffLevel, true);
+	const bool bCold = bAlive && HysteresisOn(bWasCold, Movement->GetWeatherTemperatureC(), ColdBelowC, ColdBelowC + ColdHysteresisC, false);
+	if (bWet != bWasWet || bCold != bWasCold || (CVarWeatherLog.GetValueOnGameThread() != 0 && IsPlayerControlled()))
+	{
+		UE_LOG(LogVoxelCharacter, Log, TEXT("%s weather: %s, %s (wet level %.2f, %.1f C%s)"), *GetName(),
+			bWet ? TEXT("soaked") : TEXT("dry"), bCold ? TEXT("cold") : TEXT("warm"), Movement->GetWeatherWetLevel(), Movement->GetWeatherTemperatureC(),
+			Movement->IsSwimming() ? TEXT(", swimming") : TEXT(""));
+	}
+	if (bWet != bWasWet)
+	{
+		// Loose tags replicated as tags (no count): the owning client's widget and the simulated proxies see them.
+		if (bWet)
+		{
+			ASC->AddLooseGameplayTag(State_Weather_Wet, 1, EGameplayTagReplicationState::TagOnly);
+		}
+		else
+		{
+			ASC->SetLooseGameplayTagCount(State_Weather_Wet, 0, EGameplayTagReplicationState::TagOnly);
+		}
+	}
+	if (bCold != bWasCold)
+	{
+		if (bCold)
+		{
+			ASC->AddLooseGameplayTag(State_Weather_Cold, 1, EGameplayTagReplicationState::TagOnly);
+			FGameplayEffectContextHandle Context = ASC->MakeEffectContext();
+			Context.AddSourceObject(this);
+			ASC->ApplyGameplayEffectToSelf(GetDefault<UVCWeatherColdEffect>(), 1.f, Context);
+		}
+		else
+		{
+			ASC->SetLooseGameplayTagCount(State_Weather_Cold, 0, EGameplayTagReplicationState::TagOnly);
+			// By class, not a handle: a respawned player's effect was applied to the same ability system by the last body.
+			ASC->RemoveActiveGameplayEffectBySourceEffect(UVCWeatherColdEffect::StaticClass(), nullptr);
+		}
+	}
+}
+
 void AVCCharacterBase::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -356,6 +436,17 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 	}
 
 	TickWorldSafety(DeltaSeconds);
+
+	// The weather on the character (the weather plan's P5): the server sets the wet and cold states every half second.
+	if (HasAuthority())
+	{
+		WeatherEffectsTimer += DeltaSeconds;
+		if (WeatherEffectsTimer >= 0.5f)
+		{
+			WeatherEffectsTimer = 0.f;
+			UpdateWeatherEffects();
+		}
+	}
 
 	// --- Terrain Ready Spawn ---
 	// Primary: OnChunkCollisionReady delegate. Fallback: periodic poll + timeout.

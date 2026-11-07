@@ -48,8 +48,9 @@ calls.
   interface casts or `FindComponentByClass`.
 - The plugin must compile and run (movement, camera, input, combat) with all three absent.
 - WorldWeatherPlugin is optional the same way (`WITH_WORLD_WEATHER`, the weather plan's P4): the movement component
-  reads the weather's conditions at the pawn in its `.cpp` only (the wind push, the wet grip); without the plugin the
-  wind is zero and the ground dry.
+  reads the weather's conditions at the pawn in its `.cpp` only (the wind push, the wet grip, and since P5 the air
+  temperature and a wet level); without the plugin the wind is zero, the ground dry and the air 15 C. The character's
+  `State.Weather.Wet` / `Cold` (P5) read those cached values, so they need no include of their own.
 - VoxelWorlds is a hard dependency, but read its settings by name where a dependency would be upward
   (`voxel.Edit.PlayerInputs` is looked up, not linked).
 

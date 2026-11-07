@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "GameplayTagContainer.h"
 #include "Blueprint/UserWidget.h"
 #include "Types/CGFCombatTypes.h"
 #include "VCVitalsWidget.generated.h"
@@ -113,6 +114,17 @@ protected:
 	void SetHealth(float Current, float Max);
 	void SetStamina(float Current, float Max);
 	void SetEditModeShown(bool bShown);
+	void HandleWeatherTagChanged(const FGameplayTag Tag, int32 NewCount);
+	void RefreshWeather();
+
+public:
+	/** Pure: the weather line's text, empty when neither state is on. */
+	static FText FormatWeather(bool bWet, bool bCold);
+
+	/** The weather line is showing (tests). */
+	bool IsWeatherShown() const;
+
+protected:
 
 	UPROPERTY()
 	TObjectPtr<UProgressBar> HealthBar;
@@ -138,6 +150,10 @@ protected:
 	UPROPERTY()
 	TObjectPtr<UTextBlock> CarriedLightText;
 
+	/** The weather on the character (the weather plan's P5): "Soaked", "Cold" or both; collapsed when neither. */
+	UPROPERTY()
+	TObjectPtr<UTextBlock> WeatherText;
+
 	/** Objective line (top of the stack); collapsed when empty. */
 	UPROPERTY()
 	TObjectPtr<UTextBlock> ObjectiveText;
@@ -153,6 +169,8 @@ protected:
 	FDelegateHandle StaminaHandle;
 	FDelegateHandle MaxStaminaHandle;
 	FDelegateHandle BreathHandle;
+	FDelegateHandle WetTagHandle;
+	FDelegateHandle ColdTagHandle;
 
 	UPROPERTY()
 	TObjectPtr<UProgressBar> BreathBar;

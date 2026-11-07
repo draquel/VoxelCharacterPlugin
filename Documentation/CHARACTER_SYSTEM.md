@@ -84,6 +84,14 @@ attacker builds FCGFDamageContext
 - An actor without a combat component can take damage through `IVCDamageReceiver` (breakable props).
 - `State.Dead` / `State.Downed` are replicated loose tags on the ASC and block ability activation; `bIsDead` /
   `bIsDowned` replicate on the component for client visuals.
+- `State.Weather.Wet` / `State.Weather.Cold` (the weather plan's P5) are replicated loose tags too, set by the server
+  every half second in `AVCCharacterBase::UpdateWeatherEffects` from the movement component's weather read with
+  hysteresis (`WetOnLevel` 0.6 / `WetOffLevel` 0.2 on the wet level; `ColdBelowC` 0 / `ColdHysteresisC` 2 on the air
+  temperature) and read back from the ASC, so a respawn clears a stale pair. Wet halves the stamina's regeneration
+  (`UVCMovementComponent::WetStaminaRegenMultiplier`); cold applies `UVCWeatherColdEffect`, an infinite source-defined
+  effect taking 0.15 off `MoveSpeedMultiplier`, removed by class when the cold lifts. A corpse or a downed character
+  loses both. The vitals widget's weather line ("Soaked", "Cold", "Soaked and cold") follows the tags' events; a
+  change logs once, and `vc.Weather.Log 1` logs the level and the temperature every half second.
 - `UVCMeleeAttackAbility` is server-only; the client requests it by tag `Ability.Attack.Melee`. Damage is the main-hand
   `UItemFragment_Weapon`'s, else `UnarmedDamage`; the crit is rolled on the server from the weapon fragment
   (`Damage.Critical` in the context's tags); a landed hit wears the weapon (`ApplyWeaponWear`), and a weapon at zero
@@ -188,7 +196,10 @@ re-mesh).
   which would otherwise eat it: a standing pawn drifts at it, a pawn walking into the wind is slowed by it; flying is
   exempt. The ground friction loses `Wetness x WetGripFactor` (0.4) of itself. Both run inside the predicted movement,
   so the client and the server agree (the weather's sync point is the same on both). Test
-  `VoxelCharacter.Movement.WindPush`.
+  `VoxelCharacter.Movement.WindPush`. The same read keeps the air temperature and a wet level (P5, `AdvanceWetLevel`):
+  the rain reaching the pawn (its rate times the exposure, snow at a third) soaks it over `WetSoakSeconds` (12), a swim
+  at once, and nothing falling dries it over `WetDrySeconds` (90); the character's weather states read them
+  (`VoxelCharacter.Movement.WetLevel`).
 - **Debug flight.** `SetDebugFlight` (QA tooling, not replicated): `MOVE_Flying` in the gravity frame, a climb along
   local up (`SetFlightClimb`), the altitude held otherwise (`GetFlightLevel`); the game module's `vox.Fly`, `vox.FlyTo`
   and `vox.TPLatLon ... hold=1` drive it.
@@ -470,7 +481,10 @@ pawn with `WanderRadius`, `PackRadius` and `Faction`; a hostile entering Chase a
 from an `IVCPathProvider`: `UVCVoxelPathProvider` over `UVoxelSurfaceNavigationSubsystem` by default
 (`bUseVoxelNavigation`), a dungeon's grid provider in dungeons, straight lines without one. A stuck walker blocks the
 cells ahead for 8 s and plans again. `SetPatrolRoute` gives a loop; without one an NPC guards `SetLeashOrigin`.
-`vc.AI.Enabled 0` freezes every NPC; `SetAIEnabled(false)` one.
+`vc.AI.Enabled 0` freezes every NPC; `SetAIEnabled(false)` one. `SetWeatherHold(true)` (the weather plan's P5; the
+surface spawner sets it in a storm for the entries that hide in them) turns a prey's roaming and patrolling into Idle
+until it is lifted, a threat still making it flee; hostiles ignore it (`FVCNPCAIDecisionInput::bHoldsForWeather`,
+`VoxelCharacter.AI.WeatherHold`).
 
 ### NPCs at scale (G73, 2026-11-04)
 
@@ -592,4 +606,5 @@ and `ToggleVoxelDebug` are on the controller and the character. Every name, defa
 ## Tests
 
 `VoxelCharacter.*` in `Private/Tests/`: AI, Anim, Camera, Combat, Config, Cubic, Edit, EditMode, EquipmentLoop, Gather,
-Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, WorldEdge.
+Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, WorldEdge; the weather's `Movement.WindPush`,
+`Movement.WetLevel` and `AI.WeatherHold`.

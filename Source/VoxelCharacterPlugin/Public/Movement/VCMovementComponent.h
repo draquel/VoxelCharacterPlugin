@@ -208,6 +208,39 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Weather")
 	float GetWeatherWetness() const { return CachedWeatherWetness; }
 
+	/** Seconds of full rain (rate 1, exposed) that soak the pawn from dry (the wet level 0 to 1; the weather plan's P5). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "1.0"))
+	float WetSoakSeconds = 12.f;
+
+	/** Seconds a soaked pawn takes to dry with nothing falling on it. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "1.0"))
+	float WetDrySeconds = 90.f;
+
+	/** The stamina's regeneration while State.Weather.Wet is on, as a fraction of the dry rate. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float WetStaminaRegenMultiplier = 0.5f;
+
+	/** How soaked the pawn is (0 dry, 1 soaked): the rain on it over WetSoakSeconds, a swim at once, drying over WetDrySeconds. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Weather")
+	float GetWeatherWetLevel() const { return WeatherWetLevel; }
+
+	/** The air temperature at the pawn (C) from the last weather read (15 without the weather plugin). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Weather")
+	float GetWeatherTemperatureC() const { return CachedWeatherTemperatureC; }
+
+	/**
+	 * Pure: one step of the wet level. Swimming soaks at once; otherwise the rain on the pawn (its rate times the
+	 * exposure, snow at a third) raises the level over SoakSeconds and nothing falling dries it over DrySeconds.
+	 * @param Level       The level before the step (0..1)
+	 * @param RateOnPawn  Precipitation reaching the pawn (0..1)
+	 * @param bSwimming   In the water
+	 * @param DeltaTime   The step, seconds
+	 * @param SoakSeconds WetSoakSeconds
+	 * @param DrySeconds  WetDrySeconds
+	 * @return The level after the step (0..1)
+	 */
+	static float AdvanceWetLevel(float Level, float RateOnPawn, bool bSwimming, float DeltaTime, float SoakSeconds, float DrySeconds);
+
 	/**
 	 * Pure: the wind's drift on the pawn, Wind x Factor x Exposure: a current the pawn rides whatever it does itself, so a
 	 * standing pawn drifts at it and a pawn walking against the wind is slowed by it. CalcVelocity takes the previous
@@ -456,6 +489,9 @@ protected:
 	FVector CachedWeatherWind = FVector::ZeroVector;
 	float CachedWeatherExposure = 1.f;
 	float CachedWeatherWetness = 0.f;
+	float CachedWeatherTemperatureC = 15.f;
+	float WeatherWetLevel = 0.f;
+	double LastWeatherReadSeconds = -1.0;
 	/** The wind drift on the velocity since the last CalcVelocity (ComputeWindDrift), taken off before the next one's braking. */
 	FVector WindDrift = FVector::ZeroVector;
 
