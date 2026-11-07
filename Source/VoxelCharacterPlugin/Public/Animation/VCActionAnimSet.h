@@ -127,6 +127,18 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UAnimMontage> Revive;
 
+	/**
+	 * Whether the off hand grips the main-hand item too (a pickaxe, a two-handed weapon): the anim graph's hand IK puts
+	 * the off wrist at OffHandGrip (character animation P4). The set's clips place the main hand; the grip is where its
+	 * item's handle runs on from there.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|IK")
+	bool bOffHandIK = false;
+
+	/** Where the off hand's wrist goes, in the main hand bone's space (hand_r, uu). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|IK", meta = (EditCondition = "bOffHandIK"))
+	FVector OffHandGrip = FVector::ZeroVector;
+
 	/** Drawing a bow and holding it drawn: the draw, then a loop held until the release (ranged combat plan B3). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UAnimMontage> Draw;

@@ -28,6 +28,7 @@
 // - The action set: Unarmed with nothing held, Tool for an item without a set, the item's own set otherwise.
 // - The gather from a spawned character on a tilted frame: gravity, velocity, the ground below while falling.
 // - The aiming stance layer reads the body's aim (ranged combat plan B4).
+// - The IK and pace values (character animation P4).
 // ---------------------------------------------------------------------------
 
 namespace VCAnimTestHelpers
@@ -524,6 +525,113 @@ bool FVCAnim_GatherFromCharacter::RunTest(const FString& Parameters)
 	}
 	GEngine->DestroyWorldContext(World);
 	World->DestroyWorld(false);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// IK and pace (character animation P4): foot IK on the ground only, quicker steps above the authored top speed, the head looking at a target ahead (not behind, not in first person), the off hand's IK with a two-handed set;
+// every switch off turns its alpha to 0. The look-at's ahead-or-behind is measured about local up, so a tilted frame
+// (a planet's) gives the same answer.
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCAnim_IKValues, "VoxelCharacter.Anim.IKValues", VC_ANIM_FLAGS)
+bool FVCAnim_IKValues::RunTest(const FString& Parameters)
+{
+	using namespace VCAnimTestHelpers;
+	const auto Settle = [](UVCAnimInstance* Anim, const FVCAnimInput& In)
+	{
+		for (int32 Update = 0; Update < 60; ++Update)
+		{
+			Anim->ComputeValues(In);
+		}
+	};
+	FVCAnimInput Ground;
+	Ground.DeltaSeconds = Dt;
+	Ground.bOnGround = true;
+	Ground.EyeLocation = FVector(0, 0, 160);
+	Ground.LookTarget = FVector(1000, 0, 160);
+	Ground.bHasLookTarget = true;
+
+	UVCAnimInstance* Anim = NewAnimInstance();
+	Settle(Anim, Ground);
+	TestEqual(TEXT("On the ground: foot IK on"), Anim->FootIKAlpha, 1.f);
+	TestEqual(TEXT("A target ahead: the head looks"), Anim->LookAtAlpha, 1.f);
+	TestEqual(TEXT("The look-at's location is the target"), Anim->LookAtLocation, Ground.LookTarget);
+	TestEqual(TEXT("No two-handed set: no hand IK"), Anim->HandIKAlpha, 0.f);
+	Anim->ComputeValues([&] { FVCAnimInput In = Ground; In.bFalling = true; In.bOnGround = false; return In; }());
+	TestTrue(TEXT("The foot IK eases off, not at once"), Anim->FootIKAlpha > 0.f && Anim->FootIKAlpha < 1.f);
+
+	for (const TPair<const TCHAR*, TFunction<void(FVCAnimInput&)>>& Case : TArray<TPair<const TCHAR*, TFunction<void(FVCAnimInput&)>>>{
+		{ TEXT("falling"), [](FVCAnimInput& In) { In.bOnGround = false; In.bFalling = true; } },
+		{ TEXT("swimming"), [](FVCAnimInput& In) { In.bOnGround = false; In.bSwimming = true; } },
+		{ TEXT("flying"), [](FVCAnimInput& In) { In.bOnGround = false; In.bFlying = true; } },
+		{ TEXT("dead"), [](FVCAnimInput& In) { In.bDead = true; } },
+		{ TEXT("vc.Anim.FootIK 0"), [](FVCAnimInput& In) { In.bFootIKEnabled = false; } } })
+	{
+		FVCAnimInput In = Ground;
+		Case.Value(In);
+		Settle(Anim, In);
+		TestEqual(*FString::Printf(TEXT("Foot IK off %s"), Case.Key), Anim->FootIKAlpha, 0.f);
+	}
+
+	// The pace: as authored up to the reference speed, quicker steps above it, so the steps keep up with the ground.
+	TestEqual(TEXT("A jog: the clips' own pace"), UVCAnimInstance::ComputeLocomotionPlayRate(600.f, 600.f), 1.f);
+	TestEqual(TEXT("A walk: the clips' own pace"), UVCAnimInstance::ComputeLocomotionPlayRate(300.f, 600.f), 1.f);
+	TestEqual(TEXT("A sprint: 1.6 times quicker"), UVCAnimInstance::ComputeLocomotionPlayRate(960.f, 600.f), 1.6f, 1e-4f);
+	TestEqual(TEXT("No reference: 1"), UVCAnimInstance::ComputeLocomotionPlayRate(960.f, 0.f), 1.f);
+	FVCAnimInput Sprint = Ground;
+	Sprint.Velocity = FVector(960, 0, 0);
+	Anim->ComputeValues(Sprint);
+	TestEqual(TEXT("A sprinting pawn's pace"), Anim->LocomotionPlayRate, 960.f / Anim->LocomotionReferenceSpeed, 1e-4f);
+	Sprint.bSprintPaceEnabled = false;
+	Anim->ComputeValues(Sprint);
+	TestEqual(TEXT("vc.Anim.SprintPace 0: the clips' own pace"), Anim->LocomotionPlayRate, 1.f);
+	Sprint.bSprintPaceEnabled = true;
+	Sprint.bOnGround = false;
+	Sprint.bFalling = true;
+	Anim->ComputeValues(Sprint);
+	TestEqual(TEXT("In the air: the clips' own pace"), Anim->LocomotionPlayRate, 1.f);
+
+	// The look-at: off for a target behind, in first person, without a target, or switched off.
+	for (const TPair<const TCHAR*, TFunction<void(FVCAnimInput&)>>& Case : TArray<TPair<const TCHAR*, TFunction<void(FVCAnimInput&)>>>{
+		{ TEXT("a target behind"), [](FVCAnimInput& In) { In.LookTarget = FVector(-1000, 50, 160); } },
+		{ TEXT("first person"), [](FVCAnimInput& In) { In.ViewMode = EVCViewMode::FirstPerson; } },
+		{ TEXT("no target"), [](FVCAnimInput& In) { In.bHasLookTarget = false; } },
+		{ TEXT("vc.Anim.LookAt 0"), [](FVCAnimInput& In) { In.bLookAtEnabled = false; } } })
+	{
+		Settle(Anim, Ground);
+		FVCAnimInput In = Ground;
+		Case.Value(In);
+		Settle(Anim, In);
+		TestEqual(*FString::Printf(TEXT("Look-at off with %s"), Case.Key), Anim->LookAtAlpha, 0.f);
+	}
+	FVCAnimInput Side = Ground;
+	Side.LookTarget = FVector(0, 1000, 160);
+	Settle(Anim, Side);
+	TestEqual(TEXT("A target 90 degrees aside: the head looks"), Anim->LookAtAlpha, 1.f);
+
+	// The same targets in a tilted frame (gravity along -X, at 45 degrees round local up).
+	const FQuat Tilt = FQuat(FVector::YAxisVector, FMath::DegreesToRadians(90.0)) * FQuat(FVector::ZAxisVector, FMath::DegreesToRadians(45.0));
+	FVCAnimInput Planet = Rotated(Ground, Tilt);
+	Planet.bOnGround = true;
+	Planet.EyeLocation = Tilt.RotateVector(Ground.EyeLocation);
+	Planet.LookTarget = Tilt.RotateVector(Ground.LookTarget);
+	Settle(Anim, Planet);
+	TestEqual(TEXT("Tilted: a target ahead is looked at"), Anim->LookAtAlpha, 1.f);
+	Planet.LookTarget = Tilt.RotateVector(FVector(-1000, 50, 160));
+	Settle(Anim, Planet);
+	TestEqual(TEXT("Tilted: a target behind is not"), Anim->LookAtAlpha, 0.f);
+
+	// The off hand: on with a two-handed set, its grip the effector.
+	FVCAnimInput TwoHands = Ground;
+	TwoHands.bOffHandIK = true;
+	TwoHands.OffHandGrip = FVector(-3, 4, 25);
+	Settle(Anim, TwoHands);
+	TestEqual(TEXT("Two hands: the hand IK on"), Anim->HandIKAlpha, 1.f);
+	TestEqual(TEXT("The grip is the effector"), Anim->HandIKEffector, TwoHands.OffHandGrip);
+	TwoHands.bHandIKEnabled = false;
+	Settle(Anim, TwoHands);
+	TestEqual(TEXT("vc.Anim.HandIK 0: off"), Anim->HandIKAlpha, 0.f);
 	return true;
 }
 

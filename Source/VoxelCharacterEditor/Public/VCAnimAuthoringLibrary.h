@@ -12,11 +12,12 @@ class UAnimSequenceBase;
 class UBlueprint;
 
 /**
- * Editor scripting for anim blueprints and montages that the engine does not expose to Python (character animation P3,
- * ranged combat plan B4): add an animation layer to an anim layer interface, implement an interface, add graph nodes of
- * any class, set a node's properties or a pin's default from text, connect pins and describe a graph; append a montage's
- * sequences in sections and choose its slot. Scripts/setup_character_layers.py builds the character's layers and
- * montages with it. Every function returns false (or an empty string) and logs a warning when it cannot do what it was
+ * Editor scripting for anim blueprints and montages that the engine does not expose to Python (character animation P3
+ * and P4, ranged combat plan B4): add an animation layer to an anim layer interface, implement an interface, add graph
+ * nodes of any class, set a node's properties or a pin's default from text, show a property's pin, connect pins, list
+ * and describe graphs, copy nodes between blueprints as text; append a montage's sequences in sections and choose its
+ * slot. Scripts/setup_character_layers.py builds the character's layers and montages with it,
+ * Scripts/setup_character_ik.py the IK. Every function returns false (or an empty string) and logs a warning when it cannot do what it was
  * asked; none compiles or saves (the caller does, once).
  */
 UCLASS()
@@ -160,4 +161,50 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
 	static bool SetMontageSlot(UAnimMontage* Montage, FName SlotName);
+
+	/**
+	 * Every graph of a blueprint by name: the event and anim graphs, functions, layers, state machines and their states
+	 * and transitions (character animation P4: reading another anim blueprint's graphs).
+	 * @param Blueprint The blueprint
+	 * @return The graphs' names, "Outer/Name" for a graph inside another (a state inside a state machine)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static TArray<FString> ListGraphs(UBlueprint* Blueprint);
+
+	/**
+	 * A graph's nodes as the editor copies them (Ctrl+C): every property of each node, as text.
+	 * @param Blueprint The blueprint
+	 * @param GraphName The graph
+	 * @param NodeNames The nodes by name or title; empty for all of them
+	 * @return The text, or empty when there is no such graph or none of the nodes
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static FString ExportGraphNodes(UBlueprint* Blueprint, FName GraphName, const TArray<FString>& NodeNames);
+
+	/**
+	 * Pastes nodes copied with ExportGraphNodes (or the editor's Ctrl+C) into a graph, as the editor's Ctrl+V does: the
+	 * links among the pasted nodes kept, links to nodes left behind dropped, every node given a new name and guid.
+	 * @param Blueprint The blueprint
+	 * @param GraphName The graph to paste into
+	 * @param Text      The copied nodes
+	 * @param OffsetX   Moves the pasted nodes by this much
+	 * @param OffsetY   Moves the pasted nodes by this much
+	 * @return The pasted nodes, one a line as DescribeGraph names them ("Name (Class) 'Title'"); empty when the graph
+	 *         refuses the text
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static TArray<FString> ImportGraphNodes(UBlueprint* Blueprint, FName GraphName, const FString& Text, int32 OffsetX, int32 OffsetY);
+
+	/**
+	 * Shows or hides an anim node's pin for one of its properties, as the node's details panel does (a property marked
+	 * PinHiddenByDefault, such as a look-at node's location, needs its pin shown before a variable can drive it).
+	 * @param Blueprint    The anim blueprint
+	 * @param GraphName    The graph
+	 * @param NodeName     The anim node
+	 * @param PropertyName The node's property ("LookAtLocation")
+	 * @param bVisible     Whether the pin shows
+	 * @return True when the node has an optional pin for the property and it took the setting
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static bool SetNodePinVisible(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, FName PropertyName, bool bVisible);
 };
