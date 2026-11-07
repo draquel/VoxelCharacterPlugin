@@ -1,7 +1,7 @@
 # Character Animation Plan
 
-> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0-P3
-> done; P4 next.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
+> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0-P4
+> done; P5 next.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
 > VoxelCharacterPlugin; content in VoxelWorldPOI's NPC tables, EquipmentPlugin's item data and the Blender pipeline.
 > Terms: `Documentation/GLOSSARY.md` at the project root; the decisions' numbers are from its `FINDINGS.md`.
 
@@ -428,7 +428,8 @@ Animation.
   the way: `ABP_VoxelCharacter` must implement the interface itself for its linked layer node to compile, and a linked
   layer node keeps its layer name in a member reference besides its own fields.
 - VanillaLoop's samples are still not in: placing and using play nothing, the pickaxe digs with a two-handed strike, and
-  the downed crawl waits.
+  the downed crawl waits. (The ranged combat plan's B4 has since given placing and using the bow pack's pickup and
+  potion.)
 - Tests `VoxelCharacter.Anim.*` (four more): `ActionHitTime`, `ActionSetLookup` (variants, fallbacks, the side of a hit
   on a plane and a tilted frame), `AttackCombo` (the window and the play rate), `MeleeHitTime` (the damage at 0.3 s of a
   swing, not at its start, the victim's flinch, immediate without a montage). The replication test gains two steps: an
@@ -446,6 +447,41 @@ Animation.
 - `vc.Anim.FootIK`, `vc.Anim.LookAt`, `vc.Anim.Debug` (A/B and debug draw), listed in `EDITOR_CONSOLE_GUIDE.md` §4.
 - Done when: PIE on `VoxelDemo`, `Review_Cubic` and `PlanetTest` (equator and south pole) shows planted feet on
   slopes and steps, with screenshots from above and from the side.
+
+**P4 result (2026-11-07; VoxelCharacterPlugin, the parent's content and script).** The reference is
+`CHARACTER_SYSTEM.md`, Animation.
+- `ABP_VoxelCharacter` runs the IK after its slot, so over the montages too, in component space: foot placement and its
+  leg IK (GASP's settings less the contact curves, which our clips do not have: a foot plants when its ball stops in the
+  pose; the pelvis drops at most 50 uu, so one foot on a 75 uu block step bends that leg instead of crouching the body),
+  a look-at on the head and a two-bone IK that puts the off hand on a two-handed item's grip. `UVCAnimInstance` computes
+  their targets and eases their weights (`FootIKAlpha`, `LookAtLocation` and `LookAtAlpha`, `HandIKEffector` and
+  `HandIKAlpha`), so a floor lost for a frame during a re-mesh fades the weight a frame's step instead of snapping it,
+  and the cvars switch each off without changing the graph. The foot placement traces along the mesh's own down and the
+  look-at target is a world point: a planet needs nothing more.
+- Stride warping was tried on the sprint and changed nothing (the widest step stayed the same: the jog's feet are near
+  the legs' reach at both ends of a stride, where the warp clamps). Instead the Walk/Run blend space plays faster above
+  its top speed (`LocomotionPlayRate`, speed over 600), so the feet keep pace: 182 uu a step at 600 and at a sprint's
+  960, 280 with the pace off. Orientation warping is not needed (the blend space has eight directions), nor slope
+  warping (the foot placement plants both feet on every slope tried), nor Control Rig for the hands (a two-bone IK onto a
+  point in `hand_r`'s space holds the pickaxe's handle: `UVCActionAnimSet::bOffHandIK` and `OffHandGrip`, the Tool and
+  TwoHand sets at (0, 2, 20); the bow's hands are its clips'). The mannequin has no eyes; MetaHumans' wait for P6.
+- The look-at node with its look-up axis and its interpolation on did not turn the head at all; with both off it turns
+  (a target 90 degrees aside: the head's forward 0.53 along the facing and 0.84 toward the target, against 0.97 along
+  the facing with the look-at off). A player looks along its view, an NPC at its AI controller's focus.
+- `UVCAnimAuthoringLibrary` gains `ListGraphs`, `ExportGraphNodes` and `ImportGraphNodes` (nodes as text, which read
+  GASP's foot placement settings) and `SetNodePinVisible`; `Scripts/setup_character_ik.py` builds the chain and the
+  play rate into `ABP_VoxelCharacter`, and a second run changes nothing.
+- `vc.Anim.FootIK`, `vc.Anim.SprintPace`, `vc.Anim.LookAt`, `vc.Anim.HandIK` (A/B) and `vc.Anim.Debug` (the look-at
+  target, the weights and the engine's foot placement draw), in `EDITOR_CONSOLE_GUIDE.md` section 4.
+- Test `VoxelCharacter.Anim.IKValues`: the foot weight on the ground and off falling, swimming, flying or dead, eased; the
+  pace (1 up to the reference speed, 1.6 at a sprint, 1 in the air); the look-at off behind, in first person or with no
+  target, on 90 degrees aside, the same in a tilted frame; the hand IK and its grip; each cvar.
+- PIE, from the side and from above, IK on against off: `VoxelDemo`'s slope (off, the downhill foot floats; on, both
+  feet stand on the slope), `Review_Cubic`'s 75 uu block step (off, the lower foot hangs in the air at the upper
+  block's height; on, it reaches down to the lower ground and the other leg bends on the step), `PlanetTest` at the
+  equator (a slope at latitude 2, longitude 20) and at the south pole (-89.6, 0): planted as on the plane, the body
+  upright in the gravity frame. Found on the way: the Crouch state is not wired (G140); the full headless suite, two
+  tests the weather plan's P3 and P4 had left failing on dev, fixed here (G141, G142).
 
 ### P5: Player locomotion (new module `VoxelCharacterAnimation`)
 

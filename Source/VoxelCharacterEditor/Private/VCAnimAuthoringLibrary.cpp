@@ -3,6 +3,7 @@
 #include "VCAnimAuthoringLibrary.h"
 #include "AnimationGraph.h"
 #include "AnimationGraphSchema.h"
+#include "AnimGraphNode_Base.h"
 #include "Animation/AnimBlueprint.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimSequenceBase.h"
@@ -10,6 +11,7 @@
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_K2.h"
+#include "EdGraphUtilities.h"
 #include "Engine/Blueprint.h"
 #include "Engine/MemberReference.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -434,6 +436,126 @@ bool UVCAnimAuthoringLibrary::AppendMontageSegment(UAnimMontage* Montage, UAnimS
 	Montage->PostEditChange();
 	Montage->MarkPackageDirty();
 	return true;
+}
+
+TArray<FString> UVCAnimAuthoringLibrary::ListGraphs(UBlueprint* Blueprint)
+{
+	TArray<FString> Names;
+	if (!Blueprint)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ListGraphs: no blueprint"));
+		return Names;
+	}
+	TArray<UEdGraph*> Graphs;
+	Blueprint->GetAllGraphs(Graphs);
+	for (const UEdGraph* Graph : Graphs)
+	{
+		if (!Graph)
+		{
+			continue;
+		}
+		// A state's or a transition's graph sits inside its state machine's graph.
+		const UEdGraph* Outer = Graph->GetOuter() ? Graph->GetOuter()->GetTypedOuter<UEdGraph>() : nullptr;
+		Names.Add(Outer ? Outer->GetName() + TEXT("/") + Graph->GetName() : Graph->GetName());
+	}
+	return Names;
+}
+
+FString UVCAnimAuthoringLibrary::ExportGraphNodes(UBlueprint* Blueprint, FName GraphName, const TArray<FString>& NodeNames)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraph* Graph = FindGraph(Blueprint, GraphName);
+	if (!Graph)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ExportGraphNodes: no graph %s in %s"), *GraphName.ToString(), *GetNameSafe(Blueprint));
+		return FString();
+	}
+	TSet<UObject*> Nodes;
+	if (NodeNames.Num() == 0)
+	{
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (Node && Node->CanDuplicateNode())
+			{
+				Nodes.Add(Node);
+			}
+		}
+	}
+	for (const FString& Name : NodeNames)
+	{
+		if (UEdGraphNode* Node = FindNode(Graph, Name))
+		{
+			Nodes.Add(Node);
+		}
+		else
+		{
+			UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ExportGraphNodes: no node %s in %s.%s"), *Name, *GetNameSafe(Blueprint), *GraphName.ToString());
+		}
+	}
+	if (Nodes.Num() == 0)
+	{
+		return FString();
+	}
+	// What the editor's copy does before it exports.
+	for (UObject* Object : Nodes)
+	{
+		CastChecked<UEdGraphNode>(Object)->PrepareForCopying();
+	}
+	FString Text;
+	FEdGraphUtilities::ExportNodesToText(Nodes, Text);
+	return Text;
+}
+
+TArray<FString> UVCAnimAuthoringLibrary::ImportGraphNodes(UBlueprint* Blueprint, FName GraphName, const FString& Text, int32 OffsetX, int32 OffsetY)
+{
+	using namespace VCAnimAuthoring;
+	TArray<FString> Pasted;
+	UEdGraph* Graph = FindGraph(Blueprint, GraphName);
+	if (!Graph || !FEdGraphUtilities::CanImportNodesFromText(Graph, Text))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ImportGraphNodes: no graph %s in %s, or it refuses the text"), *GraphName.ToString(),
+			*GetNameSafe(Blueprint));
+		return Pasted;
+	}
+	Graph->Modify();
+	TSet<UEdGraphNode*> Nodes;
+	FEdGraphUtilities::ImportNodesFromText(Graph, Text, Nodes);
+	// What the blueprint editor's paste does with each node (FBlueprintEditor::PasteNodesHere), less the selection.
+	for (UEdGraphNode* Node : Nodes)
+	{
+		Node->NodePosX += OffsetX;
+		Node->NodePosY += OffsetY;
+		Node->CreateNewGuid();
+		Pasted.Add(FString::Printf(TEXT("%s (%s) '%s'"), *Node->GetName(), *Node->GetClass()->GetName(),
+			*Node->GetNodeTitle(ENodeTitleType::ListView).ToString()));
+	}
+	Graph->NotifyGraphChanged();
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return Pasted;
+}
+
+bool UVCAnimAuthoringLibrary::SetNodePinVisible(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, FName PropertyName, bool bVisible)
+{
+	using namespace VCAnimAuthoring;
+	UAnimGraphNode_Base* Node = Cast<UAnimGraphNode_Base>(FindNode(FindGraph(Blueprint, GraphName), NodeName));
+	if (!Node)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetNodePinVisible: no anim node %s in %s.%s"), *NodeName, *GetNameSafe(Blueprint), *GraphName.ToString());
+		return false;
+	}
+	for (FOptionalPinFromProperty& Option : Node->ShowPinForProperties)
+	{
+		if (Option.PropertyName == PropertyName)
+		{
+			Node->Modify();
+			Option.bShowPin = bVisible;
+			Node->ReconstructNode();
+			FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+			return true;
+		}
+	}
+	UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetNodePinVisible: %s has no optional pin for %s"), *NodeName, *PropertyName.ToString());
+	return false;
 }
 
 bool UVCAnimAuthoringLibrary::SetMontageSlot(UAnimMontage* Montage, FName SlotName)

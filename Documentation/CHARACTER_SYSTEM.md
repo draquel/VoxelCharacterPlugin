@@ -287,6 +287,27 @@ it reads through `IVCAnimatedCharacter` (`VCAnimatedCharacter.h`), which both ch
 - **Where the sets come from.** The player's are `UVCSettings::PlayerActionAnimSets` (Project Settings > Voxel
   Character, `Config/DefaultGame.ini`) unless its Blueprint lists its own; an NPC lists its own (none yet: its attacks
   land at once, as before).
+- **IK and pace** (the plan's P4). After its slot, so over the montages too, `ABP_VoxelCharacter` runs in component
+  space: foot placement and its leg IK (`FootIKAlpha`), a look-at on the head (`LookAtLocation`, `LookAtAlpha`) and a
+  two-bone IK that puts the left hand on a two-handed item's grip (`HandIKEffector`, `HandIKAlpha`); the Walk/Run blend
+  space plays at `LocomotionPlayRate`. The anim instance eases each weight at `IKBlendSpeed` a second, so nothing
+  snaps, and a switch only changes a value, never the graph.
+  - Feet: on while the character is on the ground, alive, not downed, not swimming or flying. The node is GASP's with
+    the Graph speed mode (a foot plants when its ball stops in the pose; our clips carry no contact curves) and traces
+    along the mesh's own down, so it plants on a planet as on a plane; the pelvis drops at most 50 uu, so one foot on a
+    75 uu block step bends that leg instead of crouching the body.
+  - Pace: past `LocomotionReferenceSpeed` (600, the blend space's top) the clips play at the speed over it (1.6 at a
+    sprint), so the feet keep pace with the ground. Stride warping measured nothing here (the jog's feet are near the
+    legs' reach, where it clamps) and orientation warping is not needed (eight directions).
+  - Look-at: a player's head turns toward the point `LookAtDistance` along its view, an NPC's toward its AI controller's
+    focus, at most 50 degrees (the node's clamp); it fades for a target more than `LookAtMaxAngle` from the facing
+    (about local up), in first person, dead or downed. The node's look-up axis and interpolation stay off: with them on
+    the head did not turn.
+  - Hands: an action set with `bOffHandIK` puts the left wrist at `OffHandGrip`, a point in `hand_r`'s space (the Tool
+    and TwoHand sets: (0, 2, 20), on the pickaxe's handle); the elbow keeps its plane.
+  - `vc.Anim.FootIK`, `vc.Anim.SprintPace`, `vc.Anim.LookAt` and `vc.Anim.HandIK` switch each off for an A/B;
+    `vc.Anim.Debug 1` draws each character's look-at target and weights and turns on the engine's foot placement draw.
+    `Scripts/setup_character_ik.py` builds the chain and the play rate; a crouched character has no pose yet (G140).
 - **The content.** `Scripts/setup_character_layers.py` builds the interface, the layers, the montages (from the
   template mannequin's, Sword & Shield's, Bow and Arrow's and GASP's sequences, a hit notify at the strike; the bow's
   draw a raise, a pull and a held loop in sections, `UVCAnimAuthoringLibrary::AppendMontageSegment`) and the five sets
@@ -597,7 +618,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 
 ## Console variables
 
-`vc.*` groups: `vc.AI.*` (NPC AI), `vc.Dig.*` (the cubic break times' scale, the highlight), `vc.Minimap.*` (the
+`vc.*` groups: `vc.AI.*` (NPC AI), `vc.Anim.*` (the IK and pace switches, the debug draw), `vc.Dig.*` (the cubic break times' scale, the highlight), `vc.Minimap.*` (the
 minimap's refill stats), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
 and `ToggleVoxelDebug` are on the controller and the character. Every name, default and meaning:
 `Documentation/EDITOR_CONSOLE_GUIDE.md` §4 at the project root. The `vox.*` QA commands that drive this plugin's pawn

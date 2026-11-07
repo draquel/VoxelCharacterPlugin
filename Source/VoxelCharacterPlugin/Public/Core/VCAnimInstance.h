@@ -8,6 +8,8 @@
 #include "Core/VCTypes.h"
 #include "VCAnimInstance.generated.h"
 
+class UVCActionMontageComponent;
+
 /**
  * What UVCAnimInstance reads from its character on the game thread, every vector in world space. The rest of the update
  * works from this alone, on any thread (character animation P2).
@@ -60,6 +62,26 @@ struct FVCAnimInput
 	FGameplayTag ActionSet;
 	bool bDead = false;
 	bool bDowned = false;
+
+	/** Debug flight (MOVE_Flying): the feet stand on nothing. */
+	bool bFlying = false;
+
+	/** Where the character looks from: its eyes (GetPawnViewLocation). */
+	FVector EyeLocation = FVector::ZeroVector;
+
+	/** Where it looks, when bHasLookTarget: a player's view a LookAtDistance ahead, an AI controller's focus. */
+	FVector LookTarget = FVector::ZeroVector;
+	bool bHasLookTarget = false;
+
+	/** The held action set's off-hand grip (UVCActionAnimSet::bOffHandIK, OffHandGrip): the off wrist in hand_r's space. */
+	bool bOffHandIK = false;
+	FVector OffHandGrip = FVector::ZeroVector;
+
+	/** The IK and pace switches (vc.Anim.FootIK, SprintPace, LookAt, HandIK), read on the game thread. */
+	bool bFootIKEnabled = true;
+	bool bSprintPaceEnabled = true;
+	bool bLookAtEnabled = true;
+	bool bHandIKEnabled = true;
 };
 
 /**
@@ -93,6 +115,16 @@ public:
 
 	/** Forgets the state kept across updates (the body heading, the last facing): the next update starts afresh. */
 	void ResetKeptState();
+
+	/**
+	 * Pure: the walk/run clips' play rate for a speed (character animation P4): the locomotion's top authored speed plays
+	 * its clips as authored; a faster pawn (a sprint) takes quicker steps, so its feet keep pace with the ground. The steps
+	 * quicken rather than lengthen: a jog's legs are near full reach at each end of the stride.
+	 * @param InSpeed        The speed across local up (uu/s)
+	 * @param ReferenceSpeed The locomotion's top authored speed (uu/s)
+	 * @return 1 up to ReferenceSpeed (or a reference of 0), else InSpeed / ReferenceSpeed
+	 */
+	static float ComputeLocomotionPlayRate(float InSpeed, float ReferenceSpeed);
 
 	// ==================== Locomotion ====================
 
@@ -220,6 +252,38 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float WaterDepth = 0.f;
 
+	// ==================== IK and pace (character animation P4) ====================
+
+	/**
+	 * How far foot placement and the leg IK apply (0 to 1): 1 on the ground, 0 while falling, swimming, flying, dead or
+	 * downed, eased between at IKBlendSpeed (vc.Anim.FootIK).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float FootIKAlpha = 0.f;
+
+	/** The walk/run clips' play rate: ComputeLocomotionPlayRate on the ground, 1 otherwise (vc.Anim.SprintPace). */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float LocomotionPlayRate = 1.f;
+
+	/** Where the head looks (world): the player's view LookAtDistance ahead, an NPC's focus; kept when there is none. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	FVector LookAtLocation = FVector::ZeroVector;
+
+	/**
+	 * How far the head turns to LookAtLocation (0 to 1): 0 with no target, in first person (the head is hidden), dead or
+	 * downed, or with the target more than LookAtMaxAngle from the facing (vc.Anim.LookAt).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float LookAtAlpha = 0.f;
+
+	/** How far the off hand's IK applies (0 to 1): 1 while the held set grips with both hands (vc.Anim.HandIK). */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float HandIKAlpha = 0.f;
+
+	/** Where the off hand's wrist goes, in hand_r's space: the held set's OffHandGrip. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	FVector HandIKEffector = FVector::ZeroVector;
+
 	// ==================== Tuning ====================
 
 	/** The largest turn-in-place offset (degrees): past it the body is dragged round with the facing. */
@@ -242,6 +306,22 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0", ClampMax = "1"))
 	float UnderwaterImmersion = 0.95f;
 
+	/** How fast the IK alphas move toward on or off (per second): 8 turns one fully in an eighth of a second. */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0"))
+	float IKBlendSpeed = 8.f;
+
+	/** The locomotion's top authored speed (uu/s): the walk/run blend space's jog, above which the steps quicken. */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0"))
+	float LocomotionReferenceSpeed = 600.f;
+
+	/** How far ahead along the view a player's head looks (uu). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0"))
+	float LookAtDistance = 1000.f;
+
+	/** The look-at fades out for a target more than this from the facing (degrees across local up). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0", ClampMax = "180"))
+	float LookAtMaxAngle = 110.f;
+
 private:
 	/** Fills Input from the owning character (game thread). @return False when there is no character to read */
 	bool GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) const;
@@ -257,4 +337,10 @@ private:
 	FVector BodyHeading = FVector::ZeroVector;
 
 	bool bHasKeptState = false;
+
+	/** The character's montage component (its held action set), found once. */
+	mutable TWeakObjectPtr<const UVCActionMontageComponent> CachedMontages;
+
+	/** vc.Anim.Debug: the look-at target and the IK values drawn over the character (game thread). */
+	void DrawDebug() const;
 };

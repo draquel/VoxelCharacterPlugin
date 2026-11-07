@@ -3,13 +3,57 @@
 #include "Core/VCAnimInstance.h"
 #include "Core/VCAnimatedCharacter.h"
 #include "Core/VCGameplayTags.h"
+#include "Animation/VCActionAnimSet.h"
+#include "Animation/VCActionMontageComponent.h"
 #include "Combat/VCCombatComponent.h"
 #include "Interfaces/CGFDamageableInterface.h"
 #include "Movement/VCMovementComponent.h"
+#include "AIController.h"
+#include "AISystem.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "DrawDebugHelpers.h"
 #include "Engine/World.h"
+#include "HAL/IConsoleManager.h"
+
+namespace
+{
+	TAutoConsoleVariable<int32> CVarAnimFootIK(
+		TEXT("vc.Anim.FootIK"), 1,
+		TEXT("Foot placement and the leg IK on the characters' anim graph: 1 on, 0 off (A/B; character animation P4)."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarAnimSprintPace(
+		TEXT("vc.Anim.SprintPace"), 1,
+		TEXT("Above the locomotion's top authored speed (a sprint), the walk/run clips play faster so the feet keep pace with the ground: 1 on, 0 off (A/B; character animation P4)."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarAnimLookAt(
+		TEXT("vc.Anim.LookAt"), 1,
+		TEXT("The head looking toward the view's aim (a player) or the focus (an NPC): 1 on, 0 off (A/B; character animation P4)."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarAnimHandIK(
+		TEXT("vc.Anim.HandIK"), 1,
+		TEXT("The off hand's IK onto a two-handed item's grip: 1 on, 0 off (A/B; character animation P4)."),
+		ECVF_Default);
+
+	/** Mirrors vc.Anim.Debug into the engine's foot placement debug draw. */
+	void OnAnimDebugChanged(IConsoleVariable* Variable)
+	{
+		if (IConsoleVariable* FootPlacementDebug = IConsoleManager::Get().FindConsoleVariable(TEXT("a.AnimNode.FootPlacement.Debug")))
+		{
+			FootPlacementDebug->Set(Variable->GetInt(), ECVF_SetByConsole);
+		}
+	}
+
+	TAutoConsoleVariable<int32> CVarAnimDebug(
+		TEXT("vc.Anim.Debug"), 0,
+		TEXT("1 draws each character's look-at target and IK values, and turns on the engine's foot placement debug draw (a.AnimNode.FootPlacement.Debug); 0 off."),
+		FConsoleVariableDelegate::CreateStatic(&OnAnimDebugChanged),
+		ECVF_Default);
+}
 
 namespace VCAnimInstanceMath
 {
@@ -56,6 +100,38 @@ void UVCAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 {
 	Super::NativeUpdateAnimation(DeltaSeconds);
 	bHasGatheredInput = GatherInput(DeltaSeconds, GatheredInput);
+	if (CVarAnimDebug.GetValueOnGameThread() != 0)
+	{
+		DrawDebug();
+	}
+}
+
+float UVCAnimInstance::ComputeLocomotionPlayRate(float InSpeed, float ReferenceSpeed)
+{
+	if (ReferenceSpeed <= UE_KINDA_SMALL_NUMBER)
+	{
+		return 1.f;
+	}
+	return FMath::Max(InSpeed / ReferenceSpeed, 1.f);
+}
+
+void UVCAnimInstance::DrawDebug() const
+{
+	const APawn* Pawn = TryGetPawnOwner();
+	UWorld* World = Pawn ? Pawn->GetWorld() : nullptr;
+	if (!World)
+	{
+		return;
+	}
+	// The values are last update's: the thread-safe update writes them after this.
+	if (LookAtAlpha > 0.f)
+	{
+		DrawDebugSphere(World, LookAtLocation, 12.f, 8, FColor::Cyan, false, -1.f);
+		DrawDebugLine(World, GatheredInput.EyeLocation, LookAtLocation, FColor::Cyan, false, -1.f);
+	}
+	const FString Text = FString::Printf(TEXT("foot %.2f  pace x%.2f  look %.2f  hand %.2f"), FootIKAlpha, LocomotionPlayRate,
+		LookAtAlpha, HandIKAlpha);
+	DrawDebugString(World, Pawn->GetActorLocation() - GatheredInput.GravityDirection * 110.f, Text, nullptr, FColor::White, 0.f, true);
 }
 
 void UVCAnimInstance::NativeThreadSafeUpdateAnimation(float DeltaSeconds)
@@ -101,6 +177,35 @@ bool UVCAnimInstance::GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) co
 	OutInput.bFalling = Movement->IsFalling();
 	OutInput.bCrouching = Movement->IsCrouching();
 	OutInput.bSwimming = Movement->IsSwimming();
+	OutInput.bFlying = Movement->IsFlying();
+
+	// The head's target: an AI controller's focus (none when it has no focus), else the view's aim ahead.
+	OutInput.EyeLocation = Character->GetPawnViewLocation();
+	if (const AAIController* AI = Cast<AAIController>(Controller))
+	{
+		OutInput.LookTarget = AI->GetFocalPoint();
+		OutInput.bHasLookTarget = FAISystem::IsValidLocation(OutInput.LookTarget);
+	}
+	else
+	{
+		OutInput.LookTarget = OutInput.EyeLocation + OutInput.ControlRotation.Vector() * LookAtDistance;
+		OutInput.bHasLookTarget = true;
+	}
+
+	if (!CachedMontages.IsValid())
+	{
+		CachedMontages = Character->FindComponentByClass<UVCActionMontageComponent>();
+	}
+	if (const UVCActionAnimSet* Set = CachedMontages.IsValid() ? CachedMontages->GetCurrentActionAnimSet() : nullptr)
+	{
+		OutInput.bOffHandIK = Set->bOffHandIK;
+		OutInput.OffHandGrip = Set->OffHandGrip;
+	}
+
+	OutInput.bFootIKEnabled = CVarAnimFootIK.GetValueOnGameThread() != 0;
+	OutInput.bSprintPaceEnabled = CVarAnimSprintPace.GetValueOnGameThread() != 0;
+	OutInput.bLookAtEnabled = CVarAnimLookAt.GetValueOnGameThread() != 0;
+	OutInput.bHandIKEnabled = CVarAnimHandIK.GetValueOnGameThread() != 0;
 	OutInput.Immersion = OutInput.bSwimming ? Movement->ImmersionDepth() : 0.f;
 
 	if (Movement->IsMovingOnGround() && Movement->CurrentFloor.IsWalkableFloor())
@@ -264,6 +369,31 @@ void UVCAnimInstance::ComputeValues(const FVCAnimInput& Input)
 	bIsSwimming = Input.bSwimming;
 	bIsUnderwater = Input.bSwimming && Input.Immersion >= UnderwaterImmersion;
 	WaterDepth = Input.WaterDepth;
+
+	// --- IK and pace: each alpha eases toward on or off, so a landing or a change of hands blends ---
+	const auto Ease = [this, DeltaSeconds](float Current, bool bOn)
+	{
+		return FMath::FInterpConstantTo(Current, bOn ? 1.f : 0.f, DeltaSeconds, IKBlendSpeed);
+	};
+	const bool bAble = !Input.bDead && !Input.bDowned;
+	FootIKAlpha = Ease(FootIKAlpha, Input.bFootIKEnabled && bAble && Input.bOnGround && !Input.bSwimming && !Input.bFlying);
+	LocomotionPlayRate = Input.bSprintPaceEnabled && Input.bOnGround ? ComputeLocomotionPlayRate(Speed, LocomotionReferenceSpeed) : 1.f;
+
+	// The look-at fades for a target behind the body; the node itself clamps how far the head turns.
+	bool bLookTargetAhead = false;
+	if (Input.bHasLookTarget)
+	{
+		LookAtLocation = Input.LookTarget;
+		const FVector ToTarget = Horizontal(Input.LookTarget - Input.EyeLocation, Up);
+		bLookTargetAhead = ToTarget.IsNearlyZero() || FMath::Abs(SignedAngleAbout(Forward, ToTarget, Up)) <= LookAtMaxAngle;
+	}
+	LookAtAlpha = Ease(LookAtAlpha, Input.bLookAtEnabled && bAble && bLookTargetAhead && Input.ViewMode != EVCViewMode::FirstPerson);
+
+	HandIKAlpha = Ease(HandIKAlpha, Input.bHandIKEnabled && bAble && Input.bOffHandIK);
+	if (Input.bOffHandIK)
+	{
+		HandIKEffector = Input.OffHandGrip;
+	}
 
 	LastFacing = Forward;
 	bHasKeptState = true;
