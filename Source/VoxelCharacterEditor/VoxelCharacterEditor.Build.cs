@@ -25,6 +25,7 @@ public class VoxelCharacterEditor : ModuleRules
 			"UnrealEd",       // FBlueprintEditorUtils
 			"BlueprintGraph", // UK2Node, UEdGraphSchema_K2
 			"AnimGraph",      // UAnimationGraph, UAnimationGraphSchema
+			"AssetTools",     // CopyAssetsWithReferences (character animation P5)
 		});
 	}
 }

@@ -44,6 +44,7 @@
 #include "VoxelCollisionManager.h"
 #include "VoxelCharacterPlugin.h"
 #include "Engine/Engine.h"
+#include "EngineUtils.h"
 #include "GameFramework/DamageType.h"
 #include "GameFramework/GameModeBase.h"
 #include "Combat/VCCombatStatics.h"
@@ -105,6 +106,31 @@ namespace
 		const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
 		return ChunkMgr && UVCBlockInteractionComponent::ShowsBlockFeedback(ChunkMgr->GetConfiguration());
 	}
+
+	/** vc.Anim.MotionMatching changed: every player in play takes the locomotion it now names. */
+	void OnMotionMatchingChanged(IConsoleVariable* Variable)
+	{
+		if (!GEngine)
+		{
+			return;
+		}
+		for (const FWorldContext& Context : GEngine->GetWorldContexts())
+		{
+			if (UWorld* World = Context.World(); World && World->IsGameWorld())
+			{
+				for (TActorIterator<AVCCharacterBase> It(World); It; ++It)
+				{
+					It->ApplyLocomotionAnimClass();
+				}
+			}
+		}
+	}
+
+	TAutoConsoleVariable<int32> CVarAnimMotionMatching(
+		TEXT("vc.Anim.MotionMatching"), 1,
+		TEXT("The player's locomotion: 1 motion matching (UVCSettings::PlayerLocomotionAnimClass, character animation P5) when it loads, 0 the player Blueprint's own anim class (ABP_VoxelCharacter's state machine). Applies at once to every player in play."),
+		FConsoleVariableDelegate::CreateStatic(&OnMotionMatchingChanged),
+		ECVF_Default);
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +298,7 @@ void AVCCharacterBase::BeginPlay()
 {
 	Super::BeginPlay();
 	UpdateMeshVisibility();
+	ApplyLocomotionAnimClass();
 
 	// --- Bind integration delegates ---
 
@@ -1410,6 +1437,70 @@ void AVCCharacterBase::RefreshActionSet()
 	}
 #endif
 	ActiveActionSet = PickActionSet(bHoldsItem, ItemActionSet);
+}
+
+void AVCCharacterBase::ApplyLocomotionAnimClass()
+{
+	USkeletalMeshComponent* MeshComponent = GetMesh();
+	UWorld* World = GetWorld();
+	if (!MeshComponent || !World)
+	{
+		return;
+	}
+	if (!BlueprintAnimClass)
+	{
+		BlueprintAnimClass = MeshComponent->GetAnimClass();
+	}
+
+	// Motion matching on every machine that draws the player; a dedicated server and the automation tests keep the
+	// Blueprint's state machine (nothing there reads a pose, and the databases are large to load)
+	TSubclassOf<UAnimInstance> Wanted = BlueprintAnimClass;
+	const TSoftClassPtr<UAnimInstance>& MotionMatching = UVCSettings::Get().PlayerLocomotionAnimClass;
+	if (CVarAnimMotionMatching.GetValueOnGameThread() != 0 && !MotionMatching.IsNull()
+		&& GetNetMode() != NM_DedicatedServer && !GIsAutomationTesting)
+	{
+		if (UClass* Loaded = MotionMatching.LoadSynchronous())
+		{
+			Wanted = Loaded;
+		}
+		else
+		{
+			static bool bWarned = false;
+			UE_CLOG(!bWarned, LogVoxelCharacter, Warning,
+				TEXT("The player's motion-matching AnimBP %s does not load (Scripts/setup_character_locomotion.py builds it): the Blueprint's own plays"),
+				*MotionMatching.ToString());
+			bWarned = true;
+		}
+	}
+	if (!Wanted || MeshComponent->GetAnimClass() == Wanted)
+	{
+		return;
+	}
+	MeshComponent->SetAnimInstanceClass(Wanted);
+	RelinkEquipmentAnimLayers();
+}
+
+void AVCCharacterBase::RelinkEquipmentAnimLayers()
+{
+#if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
+	// A new anim instance links no layers: the held items' stances come back (EquipmentPlugin links them on equip)
+	USkeletalMeshComponent* MeshComponent = GetMesh();
+	const UGameInstance* GI = GetGameInstance();
+	const UItemDatabaseSubsystem* ItemDB = GI ? GI->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
+	if (!EquipmentManager || !MeshComponent || !ItemDB)
+	{
+		return;
+	}
+	for (const FGameplayTag& SlotTag : EquipmentManager->GetOccupiedSlotTags())
+	{
+		const UItemDefinition* Def = ItemDB->GetDefinition(EquipmentManager->GetEquippedItem(SlotTag).ItemDefinitionId);
+		const UItemFragment_Equipment* EquipFrag = Def ? Def->FindFragment<UItemFragment_Equipment>() : nullptr;
+		if (EquipFrag && EquipFrag->AnimLayerClass)
+		{
+			MeshComponent->LinkAnimClassLayers(EquipFrag->AnimLayerClass);
+		}
+	}
+#endif
 }
 
 // ---------------------------------------------------------------------------

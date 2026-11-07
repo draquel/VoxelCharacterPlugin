@@ -322,6 +322,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0", ClampMax = "180"))
 	float LookAtMaxAngle = 110.f;
 
+protected:
+	/** @return The input NativeUpdateAnimation gathered this update; null when there was no character to read */
+	const FVCAnimInput* GetGatheredInput() const { return bHasGatheredInput ? &GatheredInput : nullptr; }
+
 private:
 	/** Fills Input from the owning character (game thread). @return False when there is no character to read */
 	bool GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) const;

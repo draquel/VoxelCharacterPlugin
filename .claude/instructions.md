@@ -3,7 +3,8 @@
 > State as of 2026-11-02 (code review CR5). Terms: `Documentation/GLOSSARY.md`.
 
 The player and NPC layer: character, controller, player state, game mode, movement, camera, input, combat on GAS, NPC
-AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; a runtime module, `VoxelCharacterPlugin`, and an
+AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; a runtime module, `VoxelCharacterPlugin`, a second
+runtime module, `VoxelCharacterAnimation` (the player's motion matching: PoseSearch stays out of the first, D45), and an
 editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the animation content).
 
 ## Reading order

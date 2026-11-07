@@ -6,6 +6,7 @@
 #include "Engine/DeveloperSettings.h"
 #include "VCSettings.generated.h"
 
+class UAnimInstance;
 class UVCActionAnimSet;
 
 /**
@@ -33,4 +34,12 @@ public:
 	 */
 	UPROPERTY(config, EditAnywhere, Category = "Animation")
 	TArray<TSoftObjectPtr<UVCActionAnimSet>> PlayerActionAnimSets;
+
+	/**
+	 * The player's motion-matching AnimBP (character animation P5): the Game Animation Sample's CMC AnimBP on
+	 * UVCMotionMatchingAnimInstance, built by Scripts/setup_character_locomotion.py. The player plays it while
+	 * vc.Anim.MotionMatching is 1 and it loads; otherwise, and on a dedicated server, its Blueprint's own anim class.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Animation")
+	TSoftClassPtr<UAnimInstance> PlayerLocomotionAnimClass;
 };

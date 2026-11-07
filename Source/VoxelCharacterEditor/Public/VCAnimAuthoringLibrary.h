@@ -13,11 +13,13 @@ class UBlueprint;
 
 /**
  * Editor scripting for anim blueprints and montages that the engine does not expose to Python (character animation P3
- * and P4, ranged combat plan B4): add an animation layer to an anim layer interface, implement an interface, add graph
+ * to P5, ranged combat plan B4): add an animation layer to an anim layer interface, implement an interface, add graph
  * nodes of any class, set a node's properties or a pin's default from text, show a property's pin, connect pins, list
- * and describe graphs, copy nodes between blueprints as text; append a montage's sequences in sections and choose its
- * slot. Scripts/setup_character_layers.py builds the character's layers and montages with it,
- * Scripts/setup_character_ik.py the IK. Every function returns false (or an empty string) and logs a warning when it cannot do what it was
+ * and describe graphs, copy nodes between blueprints as text; copy assets with the references among them, rename a
+ * member variable, remove nodes, swap one function's calls for another's, recombine a split pin, read a pin's links;
+ * append a montage's sequences in sections and choose its slot. Scripts/setup_character_layers.py builds the
+ * character's layers and montages with it, Scripts/setup_character_ik.py the IK, Scripts/setup_character_locomotion.py
+ * the player's motion matching. Every function returns false (or an empty string) and logs a warning when it cannot do what it was
  * asked; none compiles or saves (the caller does, once).
  */
 UCLASS()
@@ -207,4 +209,71 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
 	static bool SetNodePinVisible(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, FName PropertyName, bool bVisible);
+
+	/**
+	 * Copies assets together and points every reference among them at the copies (character animation P5: GASP's CMC
+	 * AnimBP and the choosers that name its class as their context): a copied blueprint's class and default object stand
+	 * for the source's. A destination that exists is not copied again, and its references are pointed the same way.
+	 * @param SourceToDestination Each source asset's package path to its copy's ("/Game/A/X" to "/Game/B/Y")
+	 * @return The copies by package path, in the map's order; empty when a source does not load or a copy fails
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static TArray<FString> CopyAssetsWithReferences(const TMap<FString, FString>& SourceToDestination);
+
+	/**
+	 * Renames a blueprint's member variable and every node that reads or writes it.
+	 * @param Blueprint The blueprint
+	 * @param OldName   The variable
+	 * @param NewName   Its new name
+	 * @return True when the blueprint has a variable of the new name afterwards
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static bool RenameMemberVariable(UBlueprint* Blueprint, FName OldName, FName NewName);
+
+	/**
+	 * Removes nodes from a graph, with their links.
+	 * @param Blueprint The blueprint
+	 * @param GraphName The graph
+	 * @param NodeNames The nodes by name or title
+	 * @return How many were removed
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static int32 RemoveGraphNodes(UBlueprint* Blueprint, FName GraphName, const TArray<FString>& NodeNames);
+
+	/**
+	 * Swaps every call to one function in a blueprint's graphs for a call to another whose pins have the same names: each
+	 * pin's links and default move across, a split pin is split the same way (character animation P5: GASP's world-Z
+	 * arithmetic for the gravity frame's). A member of the blueprint's own class or a parent is called on self.
+	 * @param Blueprint       The blueprint
+	 * @param OldFunctionName The function called now ("VSizeXY")
+	 * @param NewOwner        The class that declares the new function
+	 * @param NewFunctionName The function to call instead
+	 * @return The calls swapped; -1 when the new function does not exist. A pin the new function lacks is logged and its
+	 *         links dropped
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static int32 ReplaceFunctionCalls(UBlueprint* Blueprint, FName OldFunctionName, UClass* NewOwner, FName NewFunctionName);
+
+	/**
+	 * Recombines a split struct pin (a rotator shown as roll, pitch and yaw) into one pin.
+	 * @param Blueprint The blueprint
+	 * @param GraphName The graph
+	 * @param NodeName  The node
+	 * @param PinName   The struct pin ("ReturnValue"), either direction
+	 * @return True when the pin is whole afterwards
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static bool RecombinePin(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, const FString& PinName);
+
+	/**
+	 * Where a pin leads: the pins linked to it, and to its split parts.
+	 * @param Blueprint The blueprint
+	 * @param GraphName The graph
+	 * @param NodeName  The node
+	 * @param PinName   The pin, either direction (a split pin's parts count as its own)
+	 * @return "Node.Pin" for each linked pin (a part of a split pin by its own name, "TargetRotation_Yaw"); empty when
+	 *         none or no such pin
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static TArray<FString> GetPinLinks(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, const FString& PinName);
 };
