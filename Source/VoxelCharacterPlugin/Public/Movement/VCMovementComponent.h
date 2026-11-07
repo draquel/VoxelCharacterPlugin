@@ -242,17 +242,21 @@ public:
 	static float AdvanceWetLevel(float Level, float RateOnPawn, bool bSwimming, float DeltaTime, float SoakSeconds, float DrySeconds);
 
 	/**
-	 * Pure: the wind's drift on the pawn, Wind x Factor x Exposure: a current the pawn rides whatever it does itself, so a
-	 * standing pawn drifts at it and a pawn walking against the wind is slowed by it. CalcVelocity takes the previous
-	 * tick's drift off the velocity before the braking and the friction (which would otherwise eat it: a standing pawn
-	 * would never move) and puts this tick's back on after them. The wind itself blends over a front's transition, so
+	 * Pure: the wind's drift on the pawn, Wind x Factor x Exposure, scaled by how much the pawn moves of itself: a
+	 * standing pawn is not moved (it can idle anywhere in any wind), a walking pawn is slowed against the wind and
+	 * helped along it in proportion to its speed (full at MaxSpeed), and a pawn in the air is carried at the full drift.
+	 * CalcVelocity takes the previous tick's drift off the velocity before the braking and the friction (which would
+	 * otherwise eat it) and puts this tick's back on after them. The wind itself blends over a front's transition, so
 	 * the drift needs no ramp of its own. A zero wind, factor or exposure is no drift.
-	 * @param Wind     The wind at the pawn, world uu/s
-	 * @param Factor   WindPushFactor
-	 * @param Exposure The pawn's exposure to the sky (0..1)
+	 * @param Wind      The wind at the pawn, world uu/s
+	 * @param Factor    WindPushFactor
+	 * @param Exposure  The pawn's exposure to the sky (0..1)
+	 * @param OwnSpeed  The pawn's own speed this tick (after the braking and the friction, before the drift), uu/s
+	 * @param MaxSpeed  The speed at which the drift is full (GetMaxSpeed)
+	 * @param bAirborne Falling: the full drift whatever the speed
 	 * @return The drift, world uu/s
 	 */
-	static FVector ComputeWindDrift(const FVector& Wind, float Factor, float Exposure);
+	static FVector ComputeWindDrift(const FVector& Wind, float Factor, float Exposure, float OwnSpeed, float MaxSpeed, bool bAirborne);
 
 	// --- Planet gravity (VoxelWorlds SPHERICAL_PLANET_REQUIREMENTS.md SP-F1; WORLD_MODES_REVIEW_PLAN.md §17, WM-W1) ---
 	// On a planet (the voxel world's bounds are a shell) gravity points at the centre: the engine's custom gravity

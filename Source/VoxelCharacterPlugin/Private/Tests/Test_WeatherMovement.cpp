@@ -11,9 +11,10 @@
 #include "UI/VCVitalsWidget.h"
 
 // ---------------------------------------------------------------------------
-// The wind's drift on the pawn (the weather plan's P4): a fraction of the wind, a current the pawn rides whatever it does
-// itself; nothing sheltered or in a calm. CalcVelocity's bookkeeping (the previous drift off before the braking, the
-// new one on after it) is what lets a standing pawn drift: checked here as the arithmetic it is.
+// The wind's drift on the pawn (the weather plan's P4): a fraction of the wind on the pawn's own motion (slower against
+// it, faster with it, in proportion to its speed) and the full fraction on a fall; a standing pawn idles in any wind;
+// nothing sheltered or in a calm. CalcVelocity's bookkeeping (the previous drift off before the braking, the new one on
+// after it) is checked here as the arithmetic it is.
 // ---------------------------------------------------------------------------
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCWindPushTest, "VoxelCharacter.Movement.WindPush",
@@ -23,38 +24,45 @@ bool FVCWindPushTest::RunTest(const FString& Parameters)
 {
 	const FVector East(1.0, 0.0, 0.0);
 	const FVector Wind = East * 900.0; // a storm
-	const float Factor = 0.1f;        // a drift of 90 uu/s
+	const float Factor = 0.1f;        // a drift of 90 uu/s at full motion
+	const float Max = 600.f;          // the pawn's max speed
 
-	const FVector Drift = UVCMovementComponent::ComputeWindDrift(Wind, Factor, 1.0f);
-	TestTrue(TEXT("A tenth of the wind, along it"), Drift.Equals(East * 90.0, 1.0e-3));
-	TestTrue(TEXT("Half exposure: half the drift"), UVCMovementComponent::ComputeWindDrift(Wind, Factor, 0.5f).Equals(East * 45.0, 1.0e-3));
-	TestTrue(TEXT("Sheltered: nothing"), UVCMovementComponent::ComputeWindDrift(Wind, Factor, 0.0f).IsZero());
-	TestTrue(TEXT("Calm: nothing"), UVCMovementComponent::ComputeWindDrift(FVector::ZeroVector, Factor, 1.0f).IsZero());
-	TestTrue(TEXT("No factor: nothing"), UVCMovementComponent::ComputeWindDrift(Wind, 0.0f, 1.0f).IsZero());
-	TestTrue(TEXT("Exposure over 1 clamps"), UVCMovementComponent::ComputeWindDrift(Wind, Factor, 3.0f).Equals(East * 90.0, 1.0e-3));
+	// Standing: nothing. Walking at the max speed: the full drift; at half: half. In the air: full whatever the speed.
+	TestTrue(TEXT("Standing: no drift"), UVCMovementComponent::ComputeWindDrift(Wind, Factor, 1.0f, 0.f, Max, false).IsZero());
+	const FVector Drift = UVCMovementComponent::ComputeWindDrift(Wind, Factor, 1.0f, Max, Max, false);
+	TestTrue(TEXT("At the max speed: a tenth of the wind, along it"), Drift.Equals(East * 90.0, 1.0e-3));
+	TestTrue(TEXT("At half speed: half"), UVCMovementComponent::ComputeWindDrift(Wind, Factor, 1.0f, 300.f, Max, false).Equals(East * 45.0, 1.0e-3));
+	TestTrue(TEXT("Over the max speed: capped at the full drift"), UVCMovementComponent::ComputeWindDrift(Wind, Factor, 1.0f, 2000.f, Max, false).Equals(East * 90.0, 1.0e-3));
+	TestTrue(TEXT("Falling from rest: the full drift"), UVCMovementComponent::ComputeWindDrift(Wind, Factor, 1.0f, 0.f, Max, true).Equals(East * 90.0, 1.0e-3));
+	TestTrue(TEXT("Half exposure: half the drift"), UVCMovementComponent::ComputeWindDrift(Wind, Factor, 0.5f, Max, Max, false).Equals(East * 45.0, 1.0e-3));
+	TestTrue(TEXT("Sheltered: nothing"), UVCMovementComponent::ComputeWindDrift(Wind, Factor, 0.0f, Max, Max, false).IsZero());
+	TestTrue(TEXT("Calm: nothing"), UVCMovementComponent::ComputeWindDrift(FVector::ZeroVector, Factor, 1.0f, Max, Max, false).IsZero());
+	TestTrue(TEXT("No factor: nothing"), UVCMovementComponent::ComputeWindDrift(Wind, 0.0f, 1.0f, Max, Max, false).IsZero());
+	TestTrue(TEXT("Exposure over 1 clamps"), UVCMovementComponent::ComputeWindDrift(Wind, Factor, 3.0f, Max, Max, false).Equals(East * 90.0, 1.0e-3));
+	TestTrue(TEXT("A zero max speed does not divide"), UVCMovementComponent::ComputeWindDrift(Wind, Factor, 1.0f, 100.f, 0.f, false).Equals(East * 90.0, 1.0e-3));
 
 	// A vertical component in the wind (a planet's tangent wind seen in world axes) drifts along it, the vertical included.
 	const FVector Tangent = FVector(0.6, 0.0, 0.8) * 500.0;
-	TestTrue(TEXT("Along the wind's own direction"), UVCMovementComponent::ComputeWindDrift(Tangent, Factor, 1.0f).Equals(FVector(0.6, 0.0, 0.8) * 50.0, 1.0e-3));
+	TestTrue(TEXT("Along the wind's own direction"), UVCMovementComponent::ComputeWindDrift(Tangent, Factor, 1.0f, Max, Max, false).Equals(FVector(0.6, 0.0, 0.8) * 50.0, 1.0e-3));
 
-	// CalcVelocity's bookkeeping, as arithmetic: a standing pawn (its own velocity braked to zero each tick) moves at the
-	// drift, not faster; a pawn walking against the wind at 300 nets 210; across it, the cross speed stays.
+	// CalcVelocity's bookkeeping, as arithmetic: a standing pawn (its own velocity braked to zero each tick) does not
+	// move; a pawn walking against the wind at the max speed nets 510; across it, the cross speed stays.
 	FVector Velocity = FVector::ZeroVector;
 	FVector Last = FVector::ZeroVector;
 	for (int32 Tick = 0; Tick < 3; ++Tick)
 	{
 		Velocity -= Last;              // the previous drift off
 		Velocity = FVector::ZeroVector; // the braking of a standing pawn
-		Last = Drift;
+		Last = UVCMovementComponent::ComputeWindDrift(Wind, Factor, 1.0f, static_cast<float>(Velocity.Size()), Max, false);
 		Velocity += Last;
-		TestTrue(TEXT("Standing: the drift, never accumulated"), Velocity.Equals(East * 90.0, 1.0e-3));
+		TestTrue(TEXT("Standing: still standing"), Velocity.IsZero());
 	}
-	Velocity -= Last;
-	Velocity = East * -300.0;          // the pawn's own walk, against the wind
-	Velocity += Drift;
-	TestTrue(TEXT("Against the wind: slowed by the drift"), Velocity.Equals(East * -210.0, 1.0e-3));
-	Velocity = FVector(0.0, 400.0, 0.0) + Drift;
-	TestTrue(TEXT("Across: the cross speed kept, the drift added"), Velocity.Equals(FVector(90.0, 400.0, 0.0), 1.0e-3));
+	Velocity = East * -600.0;          // the pawn's own walk, against the wind, at the max speed
+	Velocity += UVCMovementComponent::ComputeWindDrift(Wind, Factor, 1.0f, static_cast<float>(Velocity.Size()), Max, false);
+	TestTrue(TEXT("Against the wind: slowed by the drift"), Velocity.Equals(East * -510.0, 1.0e-3));
+	Velocity = FVector(0.0, 600.0, 0.0);
+	Velocity += UVCMovementComponent::ComputeWindDrift(Wind, Factor, 1.0f, static_cast<float>(Velocity.Size()), Max, false);
+	TestTrue(TEXT("Across: the cross speed kept, the drift added"), Velocity.Equals(FVector(90.0, 600.0, 0.0), 1.0e-3));
 	return true;
 }
 
