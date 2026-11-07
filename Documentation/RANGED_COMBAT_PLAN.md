@@ -1,7 +1,11 @@
 # Ranged Combat Plan: the Bow
 
-> **Agreed 2026-11-06: the user approved the plan as drafted, every decision as recommended (D52-D57, §6). B1-B4 done;
-> B5 next.**
+> **Frozen 2026-11-07.** This plan is history: agreed 2026-11-06 as drafted, every decision as recommended (D52-D57,
+> §6), B1-B5 merged 2026-11-06 to 11-07. Built: `UItemFragment_RangedWeapon` and the per-item attach bone, the bow and
+> its arrows as items, `AVCArrowProjectile` and `UVCArrowMovementComponent`, `UVCRangedAttackAbility` and the
+> primary-action chain's bow step, `vox.Shoot`, the Bow set and its aiming layer (`UVCAnimLayerInstance`), the body
+> facing the aim while drawn. As it is now: `CHARACTER_SYSTEM.md` ("The bow", "Animation", "The primary action",
+> "Multiplayer"), `ITEM_INVENTORY_SYSTEM.md`, `EQUIPMENT_SYSTEM.md`; the QA rows F11.
 > Scope: a bow the player draws, aims and shoots, its
 > arrows as items, and the arrow's flight on a plane and on a planet. Owner: VoxelCharacterPlugin; one field each in
 > ItemInventoryPlugin and EquipmentPlugin; content and item data in the parent. It follows the character animation plan's
@@ -197,6 +201,20 @@ quivers), and the pack's own bow (`SM_Bow`, skeletal, its string a bone) and `SM
 ### B5: Closing
 - `CHARACTER_SYSTEM.md` (combat, animation, multiplayer), the console guide (`vox.Shoot`), the QA rows; this plan's
   results paragraph and its frozen banner.
+
+**B5 result (2026-11-07; VoxelCharacterPlugin, the parent).**
+- `CHARACTER_SYSTEM.md`: "The bow" under GAS (holding, the data, the attack, the arrow, the look), the class map's
+  ranged row, the primary action's first step, three multiplayer rows (the draw and the shot, arrows, facing while
+  drawn) and `vox.Shoot` among the game module's commands; B4 had added the layer, the animation and the content.
+  `vox.Shoot`'s row in the console guide was B3's.
+- The QA rows: area F11, "Bow and arrows" (`Tools/QA/qa_rows.py`, eight scenarios: equip, draw and shoot, a short draw,
+  no arrows, aiming while drawn, walking while drawing, sticking and the arc, placing and using by hand), and the bow and
+  arrow in the setup's item list; `QA_TEST_PLAN.md` regenerated.
+- The findings the plan turned up are closed: G135 (a stack's count changed in place never reached the client, B3's
+  networked check; CommonGameFramework#19) and its follow-up G136 (a fragment's contents changed in place,
+  CommonGameFramework#20, ItemInventoryPlugin#22, EquipmentPlugin#16), both 2026-11-06 to 11-07 in their own sessions.
+- Left for later, as §7 says: crossbows and thrown weapons, NPC archers, picking stuck arrows up, special arrows, a
+  quiver; a first-person draw waits for the arms decision (D57); a bending string for the pack's skeletal bow (D53 (b)).
 
 ## 5. Risks
 

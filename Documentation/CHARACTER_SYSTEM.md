@@ -35,6 +35,7 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Camera | `UVCCameraManager`, `UVCCameraModeBase`, `UVCFirstPersonCameraMode`, `UVCThirdPersonCameraMode` | The camera mode stack and its blend; third-person collision against voxel terrain; the block-step ease |
 | Camera | `UVCUnderwaterPostProcess` | Post-process tint and fog while the local player's camera is in a water voxel; on that player's pawn only |
 | Combat | `UVCCombatComponent`, `UVCCombatAttributeSet`, `UVCDamageEffect`, `UVCDamageExecution`, `UVCMeleeAttackAbility`, `UVCCombatStatics`, `UVCEquipmentStatEffect`, `IVCDamageReceiver` | Faction, damage intake, death and downed state; AttackPower and Defense; the damage pipeline; equipment stats |
+| Combat | `UVCRangedAttackAbility`, `AVCArrowProjectile`, `UVCArrowMovementComponent` | The bow: the draw timed and the shot taken on the server; the replicated arrow, its hits and sticking; its flight under local gravity (The bow, below) |
 | Editing | `UVCBlockInteractionComponent` | Cubic worlds: the block outline, the placement ghost and timed breaking |
 | Gathering | `UVCGatherTable` | Voxel material to item, scatter harvest entries, tool yield |
 | AI | `AVCNPCAIController`, `IVCPathProvider`, `UVCVoxelPathProvider` | The NPC state machine and its path provider over VoxelWorlds' surface navigation |
@@ -94,6 +95,42 @@ attacker builds FCGFDamageContext
 - Equipment stats go through `UVCEquipmentStatEffect` (SetByCaller keys `SetByCaller.Stat.*` in `VCGameplayTags.h`;
   configured under `EquipmentGASSettings` in `Config/DefaultGame.ini`). A new modifiable attribute is one tag and one
   `AddStatModifier` line.
+
+### The bow (ranged combat plan, 2026-11-06 to 11-07)
+
+Hold to draw, release to shoot; the server measures the draw, uses the arrow and spawns it (D52-D57,
+`RANGED_COMBAT_PLAN.md`, frozen).
+
+- **Holding (D52).** The bow is a main-hand weapon: everything that asks what the player wields (the action set, the
+  attack, the wear) reads the main hand. Its Equipment fragment's `AttachBoneOverride` (ItemInventoryPlugin) puts it on
+  `hand_l`; EquipmentPlugin attaches it there and `UpdateEquipmentAttachments` keeps that bone in both views.
+- **The data.** `UItemFragment_RangedWeapon` (ItemInventoryPlugin): the ammo's tag (`Item.Ammo.Arrow`), the arrow's
+  class, the speed at full draw, the shortest and the full draw times and the power at the shortest (`GetDrawPower`: none
+  below it, linear to full). Damage, crits and type stay on the Weapon fragment, times the draw's power.
+  `Scripts/configure_ranged_items.py` builds `ID_Weapon_Bow` (LowPolyRPGWeapons' `SM_Bow_01`; 15 damage at full draw,
+  6000 uu/s, 0.25 to 1 s, 150 shots of wear) and `ID_Ammo_Arrow` (stacks of 50). Arrows are items, one used a shot
+  (D55).
+- **The attack (D56).** `UVCRangedAttackAbility` (`Combat/VCRangedAttackAbility.h`), ServerOnly, granted with the melee
+  attack (`AVCPlayerState::RangedAttackAbilityClass`), tag `Ability.Attack.Ranged`. Its activation starts the draw on
+  the server's clock. The release reaches it as the ability system component's input release (`ReleaseDraw`:
+  `ServerSetInputReleased` from a client, on the activation's channel so it cannot overtake it). At the release a draw
+  under the shortest is no shot; otherwise one arrow leaves the bag and `SpawnArrow` launches it from `ArrowStartOffset`
+  toward what the view meets within `AimRange`, at the bow's speed times the draw's power, and the bow wears by its
+  `DegradeRate`. No ranged weapon, a dead or downed shooter or no arrow at the release: no shot, nothing used. The
+  owner's check and the server's are one predicate, `CanStartDraw` (D-CR16).
+- **The arrow (D54).** `AVCArrowProjectile` (`Combat/VCArrowProjectile.h`), replicated and spawned by the server only
+  (no client prediction), carries an `FVCArrowShot` (damage at full draw, the draw's power, type, crits, the bow). A 4 uu
+  sphere sweeps and ignores its shooter. On a pawn or anything with a combat component it applies the hit through the
+  damage pipeline (the crit rolled at the hit, the arrow the causer, so the hit react faces it) and goes; on anything else
+  it sticks with its collision off for `StuckLifetime` (30 s), riding a movable prop only when every machine knows that
+  prop; unhit it goes after `FlightLifetime` (10 s). A shooter gone before the hit: the faction it had at the launch
+  decides. `UVCArrowMovementComponent` is the engine's projectile movement with gravity replaced on a planet by the pull
+  toward the centre from where the arrow is, read every forced 1/60 s substep; below the generated surface in a chunk with
+  no cooked collision it stops at that surface.
+- **The look.** The Bow action set and `ABP_VCLayer_Bow` (Animation, below): the draw and the release play over the
+  upper body only, the drawn bow follows the view's pitch, and in third person the body turns toward the view while the
+  bow is drawn (`SetFacesAim`). First person shows no draw (D57: the demo has no arms mesh); the crosshair, the shot and
+  the arrow work the same.
 
 ### Death and respawn
 
@@ -290,10 +327,13 @@ the controller adds the contexts.
 Primary and secondary actions (LMB / RMB) go through one chain; new action types insert into it, they do not replace
 it. Dead or downed characters ignore both.
 
-1. A hostile damageable under the crosshair within `AttackTargetRange`: `TryStartMeleeAttack`.
-2. Chop: a harvestable scatter tree near `GetChopAimPoint()` (`TryChopScatter`), then, in a cubic world outside edit
+1. A ranged weapon in the main hand (the code's step 0): `TryStartRangedAttack` on the press, arrows or not ("No
+   arrows" as a toast and no draw without one), and `ReleaseRangedAttack` when the input ends (`Input_StopPrimaryAction`,
+   completed or cancelled).
+2. A hostile damageable under the crosshair within `AttackTargetRange`: `TryStartMeleeAttack`.
+3. Chop: a harvestable scatter tree near `GetChopAimPoint()` (`TryChopScatter`), then, in a cubic world outside edit
    mode, a trunk block of a standing voxel tree (`TryChopVoxelTree`).
-3. Dig or place: with edit mode on, or a digging tool in the main hand for a dig (`HasDiggingTool`: `GetMiningSpeed() >
+4. Dig or place: with edit mode on, or a digging tool in the main hand for a dig (`HasDiggingTool`: `GetMiningSpeed() >
    1`). Unarmed digging and placing need edit mode.
 
 Edit mode (`bEditModeEnabled`, off by default) is local input state: B, `SetEditModeEnabled`, or the game module's
@@ -535,7 +575,10 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 | Progression | Server | `Progression` on the player state |
 | View mode | The local player's machine | Not replicated (G87); other machines draw third person |
 | Action set | Server (the equipment) | Derived on every machine from the replicated equipment slots |
-| Action montages | The owner at input; the server for what it accepted | One unreliable multicast, skipped by the owner for its own actions (D49); the melee damage on the server at the montage's hit time |
+| Action montages | The owner at input; the server for what it accepted | One unreliable multicast, skipped by the owner for its own actions (D49); the melee damage on the server at the montage's hit time; a draw let go too early stopped by a reliable multicast |
+| The bow's draw and shot | Server (`UVCRangedAttackAbility`: the draw's time, the arrow used, the spawn) | The activation and the input release over the ability system component, in order; the owner's montages at input, the others' from the server |
+| Arrows | Server (spawned there, no client prediction, D54) | A replicated actor: its flight, mesh and stuck state; hits and damage on the server |
+| Facing while drawn | The owner and the server alike (`SetFacesAim`) | Through the movement: the server simulates the same turn from the client's moves |
 | Camera, input, edit mode, debug flight | Local | Not replicated |
 
 ## Console variables
@@ -544,7 +587,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 minimap's refill stats), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
 and `ToggleVoxelDebug` are on the controller and the character. Every name, default and meaning:
 `Documentation/EDITOR_CONSOLE_GUIDE.md` §4 at the project root. The `vox.*` QA commands that drive this plugin's pawn
-(`vox.TP`, `vox.AutoRun`, `vox.Fly`, `vox.Mine`, `vox.Chop`, `vox.EditMode`, ...) live in the game module.
+(`vox.TP`, `vox.AutoRun`, `vox.Fly`, `vox.Mine`, `vox.Chop`, `vox.EditMode`, `vox.Shoot`, ...) live in the game module.
 
 ## Tests
 
