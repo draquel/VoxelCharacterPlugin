@@ -32,7 +32,7 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Movement | `FVCGravityFrame` | Conversions between world space and the gravity frame |
 | Movement | `FVCTerrainQueryHelper` | Static terrain queries: `QueryTerrainContext`, `IsPositionUnderwater`, `FindSpawnablePosition` and the pure spawn searches |
 | Camera | `UVCCameraManager`, `UVCCameraModeBase`, `UVCFirstPersonCameraMode`, `UVCThirdPersonCameraMode` | The camera mode stack and its blend; third-person collision against voxel terrain; the block-step ease |
-| Camera | `UVCUnderwaterPostProcess` | Post-process tint and fog while the camera is in a water voxel |
+| Camera | `UVCUnderwaterPostProcess` | Post-process tint and fog while the local player's camera is in a water voxel; on that player's pawn only |
 | Combat | `UVCCombatComponent`, `UVCCombatAttributeSet`, `UVCDamageEffect`, `UVCDamageExecution`, `UVCMeleeAttackAbility`, `UVCCombatStatics`, `UVCEquipmentStatEffect`, `IVCDamageReceiver` | Faction, damage intake, death and downed state; AttackPower and Defense; the damage pipeline; equipment stats |
 | Editing | `UVCBlockInteractionComponent` | Cubic worlds: the block outline, the placement ghost and timed breaking |
 | Gathering | `UVCGatherTable` | Voxel material to item, scatter harvest entries, tool yield |
@@ -235,7 +235,15 @@ follows at `LagSpeed` and snaps across a teleport (`ComputeLaggedPivot`, G41), w
 `bUseVoxelCameraCollision` is set (`ResolveVoxelCameraCollision`). For a walker that
 `IsSteppingBlocks()` the view eases through each block step (`bEaseBlockSteps`, `BlockStepEaseSpeed`, pure
 `ComputeStepEaseOffset`). `UVCUnderwaterPostProcess` follows the camera, not the feet, so a third-person view above the
-surface stays clear while the pawn swims.
+surface stays clear while the pawn swims. It is the local player's view and nothing else's (G133, 2026-11-06): its
+post-process volume is unbound, so it tints every view in its world, and the character creates the component only on
+the pawn a local player controller views through (`UpdateUnderwaterPostProcess`, at `BeginPlay` and again on every
+controller change through `NotifyControllerChanged`: possession, unpossession, the owning client's `OnRep_Controller`)
+and destroys it, volume included, when that controller goes. A pawn with no local player controller (another player's
+character on a client, an NPC, every pawn on a dedicated server) has no view to tint and gets none; it used to get one
+that read the pawn's own terrain context, so a swimming remote player or NPC blended the local view blue, several of
+them stacking. Test `VoxelCharacter.Underwater.LocalPlayerOnly`; the dedicated-server PIE check (one client swims, the
+other's view stays clear) is in the G133 row of `Documentation/FINDINGS.md`.
 
 `AVCCharacterBase::SetViewMode` pushes the camera mode, switches rotation (first person: yaw follows the controller;
 third person: orient to movement), hides the body for the local first-person view after the blend, attaches the
