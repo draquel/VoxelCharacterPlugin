@@ -20,4 +20,7 @@ namespace VCGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Stat_InteractionRange,   "SetByCaller.Stat.InteractionRange",   "Equipment stat key: UVCCharacterAttributeSet::InteractionRange");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Stat_AttackPower,        "SetByCaller.Stat.AttackPower",        "Equipment stat key: UVCCombatAttributeSet::AttackPower");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Stat_Defense,            "SetByCaller.Stat.Defense",            "Equipment stat key: UVCCombatAttributeSet::Defense");
+
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Weather_Wet,  "State.Weather.Wet",  "Soaked by the rain or a swim: the stamina regenerates slower (UVCMovementComponent::WetStaminaRegenMultiplier)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Weather_Cold, "State.Weather.Cold", "In the cold: the move speed drops (UVCWeatherColdEffect)");
 }

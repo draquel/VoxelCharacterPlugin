@@ -188,6 +188,15 @@ void AVCNPCCharacterBase::SetTemperament(EVCNPCTemperament InTemperament)
 	}
 }
 
+void AVCNPCCharacterBase::SetWeatherHold(bool bHold)
+{
+	bHoldsForWeather = bHold;
+	if (AVCNPCAIController* AI = Cast<AVCNPCAIController>(GetController()))
+	{
+		AI->SetWeatherHold(bHold);
+	}
+}
+
 void AVCNPCCharacterBase::SetShowHealthBar(bool bShow)
 {
 	bShowHealthBar = bShow;

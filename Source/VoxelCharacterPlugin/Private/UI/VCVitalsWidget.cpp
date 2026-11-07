@@ -9,6 +9,7 @@
 #include "Engine/World.h"
 #include "TimerManager.h"
 #include "Components/VerticalBox.h"
+#include "Core/VCGameplayTags.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Components/Overlay.h"
 #include "Components/OverlaySlot.h"
@@ -100,6 +101,7 @@ void UVCVitalsWidget::BuildWidgetTree()
 	ToastText = MakeLine(TEXT("ToastText"), 20, FLinearColor(1.f, 0.9f, 0.3f));
 	ObjectiveText = MakeLine(TEXT("ObjectiveText"), 14, FLinearColor(0.85f, 0.95f, 1.f));
 	WorldEdgeText = MakeLine(TEXT("WorldEdgeText"), 16, FLinearColor(0.55f, 0.85f, 1.f));
+	WeatherText = MakeLine(TEXT("WeatherText"), 14, FLinearColor(0.7f, 0.85f, 1.f));
 	WorldEdgeText->SetText(NSLOCTEXT("VCVitals", "WorldEdge", "A strong current pushes you back: this is the edge of the world"));
 
 	HealthBar = MakeBar(WidgetTree, Root, HealthText, FLinearColor(0.75f, 0.12f, 0.12f), TEXT("Health"));
@@ -164,6 +166,10 @@ void UVCVitalsWidget::InitWithCharacter(AVCCharacterBase* Character)
 			.AddUObject(this, &UVCVitalsWidget::HandleMaxStaminaChanged);
 		BreathHandle = ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetBreathAttribute())
 			.AddUObject(this, &UVCVitalsWidget::HandleBreathChanged);
+		WetTagHandle = ASC->RegisterGameplayTagEvent(VCGameplayTags::State_Weather_Wet, EGameplayTagEventType::NewOrRemoved)
+			.AddUObject(this, &UVCVitalsWidget::HandleWeatherTagChanged);
+		ColdTagHandle = ASC->RegisterGameplayTagEvent(VCGameplayTags::State_Weather_Cold, EGameplayTagEventType::NewOrRemoved)
+			.AddUObject(this, &UVCVitalsWidget::HandleWeatherTagChanged);
 	}
 
 	RefreshFromCharacter();
@@ -189,7 +195,11 @@ void UVCVitalsWidget::Unbind()
 		ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetStaminaAttribute()).Remove(StaminaHandle);
 		ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetMaxStaminaAttribute()).Remove(MaxStaminaHandle);
 		ASC->GetGameplayAttributeValueChangeDelegate(UVCCharacterAttributeSet::GetBreathAttribute()).Remove(BreathHandle);
+		ASC->RegisterGameplayTagEvent(VCGameplayTags::State_Weather_Wet, EGameplayTagEventType::NewOrRemoved).Remove(WetTagHandle);
+		ASC->RegisterGameplayTagEvent(VCGameplayTags::State_Weather_Cold, EGameplayTagEventType::NewOrRemoved).Remove(ColdTagHandle);
 	}
+	WetTagHandle.Reset();
+	ColdTagHandle.Reset();
 	StaminaHandle.Reset();
 	MaxStaminaHandle.Reset();
 	BreathHandle.Reset();
@@ -219,6 +229,48 @@ void UVCVitalsWidget::RefreshFromCharacter()
 		ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxStaminaAttribute()));
 	SetBreath(ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetBreathAttribute()),
 		ASC->GetNumericAttribute(UVCCharacterAttributeSet::GetMaxBreathAttribute()));
+	RefreshWeather();
+}
+
+void UVCVitalsWidget::HandleWeatherTagChanged(const FGameplayTag Tag, int32 NewCount)
+{
+	RefreshWeather();
+}
+
+void UVCVitalsWidget::RefreshWeather()
+{
+	if (!WeatherText)
+	{
+		return;
+	}
+	const UAbilitySystemComponent* ASC = BoundASC.Get();
+	const bool bWet = ASC && ASC->HasMatchingGameplayTag(VCGameplayTags::State_Weather_Wet);
+	const bool bCold = ASC && ASC->HasMatchingGameplayTag(VCGameplayTags::State_Weather_Cold);
+	const FText Text = FormatWeather(bWet, bCold);
+	WeatherText->SetText(Text);
+	WeatherText->SetVisibility(Text.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+}
+
+FText UVCVitalsWidget::FormatWeather(bool bWet, bool bCold)
+{
+	if (bWet && bCold)
+	{
+		return NSLOCTEXT("VCVitals", "WeatherSoakedCold", "Soaked and cold");
+	}
+	if (bWet)
+	{
+		return NSLOCTEXT("VCVitals", "WeatherSoaked", "Soaked");
+	}
+	if (bCold)
+	{
+		return NSLOCTEXT("VCVitals", "WeatherCold", "Cold");
+	}
+	return FText::GetEmpty();
+}
+
+bool UVCVitalsWidget::IsWeatherShown() const
+{
+	return WeatherText && WeatherText->GetVisibility() != ESlateVisibility::Collapsed;
 }
 
 void UVCVitalsWidget::HandleHealthChanged(float NewHealth, float OldHealth, float MaxHealth)

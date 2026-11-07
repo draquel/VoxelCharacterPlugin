@@ -149,6 +149,18 @@ public:
 	void SetTemperament(EVCNPCTemperament InTemperament);
 
 	/**
+	 * Hold for the weather (the weather plan's P5; forwarded to the AI controller, and read by it when it possesses):
+	 * prey stands where it is in a storm. The surface spawner sets it for the entries that hide in storms.
+	 * @param bHold Whether to hold
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AI")
+	void SetWeatherHold(bool bHold);
+
+	/** Holding for the weather (set by the surface spawner in a storm, for entries that hide in them). */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "VoxelCharacter|AI")
+	bool bHoldsForWeather = false;
+
+	/**
 	 * Death visual when there is no physics asset to ragdoll (static-mesh placeholders): the body
 	 * topples over ToppleSeconds and sinks a little. 0 disables.
 	 */

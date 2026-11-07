@@ -15,6 +15,7 @@
 #include "Engine/World.h"
 #include "Core/VCCharacterAttributeSet.h"
 #include "AbilitySystemComponent.h"
+#include "Core/VCGameplayTags.h"
 #include "AbilitySystemInterface.h"
 #include "Combat/VCCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
@@ -523,6 +524,25 @@ void UVCMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bF
 	}
 }
 
+float UVCMovementComponent::AdvanceWetLevel(float Level, float RateOnPawn, bool bSwimming, float DeltaTime, float SoakSeconds, float DrySeconds)
+{
+	if (bSwimming)
+	{
+		return 1.f;
+	}
+	const float Rate = FMath::Clamp(RateOnPawn, 0.f, 1.f);
+	const float Dt = FMath::Max(DeltaTime, 0.f);
+	if (Rate > KINDA_SMALL_NUMBER)
+	{
+		Level += Rate * Dt / FMath::Max(SoakSeconds, 1.f);
+	}
+	else
+	{
+		Level -= Dt / FMath::Max(DrySeconds, 1.f);
+	}
+	return FMath::Clamp(Level, 0.f, 1.f);
+}
+
 FVector UVCMovementComponent::ComputeWindDrift(const FVector& Wind, float Factor, float Exposure)
 {
 	const float Open = FMath::Clamp(Exposure, 0.f, 1.f);
@@ -689,6 +709,16 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 		CachedWeatherWind = Conditions.WindVector;
 		CachedWeatherExposure = Conditions.Exposure;
 		CachedWeatherWetness = Conditions.Wetness;
+		CachedWeatherTemperatureC = Conditions.TemperatureC;
+		// The wet level (P5): what falls on the pawn, by the real time between reads (the first read is a step of nothing).
+		const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		const float Step = LastWeatherReadSeconds < 0.0 ? 0.f : static_cast<float>(FMath::Clamp(Now - LastWeatherReadSeconds, 0.0, 1.0));
+		LastWeatherReadSeconds = Now;
+		const float Falling = Conditions.PrecipitationType == EWorldWeatherPrecipitation::None ? 0.f
+			: Conditions.PrecipitationType == EWorldWeatherPrecipitation::Snow ? 0.33f : 1.f;
+		// A swim soaks (wading at the shore does not: the terrain context's underwater flag is the body's depth there).
+		WeatherWetLevel = AdvanceWetLevel(WeatherWetLevel, Conditions.PrecipitationRate * Conditions.Exposure * Falling,
+			IsSwimming(), Step, WetSoakSeconds, WetDrySeconds);
 	}
 #endif
 
@@ -1100,7 +1130,9 @@ void UVCMovementComponent::TickStamina(float DeltaTime)
 		TimeSinceSprint += DeltaTime;
 		if (TimeSinceSprint >= StaminaRegenDelay)
 		{
-			PendingStaminaDelta += StaminaRegenPerSecond * DeltaTime;
+			// Soaked (State.Weather.Wet, the weather plan's P5): the regeneration slows.
+			const float Regen = ASC->HasMatchingGameplayTag(VCGameplayTags::State_Weather_Wet) ? WetStaminaRegenMultiplier : 1.f;
+			PendingStaminaDelta += StaminaRegenPerSecond * Regen * DeltaTime;
 		}
 	}
 
