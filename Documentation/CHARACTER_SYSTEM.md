@@ -194,7 +194,8 @@ re-mesh).
   (a pure static beside the edge's push-back: the wind x `WindPushFactor` (0.1) x the exposure, scaled by the pawn's
   own speed over its max speed, or full in the air), after the braking and the friction, and takes the previous
   tick's off before them, which would otherwise eat it: a standing pawn idles in any wind, a pawn walking into the
-  wind is slowed by it and one walking with it helped, a fall is carried; flying is exempt. The ground friction loses `Wetness x WetGripFactor` (0.4) of itself. Both run inside the predicted movement,
+  wind is slowed by it and one walking with it helped, a fall past `WindAirborneDelay` (0.35 s: a jump or a real
+  drop, not a floor lost for a frame on rough ground) is carried; flying is exempt. The ground friction loses `Wetness x WetGripFactor` (0.4) of itself. Both run inside the predicted movement,
   so the client and the server agree (the weather's sync point is the same on both). Test
   `VoxelCharacter.Movement.WindPush`. The same read keeps the air temperature and a wet level (P5, `AdvanceWetLevel`):
   the rain reaching the pawn (its rate times the exposure, snow at a third) soaks it over `WetSoakSeconds` (12), a swim
