@@ -382,6 +382,41 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Equipment")
 	TArray<FVCEquipmentSocketMapping> EquipmentSocketMappings;
 
+	/**
+	 * QA: a live offset on a slot's visual, in its bone's space after the item's fit and the body's correction (vc.Equip.Nudge,
+	 * character refinement plan C1), keyed by the slot tag's name; vc.Equip.PrintFit prints the fit it adds up to. Never saved.
+	 */
+	TMap<FName, FTransform> EquipFitNudges;
+
+	/** GetDrawnGripWeight at the last UpdateDrawnGrip, so the fit is restored once when the draw ends. */
+	float LastDrawnGripWeight = 0.f;
+
+	/**
+	 * Where a slot's visual sits on its bone: the item's fit (its Equipment fragment's AttachOffset, or that times the slot's
+	 * correction on the slot's own bone), then the body's correction for the bone (UVCCharacterAppearance::AttachCorrections,
+	 * D71), then a QA nudge. Each is a transform in the bone's space applied after the one before.
+	 * @param Fit The item's fit as EquipmentPlugin computes it
+	 * @param BodyCorrection The appearance's correction for the bone
+	 * @param Nudge vc.Equip.Nudge's offset (identity outside QA)
+	 * @return The visual's relative transform on the bone
+	 */
+	static FTransform ComposeAttachTransform(const FTransform& Fit, const FTransform& BodyCorrection, const FTransform& Nudge);
+
+	/** The body's correction for the bone a slot's visual sits on (identity without an appearance or an entry). */
+	FTransform GetBodyAttachCorrection(FName Bone) const;
+
+	/**
+	 * How far the main hand's item sits at its set's DrawnGrip instead of its fit: the weight of the montage in the
+	 * UpperBody slot (the draw and the release) while the held set has one, else 0.
+	 */
+	float GetDrawnGripWeight() const;
+
+	/**
+	 * Each tick while a drawn grip applies (and once more when it stops): re-place the main hand's visual between its fit and
+	 * the set's DrawnGrip by GetDrawnGripWeight (UVCActionAnimSet::bHasDrawnGrip).
+	 */
+	void UpdateDrawnGrip();
+
 	// =================================================================
 	// Item actions (client-safe: route through the owning component's server RPCs)
 	// =================================================================
@@ -654,6 +689,12 @@ public:
 	virtual float GetInteractionRange() const;
 
 	virtual void UpdateEquipmentAttachments();
+
+	/**
+	 * Hide the body's equipment visuals from their own player in first person with the body (no arms mesh draws them, D57:
+	 * a bow floating at a hidden hand); a slot drawn on the arms mesh keeps its visual. The lights stay.
+	 */
+	void UpdateEquipmentVisualVisibility();
 	virtual USkeletalMeshComponent* GetTargetMeshForSlot(const FGameplayTag& SlotTag) const;
 
 	virtual void OnEquipmentAbilitiesChanged(const FGameplayTag& SlotTag);
