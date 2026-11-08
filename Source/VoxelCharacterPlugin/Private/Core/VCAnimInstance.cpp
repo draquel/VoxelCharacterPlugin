@@ -6,6 +6,7 @@
 #include "Animation/VCActionAnimSet.h"
 #include "Animation/VCActionMontageComponent.h"
 #include "Animation/VCAppearanceComponent.h"
+#include "Animation/VCLocomotionAnimSet.h"
 #include "Combat/VCCombatComponent.h"
 #include "Interfaces/CGFDamageableInterface.h"
 #include "Movement/VCMovementComponent.h"
@@ -251,6 +252,7 @@ bool UVCAnimInstance::GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) co
 	{
 		OutInput.ViewMode = Animated->GetAnimViewMode();
 		OutInput.ActionSet = Animated->GetAnimActionSet();
+		OutInput.LocomotionSet = Animated->GetAnimLocomotionSet();
 		if (const UVCCombatComponent* Combat = Animated->GetAnimCombatComponent())
 		{
 			OutInput.bDead = ICGFDamageableInterface::Execute_IsDead(Combat);
@@ -385,7 +387,22 @@ void UVCAnimInstance::ComputeValues(const FVCAnimInput& Input)
 	const bool bAble = !Input.bDead && !Input.bDowned;
 	FootIKAlpha = Ease(FootIKAlpha, Input.bFootIKEnabled && bAble && Input.bOnGround && !Input.bSwimming && !Input.bFlying);
 	FootBoneIKAlpha = Input.bFootBonesOnly ? FootIKAlpha : 0.f;
-	LocomotionPlayRate = Input.bSprintPaceEnabled && Input.bOnGround ? ComputeLocomotionPlayRate(Speed, LocomotionReferenceSpeed) : 1.f;
+	const UVCLocomotionAnimSet* Locomotion = Input.LocomotionSet;
+	const float ReferenceSpeed = Locomotion && Locomotion->ReferenceSpeed > 0.f ? Locomotion->ReferenceSpeed : LocomotionReferenceSpeed;
+	LocomotionPlayRate = Input.bSprintPaceEnabled && Input.bOnGround ? ComputeLocomotionPlayRate(Speed, ReferenceSpeed) : 1.f;
+
+	// --- A body's own locomotion and its idle variant (character animation P7): the variant takes turns with the idle
+	// while the body stands, so a herd that stopped at different times grazes at different times ---
+	LocomotionBlendSpace = Locomotion ? Locomotion->Locomotion : nullptr;
+	IdleVariantAnim = Locomotion ? Locomotion->IdleVariant : nullptr;
+	const bool bStandingStill = bAble && Input.bOnGround && Speed < MovingSpeedThreshold;
+	StandingSeconds = bStandingStill ? StandingSeconds + DeltaSeconds : 0.f;
+	bIdleVariant = false;
+	if (Locomotion && Locomotion->IdleVariant && bStandingStill)
+	{
+		const float Cycle = Locomotion->IdleVariantAfter + Locomotion->IdleVariantFor;
+		bIdleVariant = Cycle > 0.f && FMath::Fmod(StandingSeconds, Cycle) >= Locomotion->IdleVariantAfter;
+	}
 
 	// The look-at fades for a target behind the body; the node itself clamps how far the head turns.
 	bool bLookTargetAhead = false;

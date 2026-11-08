@@ -1,7 +1,7 @@
 # Character Animation Plan
 
-> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0-P6
-> done; P7 next.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
+> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0-P7
+> done; P8 next.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
 > VoxelCharacterPlugin; content in VoxelWorldPOI's NPC tables, EquipmentPlugin's item data and the Blender pipeline.
 > Terms: `Documentation/GLOSSARY.md` at the project root; the decisions' numbers are from its `FINDINGS.md`.
 
@@ -604,6 +604,41 @@ Animation.
   rate optimisations tied to the AI's distance bands (`vc.AI.FarTickDistance`).
 - Gate: `Scripts/qa/npc_bench.py` before and after at 12, 24, 48 and 96 NPCs. Proposed target: animation adds at most
   0.5 ms of game thread at 48 NPCs.
+
+**P7 result (2026-11-07): done.** `CHARACTER_SYSTEM.md` "NPCs", "Bodies" has the rules.
+
+- The dungeon foe wears the CR pack's Grian04 (the user's choice over skinning the blocky placeholder, 2026-11-07) on
+  the Mannequin skeleton and shares the player's `ABP_VoxelCharacter`, layers and action sets. A new
+  `AVCNPCCharacterBase::HeldItem` holds an item as the player would (the Equipment fragment's mesh, bone, offset, stance
+  layer and action set): the foe holds the iron sword in the sword-and-shield stance.
+- The wolf and the doe come from the Animal Variety Pack (a content pack, the user's Fab download). They share one
+  template AnimBP, `ABP_VCCreature`, bound to no skeleton, on `UVCAnimInstance`. Each animal is a `UVCLocomotionAnimSet`
+  (a blend space by speed at the clips' own speeds, the run's speed for the pace, an idle variant: the doe grazes, the
+  wolf looks round) and a `UVCActionAnimSet` (bite, hits, death) instead of a child AnimBP: the same one asset per
+  animal, and a script sets data assets where a child AnimBP's overrides are out of Python's reach. A new animal is an
+  entry in `Scripts/setup_creature_animation.py` and its creature Blueprint. Capsules fit the bodies; the reach did not
+  need changing (the wolf closes to 200 uu and its head is about 90 uu ahead of its centre). The four-legged foot
+  placement was not needed on the meadows checked; steep slopes were not checked.
+- The budget is the engine's Animation Budget Allocator rather than update-rate bands tied to `vc.AI.FarTickDistance`:
+  NPC meshes are `USkeletalMeshComponentBudgeted`, significance by distance, `a.Budget.BudgetMs` 0.5. A world's
+  allocator starts disabled and only the game enables it (the cvar is a gate), which the first measurements missed: the
+  first NPC to play enables it. Foot placement and its IK run at LOD 0 only.
+- What the bodies cost, and the two fixes that found: 48 wolves standing in view at about 15 m (the CSV profiler) took
+  7.1 ms of game-thread animation, mostly the physics asset's bodies following the pose for a query collision nothing
+  used (the capsule is the NPC's collision). A living NPC's mesh now has none, and takes its bounds from the mesh: 2.5 ms.
+  With the allocator at 0.5 ms the NPCs' budgeted animation is 0.52 ms (23 of the 48 meshes tick a frame, the rest
+  interpolated), the target met.
+- `npc_bench.py`, the gate (wolves chasing a moving player; the game thread's median at 12, 24, 48 and 96): `VoxelDemo`
+  21.8, 20.5, 20.9 and 24.1 ms against the placeholders' 21.8, 23.0, 29.6 and 43.0; the cubic world 15.4, 18.3, 18.9 and
+  19.2 against 18.7, 21.3, 24.1 and 27.3. Lower at every count: the placeholders (six stacked static meshes a creature,
+  G146) cost more than the budgeted bodies, and the NPCs' own time (AI, paths, movement) fell with them, 3.0 against
+  6.1 ms at 48 on `VoxelDemo`.
+- The creature Blueprints carried six static meshes each (G146): the setup script's name check never matched a
+  component's `_GEN_VARIABLE` template, so each run added one. The bodies replace them all.
+- Verified in PIE: does graze and flee at a run; wolves chase at a run, bite and ragdoll when killed (the melee sweep
+  meets the capsule); the foe idles and patrols with the sword in hand.
+- Tests: `VoxelCharacter.Anim.CreatureLocomotion` (the set's assets, the idle variant's turns, the pace) and
+  `VoxelCharacter.NPC.BodyBudgetAndHeldItem` (the budgeted mesh, the held item's mesh, socket, offset and action set).
 
 ### P8: Close
 

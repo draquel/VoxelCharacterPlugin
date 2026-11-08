@@ -18,6 +18,10 @@
 #include "Abilities/GameplayAbility.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "IAnimationBudgetAllocator.h"
+#include "SkeletalMeshComponentBudgeted.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
@@ -26,6 +30,11 @@
 #include "HAL/IConsoleManager.h"
 #include "Core/VCSettings.h"
 #include "VoxelWorldsSettings.h"
+
+#if WITH_INVENTORY_PLUGIN
+#include "Data/ItemDefinition.h"
+#include "Data/Fragments/ItemFragment_Equipment.h"
+#endif
 
 static TAutoConsoleVariable<int32> CVarNPCHealthBars(
 	TEXT("vc.UI.NPCHealthBars"),
@@ -38,8 +47,25 @@ AVCNPCCharacterBase::AVCNPCCharacterBase(const FObjectInitializer& ObjectInitial
 	// edge normals that the stock component rejects as unwalkable, so it fails to land on walkable slopes, stays in
 	// Falling with no ground friction and slides downhill (feature 10 surface creatures skied into the sea). The
 	// inverted face normals that once made this worse are fixed at the source (VoxelCollisionManager winding).
-	: Super(ObjectInitializer.SetDefaultSubobjectClass<UVCMovementComponent>(ACharacter::CharacterMovementComponentName))
+	// The mesh's animation ticks within the Animation Budget Allocator's budget (character animation P7): a far NPC's pose
+	// updates less often, one off screen not at all, and the allocator spreads the rest over the frame's budget.
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UVCMovementComponent>(ACharacter::CharacterMovementComponentName)
+		.SetDefaultSubobjectClass<USkeletalMeshComponentBudgeted>(ACharacter::MeshComponentName))
 {
+	if (USkeletalMeshComponentBudgeted* Budgeted = Cast<USkeletalMeshComponentBudgeted>(GetMesh()))
+	{
+		Budgeted->SetAutoCalculateSignificance(true); // by distance to the view
+	}
+	if (USkeletalMeshComponent* Body = GetMesh())
+	{
+		// No per-bone collision while alive: the physics asset's bodies would follow the pose every frame (6 ms of game
+		// thread and physics for 48 wolves, P7), and the capsule is the NPC's collision (arrows and sweeps meet it). A death
+		// that ragdolls gives the mesh its collision.
+		Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		// Bounds from the mesh's own, not from the bodies each frame (another 1 ms for 48); a ragdoll takes them back.
+		Body->bComponentUseFixedSkelBounds = true;
+	}
+
 	// Enough jump to clear a one-voxel step when the AI hops an obstacle (the default 420 tops out around 90 uu).
 	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
 	{
@@ -125,7 +151,45 @@ UAbilitySystemComponent* AVCNPCCharacterBase::GetAbilitySystemComponent() const
 
 FGameplayTag AVCNPCCharacterBase::GetAnimActionSet() const
 {
-	return ActionSet.IsValid() ? ActionSet : VCGameplayTags::Equipment_AnimSet_Unarmed.GetTag();
+	if (ActionSet.IsValid())
+	{
+		return ActionSet;
+	}
+	return HeldActionSet.IsValid() ? HeldActionSet : VCGameplayTags::Equipment_AnimSet_Unarmed.GetTag();
+}
+
+void AVCNPCCharacterBase::ApplyHeldItem()
+{
+#if WITH_INVENTORY_PLUGIN
+	if (HeldItem.IsNull())
+	{
+		return;
+	}
+	const UItemDefinition* Item = Cast<UItemDefinition>(HeldItem.LoadSynchronous());
+	const UItemFragment_Equipment* Equipment = Item ? Item->FindFragment<UItemFragment_Equipment>() : nullptr;
+	USkeletalMeshComponent* Body = GetMesh();
+	if (!Equipment || !Body)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("%s: the held item %s is no equipment"), *GetName(), *HeldItem.ToString());
+		return;
+	}
+	HeldActionSet = Equipment->ActionSetTag;
+	if (Equipment->AnimLayerClass)
+	{
+		Body->LinkAnimClassLayers(Equipment->AnimLayerClass);
+	}
+	// The mesh where something draws it, on the main hand as the player's equipment puts it (the hand slot adds no offset)
+	UStaticMesh* HeldMesh = GetNetMode() != NM_DedicatedServer ? Equipment->EquipMesh.LoadSynchronous() : nullptr;
+	if (HeldMesh)
+	{
+		HeldMeshComponent = NewObject<UStaticMeshComponent>(this, TEXT("HeldItem"));
+		HeldMeshComponent->SetStaticMesh(HeldMesh);
+		HeldMeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		HeldMeshComponent->SetupAttachment(Body, Equipment->AttachBoneOverride.IsNone() ? FName(TEXT("hand_r")) : Equipment->AttachBoneOverride);
+		HeldMeshComponent->SetRelativeTransform(Equipment->AttachOffset);
+		HeldMeshComponent->RegisterComponent();
+	}
+#endif
 }
 
 const UVCCombatComponent* AVCNPCCharacterBase::GetAnimCombatComponent() const
@@ -150,6 +214,17 @@ void AVCNPCCharacterBase::BeginPlay()
 	if (!Appearance.IsNull() && AppearanceComponent)
 	{
 		AppearanceComponent->ApplyAppearance(Appearance.LoadSynchronous());
+	}
+	ApplyHeldItem();
+
+	// A world's budget allocator starts disabled and only the game turns it on (a.Budget.Enabled is a gate over every
+	// world's): the first NPC to play does, so the NPCs' meshes tick within a.Budget.BudgetMs (P7)
+	if (IAnimationBudgetAllocator* Budget = GetNetMode() != NM_DedicatedServer ? IAnimationBudgetAllocator::Get(GetWorld()) : nullptr)
+	{
+		if (!Budget->GetEnabled())
+		{
+			Budget->SetEnabled(true);
+		}
 	}
 
 	if (AbilitySystemComponent)
@@ -300,6 +375,7 @@ void AVCNPCCharacterBase::HandleDied(const FCGFDamageContext& Context)
 	{
 		if (Body->GetPhysicsAsset())
 		{
+			Body->bComponentUseFixedSkelBounds = false; // the bodies leave the mesh's own bounds as it falls
 			Body->SetCollisionProfileName(TEXT("Ragdoll"));
 			Body->SetSimulatePhysics(true);
 			bRagdolled = true;

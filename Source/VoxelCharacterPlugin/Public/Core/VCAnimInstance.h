@@ -8,8 +8,11 @@
 #include "Core/VCTypes.h"
 #include "VCAnimInstance.generated.h"
 
+class UAnimSequenceBase;
+class UBlendSpace;
 class UVCActionMontageComponent;
 class UVCAppearanceComponent;
+class UVCLocomotionAnimSet;
 
 /**
  * What UVCAnimInstance reads from its character on the game thread, every vector in world space. The rest of the update
@@ -61,6 +64,10 @@ struct FVCAnimInput
 
 	EVCViewMode ViewMode = EVCViewMode::ThirdPerson;
 	FGameplayTag ActionSet;
+
+	/** The body's own locomotion (IVCAnimatedCharacter::GetAnimLocomotionSet: an animal's), or null. A data asset. */
+	const UVCLocomotionAnimSet* LocomotionSet = nullptr;
+
 	bool bDead = false;
 	bool bDowned = false;
 
@@ -275,6 +282,23 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float FootBoneIKAlpha = 0.f;
 
+	// ==================== A body's own locomotion (character animation P7) ====================
+
+	/** The body's locomotion blend space by speed (UVCLocomotionAnimSet::Locomotion), or null: the creature template plays it. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UBlendSpace> LocomotionBlendSpace;
+
+	/** What the body does now and then while it stands (UVCLocomotionAnimSet::IdleVariant: a deer grazes), or null. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UAnimSequenceBase> IdleVariantAnim;
+
+	/**
+	 * Whether the idle variant plays now: standing on the ground, alive, after the set's IdleVariantAfter seconds, for its
+	 * IdleVariantFor seconds, and again after the same wait.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	bool bIdleVariant = false;
+
 	/** The walk/run clips' play rate: ComputeLocomotionPlayRate on the ground, 1 otherwise (vc.Anim.SprintPace). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float LocomotionPlayRate = 1.f;
@@ -355,6 +379,9 @@ private:
 	FVector BodyHeading = FVector::ZeroVector;
 
 	bool bHasKeptState = false;
+
+	/** Seconds the body has stood still on the ground (the idle variant's clock). */
+	float StandingSeconds = 0.f;
 
 	/** The character's montage component (its held action set), found once. */
 	mutable TWeakObjectPtr<const UVCActionMontageComponent> CachedMontages;

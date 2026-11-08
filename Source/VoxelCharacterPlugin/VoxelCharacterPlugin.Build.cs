@@ -41,6 +41,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"PhysicsCore", // CollisionShape.h
 				"GameplayTasks", // UAbilityTask_WaitDelay: the melee hit waits for its montage (character animation P3)
 				"AnimationCore", // AnimationCore::SolveTwoBoneIK: FVCAnimNode_FootBoneIK (character animation P6)
+				"AnimationBudgetAllocator", // USkeletalMeshComponentBudgeted: the NPCs' animation budget (character animation P7)
 				"VoxelNavigation", // UVCVoxelPathProvider (feature 10)
 				"VoxelScatter",
 				"JsonUtilities",

@@ -17,6 +17,9 @@ class UVCCombatComponent;
 class UVCActionMontageComponent;
 class UVCAppearanceComponent;
 class UVCCharacterAppearance;
+class UVCLocomotionAnimSet;
+class UPrimaryDataAsset;
+class UStaticMeshComponent;
 class UGameplayAbility;
 class UWidgetComponent;
 class UVCNPCHealthBarWidget;
@@ -49,6 +52,7 @@ public:
 	virtual EVCViewMode GetAnimViewMode() const override { return EVCViewMode::ThirdPerson; }
 	virtual FGameplayTag GetAnimActionSet() const override;
 	virtual const UVCCombatComponent* GetAnimCombatComponent() const override;
+	virtual const UVCLocomotionAnimSet* GetAnimLocomotionSet() const override { return LocomotionAnimSet; }
 
 	// =================================================================
 	// Components
@@ -104,9 +108,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI")
 	bool bAIEnabled = true;
 
-	/** The action set the NPC animates with (Equipment.AnimSet.*): what it fights with. Unset = Unarmed. */
+	/** The action set the NPC animates with (Equipment.AnimSet.*): what it fights with. Unset = HeldItem's, else Unarmed. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation", meta = (Categories = "Equipment.AnimSet"))
 	FGameplayTag ActionSet;
+
+	/**
+	 * The item the NPC holds in its main hand, as the player would hold it (character animation P7): its Equipment
+	 * fragment's mesh on the hand (the fragment's bone, else hand_r, at its attach offset), its stance layer linked and its
+	 * action set (when ActionSet is unset). An ItemInventoryPlugin item definition; without that plugin it holds nothing.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation", meta = (AllowedClasses = "/Script/ItemInventoryPlugin.ItemDefinition"))
+	TSoftObjectPtr<UPrimaryDataAsset> HeldItem;
+
+	/** The body's own locomotion for the creature template AnimBP (an animal's, P7); null for a Mannequin body. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UVCLocomotionAnimSet> LocomotionAnimSet;
 
 	/** Faction applied to the combat component at BeginPlay when set (Faction.Animal for wildlife); unset = the component's default (Monster). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (Categories = "Faction"))
@@ -211,6 +227,16 @@ protected:
 	 * head on a planet too. Without custom gravity this is the engine's location.
 	 */
 	virtual FVector GetPawnViewLocation() const override;
+
+	/** Holds HeldItem: its mesh on the hand where something draws it, its stance layer linked, its action set kept. */
+	void ApplyHeldItem();
+
+	/** The held item's mesh, made at BeginPlay. */
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMeshComponent> HeldMeshComponent;
+
+	/** The held item's action set (its Equipment fragment's ActionSetTag). */
+	FGameplayTag HeldActionSet;
 
 	/** A planet's ragdoll pull (AVCCharacterBase::StartRadialRagdoll); zero = none. */
 	FVector RagdollGravityDirection = FVector::ZeroVector;
