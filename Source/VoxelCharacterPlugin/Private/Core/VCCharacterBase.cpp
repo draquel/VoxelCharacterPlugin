@@ -11,6 +11,7 @@
 #include "Combat/VCCombatComponent.h"
 #include "Combat/VCMeleeAttackAbility.h"
 #include "Combat/VCRangedAttackAbility.h"
+#include "Animation/VCActionAnimSet.h"
 #include "Animation/VCActionMontageComponent.h"
 #include "Animation/VCAppearanceComponent.h"
 #include "Animation/VCCharacterAppearance.h"
@@ -477,6 +478,7 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 	}
 
 	TickWorldSafety(DeltaSeconds);
+	UpdateDrawnGrip();
 
 	// The weather on the character (the weather plan's P5): the server sets the wet and cold states every half second.
 	if (HasAuthority())
@@ -741,6 +743,7 @@ void AVCCharacterBase::ApplyPlayerAppearance()
 	bAppearanceApplied = true;
 	ApplyLocomotionAnimClass();
 	RelinkEquipmentAnimLayers();
+	UpdateEquipmentAttachments(); // the new body's corrections (D71); the visuals rode the mesh swap by bone name
 	UpdateMeshVisibility();
 }
 
@@ -1179,6 +1182,7 @@ void AVCCharacterBase::UpdateMeshVisibility()
 	{
 		FirstPersonArmsMesh->SetVisibility(bIsLocalFP);
 	}
+	UpdateEquipmentVisualVisibility();
 }
 
 // ---------------------------------------------------------------------------
@@ -1405,8 +1409,84 @@ void AVCCharacterBase::UpdateEquipmentAttachments()
 			FAttachmentTransformRules::SnapToTargetNotIncludingScale,
 			SocketName
 		);
-		// The snap wipes the visual's offset: re-apply the slot / item fit.
-		Slot.AttachedVisualComponent->SetRelativeTransform(EquipmentManager->GetVisualAttachOffset(Slot.SlotTag));
+		// The snap wipes the visual's offset: re-apply the slot / item fit (or the set's drawn grip, as far as the draw
+		// plays), the body's correction for the bone (D71) and any QA nudge.
+		const FTransform* Nudge = EquipFitNudges.Find(Slot.SlotTag.GetTagName());
+		FTransform Fit = EquipmentManager->GetVisualAttachOffset(Slot.SlotTag);
+		if (Slot.SlotTag == FGameplayTag::RequestGameplayTag(TEXT("Equipment.Slot.MainHand"), false))
+		{
+			const float DrawWeight = GetDrawnGripWeight();
+			if (DrawWeight > 0.f)
+			{
+				const UVCActionAnimSet* Set = ActionMontages ? ActionMontages->GetCurrentActionAnimSet() : nullptr;
+				FTransform Blended;
+				Blended.Blend(Fit, Set->DrawnGrip, DrawWeight);
+				Fit = Blended;
+			}
+		}
+		Slot.AttachedVisualComponent->SetRelativeTransform(ComposeAttachTransform(
+			Fit,
+			TargetMesh == GetMesh() ? GetBodyAttachCorrection(SocketName) : FTransform::Identity,
+			Nudge ? *Nudge : FTransform::Identity));
+	}
+	UpdateEquipmentVisualVisibility();
+#endif
+}
+
+float AVCCharacterBase::GetDrawnGripWeight() const
+{
+	const UVCActionAnimSet* Set = ActionMontages ? ActionMontages->GetCurrentActionAnimSet() : nullptr;
+	if (!Set || !Set->bHasDrawnGrip || !GetMesh())
+	{
+		return 0.f;
+	}
+	const UAnimInstance* Anim = GetMesh()->GetAnimInstance();
+	return Anim ? FMath::Clamp(Anim->GetSlotMontageGlobalWeight(TEXT("UpperBody")), 0.f, 1.f) : 0.f;
+}
+
+void AVCCharacterBase::UpdateDrawnGrip()
+{
+	const float Weight = GetDrawnGripWeight();
+	if (Weight > 0.f || LastDrawnGripWeight > 0.f)
+	{
+		UpdateEquipmentAttachments();
+	}
+	LastDrawnGripWeight = Weight;
+}
+
+FTransform AVCCharacterBase::ComposeAttachTransform(const FTransform& Fit, const FTransform& BodyCorrection, const FTransform& Nudge)
+{
+	// A * B applies A then B: the fit in the bone's space, the correction moving the fitted item, the nudge last.
+	return Fit * BodyCorrection * Nudge;
+}
+
+FTransform AVCCharacterBase::GetBodyAttachCorrection(FName Bone) const
+{
+	const UVCCharacterAppearance* Appearance = AppearanceComponent ? AppearanceComponent->GetAppearance() : nullptr;
+	return Appearance ? Appearance->GetAttachCorrection(Bone) : FTransform::Identity;
+}
+
+void AVCCharacterBase::UpdateEquipmentVisualVisibility()
+{
+#if WITH_EQUIPMENT_PLUGIN
+	if (!EquipmentManager)
+	{
+		return;
+	}
+	const bool bIsLocalFP = IsLocallyControlled() && CurrentViewMode == EVCViewMode::FirstPerson;
+	for (FEquipmentSlot& Slot : EquipmentManager->EquipmentSlots)
+	{
+		if (!Slot.AttachedVisualComponent)
+		{
+			continue;
+		}
+		if (UPrimitiveComponent* Visual = Cast<UPrimitiveComponent>(Slot.AttachedVisualComponent.Get()))
+		{
+			// Hidden with the body it hangs on; a visual on the arms mesh is the first-person view's own.
+			const bool bOnBody = Visual->GetAttachParent() == GetMesh();
+			Visual->SetOwnerNoSee(bIsLocalFP && bOnBody);
+			Visual->bCastHiddenShadow = bIsLocalFP && bOnBody;
+		}
 	}
 #endif
 }

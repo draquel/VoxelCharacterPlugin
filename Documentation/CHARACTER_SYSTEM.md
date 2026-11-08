@@ -115,7 +115,16 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
 
 - **Holding (D52).** The bow is a main-hand weapon: everything that asks what the player wields (the action set, the
   attack, the wear) reads the main hand. Its Equipment fragment's `AttachBoneOverride` (ItemInventoryPlugin) puts it on
-  `hand_l`; EquipmentPlugin attaches it there and `UpdateEquipmentAttachments` keeps that bone in both views.
+  `hand_l`; EquipmentPlugin attaches it there and `UpdateEquipmentAttachments` keeps that bone in both views. In first
+  person the body's hand items are hidden with the body (`UpdateEquipmentVisualVisibility`, `OwnerNoSee` on a visual
+  whose parent is the body mesh; a torch's light stays): no arms mesh draws them (D57), so a bow floated at the hidden
+  hand (the character refinement plan's C1). A hotbar swap seen from another machine rebuilds the visual (G153,
+  EquipmentPlugin). **Two grips** (C1): the pack's clips hold the bow on a `weapon_l` bone our skeletons lack, which
+  turns a quarter against `hand_l` between the idle and the draw, so no one fit is upright in both; the item's
+  `AttachOffset` (pitch 90) is its fit at rest, upright beside the leg, and the Bow set's `DrawnGrip` (the identity:
+  the stave along the bone's Z) is where it sits across the raised fist. `AVCCharacterBase::UpdateDrawnGrip` blends
+  the visual between them each tick by the weight of the montage in the `UpperBody` slot (`GetDrawnGripWeight`),
+  inside the raise, on every machine that draws the pawn.
 - **The data.** `UItemFragment_RangedWeapon` (ItemInventoryPlugin): the ammo's tag (`Item.Ammo.Arrow`), the arrow's
   class, the speed at full draw, the shortest and the full draw times and the power at the shortest (`GetDrawPower`: none
   below it, linear to full). Damage, crits and type stay on the Weapon fragment, times the draw's power.
@@ -369,7 +378,8 @@ skeletons compatible). The animation content is built by scripts into content pa
     the head did not turn.
   - Hands: an action set with `bOffHandIK` puts the left wrist at `OffHandGrip`, a point in `hand_r`'s space, on the
     handle 20 cm from the main hand (the TwoHand set (0, 2, 20); the Tool set's turned with the pickaxes' tilted grip,
-    G147); the elbow keeps its plane.
+    G147); the elbow keeps its plane. A set with `bHasDrawnGrip` re-seats the main hand's item at `DrawnGrip` while its
+    Draw plays (the bow: "The bow" above).
   - `vc.Anim.FootIK`, `vc.Anim.SprintPace`, `vc.Anim.LookAt` and `vc.Anim.HandIK` switch each off for an A/B;
     `vc.Anim.Debug 1` draws each character's look-at target and weights and turns on the engine's foot placement draw.
     `Scripts/setup_character_ik.py` builds the chain and the play rate; a crouched character has no pose yet (G140).
@@ -452,7 +462,14 @@ modules: a MetaHuman arrives as content.
   movement's. The engine's take world Z, so at a planet's equator the hoodie's drawstrings stood out sideways; now they
   hang toward the planet's centre.
 - **Sockets.** None: equipment attaches to the `hand_r`, `hand_l`, `head` and `spine_03` bones, which the MetaHuman
-  skeleton has and orients as the Mannequin does (the sword sits in Kellan's hand as in the low-poly body's).
+  skeleton has and orients as the Mannequin does. **Per-body corrections** (the character refinement plan's C1, D71,
+  2026-11-08): an item is fitted once to the Mannequin's hand (its Equipment fragment's `AttachOffset`, in the pose it
+  is held in: the bow in the draw) and a body whose hand differs corrects every item on a bone in `AttachCorrections`
+  (by bone, in the bone's space, after the fit; `GetAttachCorrection`). `AVCCharacterBase::UpdateEquipmentAttachments`
+  composes fit, correction and a QA nudge (`ComposeAttachTransform`: fit, then correction, then nudge) whenever a visual
+  attaches, the view changes or the appearance is applied (`ApplyPlayerAppearance` re-attaches, so a body swap corrects
+  at once). `vc.Equip.Nudge` moves a held item live and `vc.Equip.PrintFit` prints the item's line and the body's entry
+  (`Core/VCEquipFitConsole.cpp`, dev builds). Tests `VoxelCharacter.Appearance.AttachCorrection`.
 - **Cost** (one player, in-editor PIE). Standing, the CSV profiler: Kellan adds 3.0 to 3.7 ms of game thread a frame
   (11.5 against 8.5 ms at `PlanetTest`'s equator, 17.4 against 13.7 in `VoxelDemo`) and 0.2 to 0.7 ms of GPU. Most of
   it is animation-worker time the game thread waits for at the frame's end: the body's post-process AnimBP (the

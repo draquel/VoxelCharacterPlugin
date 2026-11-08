@@ -70,4 +70,24 @@ public:
 	/** The highest LOD the body's post-process AnimBP runs at: 0 near the camera only, -1 at every LOD. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Appearance", meta = (ClampMin = "-1"))
 	int32 BodyPostProcessMaxLOD = -1;
+
+	/**
+	 * How this body's hands differ from the Mannequin's, by bone (the character refinement plan's D71): an item is fitted
+	 * once to the Mannequin's hand (its Equipment fragment's AttachOffset) and a body whose hand is shaped or sized
+	 * differently (a MetaHuman's) corrects every item on that bone here, in the bone's space, after the item's fit. Empty: the
+	 * item's fit alone. Measured on the character test level with vc.Equip.Nudge and vc.Equip.PrintFit.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Appearance")
+	TMap<FName, FTransform> AttachCorrections;
+
+	/**
+	 * The correction for a bone: the entry for it, else identity.
+	 * @param Bone The bone an item attaches to
+	 * @return The correction in the bone's space
+	 */
+	FTransform GetAttachCorrection(FName Bone) const
+	{
+		const FTransform* Found = AttachCorrections.Find(Bone);
+		return Found ? *Found : FTransform::Identity;
+	}
 };

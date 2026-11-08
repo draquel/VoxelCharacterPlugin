@@ -139,6 +139,19 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|IK", meta = (EditCondition = "bOffHandIK"))
 	FVector OffHandGrip = FVector::ZeroVector;
 
+	/**
+	 * Whether the main hand's item sits differently while the set's Draw plays (the character refinement plan's C1): the
+	 * pack's bow clips hold the bow on a weapon bone our skeletons lack, so one fit on hand_l cannot be upright both beside
+	 * the leg at rest and across the raised fist in the draw. With this set, the character blends the item from its Equipment
+	 * fragment's AttachOffset to DrawnGrip by the weight of the montage in the UpperBody slot.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Grip")
+	bool bHasDrawnGrip = false;
+
+	/** Where the main hand's item sits on its bone while the Draw plays, in place of its fit (the bone's space). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Grip", meta = (EditCondition = "bHasDrawnGrip"))
+	FTransform DrawnGrip = FTransform::Identity;
+
 	/** Drawing a bow and holding it drawn: the draw, then a loop held until the release (ranged combat plan B3). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UAnimMontage> Draw;
