@@ -1,7 +1,13 @@
 # Character Animation Plan
 
-> **Agreed 2026-11-05: the user approved the plan as drafted, every decision as recommended (D43-D51, §7). P0-P7
-> done; P8 next.** Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
+> **Frozen 2026-11-07.** This plan is history: agreed 2026-11-05 as drafted, every decision as recommended (D43-D51,
+> §7), P0-P8 merged 2026-11-05 to 11-07. Built: the spikes S1-S4 (P0); the content packs and skeleton compatibility
+> (P1); `UVCAnimInstance` in the gravity frame for every character (P2); anim layers, action sets and their montages
+> (P3); foot placement, the head's look-at, the off-hand grip and the sprint's pace (P4); the player's motion matching
+> in the module `VoxelCharacterAnimation` (P5); bodies as data, MetaHumans among them, and the foot-bone IK (P6); the
+> NPCs' skeletal bodies within an animation budget (P7). As it is now: `CHARACTER_SYSTEM.md` ("Animation",
+> "Appearance", "NPCs" and its "Bodies", "Multiplayer"); open: G145, G147 and G148 (`FINDINGS.md`).
+> Scope: the player's and the NPCs' animation, IK and bodies, MetaHumans among them. Owner:
 > VoxelCharacterPlugin; content in VoxelWorldPOI's NPC tables, EquipmentPlugin's item data and the Blender pipeline.
 > Terms: `Documentation/GLOSSARY.md` at the project root; the decisions' numbers are from its `FINDINGS.md`.
 
@@ -644,6 +650,20 @@ Animation.
 
 - `CHARACTER_SYSTEM.md` gains an Animation section (the result); this plan gets its frozen banner; open items go to
   `FINDINGS.md`.
+
+**P8 result (2026-11-07): done.** `CHARACTER_SYSTEM.md` had grown its "Animation" section phase by phase (P2 to P5),
+"Appearance" (P6) and "NPCs", "Bodies" (P7); the close adds the plan's results paragraph at the head of "Animation" (what
+was built, the skeleton, the scripts in their order, what is open). The glossary gains appearance, held item and
+locomotion set. This plan is frozen. Open items in `FINDINGS.md`:
+- G145: a MetaHuman on a 75 uu block step reaches the lower block 25 uu short (P6).
+- G147: the action sets' stand-ins (D51) remain: VanillaLoop's sample set was never downloaded, so the pickaxe digs
+  with a two-handed strike and placing and using play the bow pack's pickup and potion.
+- G148: a MetaHuman body's post-process AnimBP (its corrective pose drivers) costs 2.3 ms of animation worker a player
+  and no appearance setting turns it off (P6's measurement).
+Decided at the close: D48 stays (a), the first-person arms mesh (the parts hide with the body in first person). Not
+built and not needed so far: four-legged foot placement (the creatures stand on the meadows; steep slopes unchecked),
+the stag, fox, pig and crow (one entry and one Blueprint each), NPC MetaHumans. The spike branch
+`spike/character-animation-p0` (local, never merged) and the GASP copy `GameAnimationSample_P0` are the user's to delete.
 
 ## 6. Risks
 
