@@ -8,7 +8,9 @@
 
 class UAnimBlueprint;
 class UAnimMontage;
+class UAnimSequence;
 class UAnimSequenceBase;
+class UBlendSpace;
 class UBlueprint;
 
 /**
@@ -276,4 +278,19 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
 	static TArray<FString> GetPinLinks(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, const FString& PinName);
+
+	/**
+	 * Sets a blend space's first axis and replaces its samples, one per sequence, so a script builds a locomotion blend
+	 * space (character animation P7). Python reaches neither the axis nor the samples.
+	 * @param BlendSpace The blend space (a 1D one has the first axis only)
+	 * @param AxisName   The axis' name (Speed)
+	 * @param Min        The axis' minimum
+	 * @param Max        The axis' maximum (more than Min)
+	 * @param Sequences  The samples' sequences, of the blend space's skeleton
+	 * @param Positions  Each sample's place on the axis, one per sequence
+	 * @return True when the axis was set and every sample added
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static bool SetBlendSpaceSamples(UBlendSpace* BlendSpace, const FString& AxisName, float Min, float Max,
+		const TArray<UAnimSequence*>& Sequences, const TArray<float>& Positions);
 };

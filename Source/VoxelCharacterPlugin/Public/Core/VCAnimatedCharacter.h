@@ -9,6 +9,7 @@
 #include "VCAnimatedCharacter.generated.h"
 
 class UVCCombatComponent;
+class UVCLocomotionAnimSet;
 
 UINTERFACE(MinimalAPI, meta = (CannotImplementInterfaceInBlueprint))
 class UVCAnimatedCharacter : public UInterface
@@ -43,4 +44,10 @@ public:
 	 * @return The component, or null for a character without one
 	 */
 	virtual const UVCCombatComponent* GetAnimCombatComponent() const = 0;
+
+	/**
+	 * The body's own locomotion, for the creature template AnimBP (character animation P7).
+	 * @return The set, or null for a body that plays the Mannequin's graph
+	 */
+	virtual const UVCLocomotionAnimSet* GetAnimLocomotionSet() const { return nullptr; }
 };

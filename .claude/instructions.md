@@ -33,7 +33,7 @@ calls.
 |---|---|
 | `AVCCharacterBase`, `AVCPlayerController`, `AVCPlayerState` (ASC host), `AVCGameModeBase`, `AVCNPCCharacterBase` (own ASC), `AVCNPCAIController` | `UInventoryComponent` (ItemInventoryPlugin), `UInteractionComponent` (InteractionPlugin), `UEquipmentManagerComponent` (EquipmentPlugin) |
 | `UVCMovementComponent`, `FVCGravityFrame`, `FVCTerrainQueryHelper` | VoxelWorlds' chunk manager, edit manager, scatter manager and surface navigation |
-| `UVCCameraManager` and its modes, `UVCAnimInstance`, `UVCActionMontageComponent` and `UVCActionAnimSet`, `UVCCharacterAppearance` and `UVCAppearanceComponent`, `FVCAnimNode_FootBoneIK`, `UVCInputConfig` | `UAbilitySystemComponent`, `UGameplayEffect`, `UGameplayAbility` (GAS) |
+| `UVCCameraManager` and its modes, `UVCAnimInstance`, `UVCActionMontageComponent` and `UVCActionAnimSet`, `UVCCharacterAppearance` and `UVCAppearanceComponent`, `FVCAnimNode_FootBoneIK`, `UVCLocomotionAnimSet`, `UVCInputConfig` | `UAbilitySystemComponent`, `UGameplayEffect`, `UGameplayAbility` (GAS) |
 | `UVCCombatComponent` and the combat GAS classes, `UVCBlockInteractionComponent`, `UVCGatherTable` | `ICGFDamageableInterface`, `FCGFDamageContext`, `ICGFInventoryInterface`, `ICGFLightBearerInterface`, `ICGFRestPointInterface`, combat tags (CommonGameFramework) |
 | The HUD widgets, the map widgets, `UVCMapMarkerRegistry`, `UVCSettings` | Widget classes from the gameplay plugins (`UHotbarWidget`, `UItemCursorWidget`, ...) |
 
@@ -58,6 +58,8 @@ calls.
 - MetaHumans are content, not a dependency: an appearance (`UVCCharacterAppearance`) names a MetaHuman's Blueprint as
   its parts actor, and nothing links RigLogic, HairStrands or LiveLink (the project enables those plugins). Which body
   a world gives the player is the project's data (`UVCSettings`' appearances, D43), never code.
+- The engine's AnimationBudgetAllocator plugin is a dependency (P7): the NPCs' meshes are
+  `USkeletalMeshComponentBudgeted`; the project enables the budget (`a.Budget.Enabled`, `a.Budget.BudgetMs`) in its config.
 
 ### Naming and C++
 

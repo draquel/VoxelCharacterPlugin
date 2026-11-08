@@ -6,7 +6,9 @@
 #include "AnimGraphNode_Base.h"
 #include "Animation/AnimBlueprint.h"
 #include "Animation/AnimMontage.h"
+#include "Animation/AnimSequence.h"
 #include "Animation/AnimSequenceBase.h"
+#include "Animation/BlendSpace.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
@@ -821,4 +823,39 @@ TArray<FString> UVCAnimAuthoringLibrary::GetPinLinks(UBlueprint* Blueprint, FNam
 		}
 	}
 	return Links;
+}
+
+bool UVCAnimAuthoringLibrary::SetBlendSpaceSamples(UBlendSpace* BlendSpace, const FString& AxisName, float Min, float Max,
+	const TArray<UAnimSequence*>& Sequences, const TArray<float>& Positions)
+{
+	if (!BlendSpace || Sequences.Num() != Positions.Num() || Max <= Min)
+	{
+		return false;
+	}
+	// The axes are protected: the property reaches the first
+	const FStructProperty* Axes = FindFProperty<FStructProperty>(UBlendSpace::StaticClass(), TEXT("BlendParameters"));
+	if (!Axes || Axes->Struct != FBlendParameter::StaticStruct())
+	{
+		return false;
+	}
+	BlendSpace->Modify();
+	FBlendParameter* Axis = Axes->ContainerPtrToValuePtr<FBlendParameter>(BlendSpace, 0);
+	Axis->DisplayName = AxisName;
+	Axis->Min = Min;
+	Axis->Max = Max;
+	Axis->GridNum = FMath::Max(4, Sequences.Num() * 2);
+	for (int32 Index = BlendSpace->GetNumberOfBlendSamples() - 1; Index >= 0; --Index)
+	{
+		BlendSpace->DeleteSample(Index);
+	}
+	bool bAll = true;
+	for (int32 Index = 0; Index < Sequences.Num(); ++Index)
+	{
+		bAll &= Sequences[Index] && BlendSpace->AddSample(Sequences[Index], FVector(Positions[Index], 0.0, 0.0)) != INDEX_NONE;
+	}
+	BlendSpace->ValidateSampleData();
+	BlendSpace->ResampleData();
+	BlendSpace->PostEditChange();
+	BlendSpace->MarkPackageDirty();
+	return bAll;
 }

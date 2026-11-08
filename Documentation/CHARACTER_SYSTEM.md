@@ -21,12 +21,13 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Core | `AVCPlayerController` | HUD and panels, the click-to-move item state machine, the voxel edit server path, gathering, chopping, rest and crafting RPCs, rotation in the gravity frame |
 | Core | `AVCPlayerState` | Hosts the ASC and both attribute sets; item snapshot across death, progression, rest point, save state; the player's appearance (replicated; the player's own choice saved) |
 | Core | `AVCGameModeBase` | Respawn (`RespawnPolicy`, `RespawnDelay`), the corpse kept per player (`bKeepCorpse`), log-in / log-out events, save requests; the players' appearance on its map (`PlayerAppearance`) |
-| Core | `AVCNPCCharacterBase` | NPC pawn with its own ASC and attribute sets, behaviour and temperament, a floating health bar (`UVCNPCHealthBarWidget`); implements `IVCAnimatedCharacter` |
+| Core | `AVCNPCCharacterBase` | NPC pawn with its own ASC and attribute sets, behaviour and temperament, a floating health bar (`UVCNPCHealthBarWidget`), a skeletal body within the animation budget, the item it holds (`HeldItem`) and an animal's locomotion (`LocomotionAnimSet`); implements `IVCAnimatedCharacter` |
 | Core | `UVCCharacterAttributeSet` | Health, Stamina, Breath (each with a max), MoveSpeedMultiplier, MiningSpeed, InteractionRange, IncomingDamage (meta) |
 | Core | `UVCAnimInstance`, `IVCAnimatedCharacter` | The anim instance of the player and the NPCs, every value in the gravity frame (Animation, below); the interface it reads a character's view mode, action set and combat state through |
 | Core | `UVCAnimLayerInstance` | The parent of a stance layer that aims or plays montages of its own (the bow's): the body's montages in the layer's slots, the body's aim and upper-body montage weight copied each update |
 | Animation | `UVCActionMontageComponent`, `UVCActionAnimSet`, `UVCAnimNotify_ActionHit` | The action montages of both character classes: the owner's at input, everyone else's by multicast, hit reacts, deaths and get-ups from the combat events; a set's montages per action; the moment an action lands |
 | Animation | `UVCCharacterAppearance`, `UVCAppearanceComponent` | A body as data (a mesh, or a MetaHuman's Blueprint whose parts dress it) and the component that dresses both character classes in one (Appearance, below) |
+| Animation | `UVCLocomotionAnimSet` | An animal's locomotion for the creature template AnimBP: its blend space by speed, the run's own speed, its idle variant (NPCs, below) |
 | Animation | `FVCAnimNode_FootBoneIK` (its graph node `UVCAnimGraphNode_FootBoneIK` in `VoxelCharacterEditor`) | Foot placement on the foot bones, for a body without the Mannequin's `ik_foot` bones (a MetaHuman's) |
 | Animation | `UVCMotionMatchingAnimInstance`, `UVCGravityTrajectoryPredictor` (`VoxelCharacterAnimation`) | The player's motion matching: the parent of the Game Animation Sample's CMC AnimBP, which fills it from our pawn and does its world-Z arithmetic in the gravity frame; the trajectory predictor that turns about local up (Animation, below) |
 | Editor | `UVCAnimAuthoringLibrary` (`VoxelCharacterEditor`) | Anim layers, interfaces, graph nodes, pins and properties, a montage's sections and slot, copies of assets with their references among them, from Python, which the engine does not expose: `Scripts/setup_character_layers.py`, `setup_character_ik.py` and `setup_character_locomotion.py` build the content with it |
@@ -309,6 +310,7 @@ it reads through `IVCAnimatedCharacter` (`VCAnimatedCharacter.h`), which both ch
     `InterpSpeed`. On a 28-degree slope in `VoxelDemo` Kellan's feet stand 11 and 33 uu over the ground without it and
     0.6 and 1.4 with it; on `Review_Cubic`'s 75 uu block step the upper leg bends and the lower foot reaches down 52 uu,
     25 short of the lower block (his legs are short for the 50 uu pelvis drop, where the low-poly body's reach; G145).
+  - All three run at LOD 0 only (P7): an NPC a room away skips the traces and the solve.
   - Pace: past `LocomotionReferenceSpeed` (600, the blend space's top) the clips play at the speed over it (1.6 at a
     sprint), so the feet keep pace with the ground. Stride warping measured nothing here (the jog's feet are near the
     legs' reach, where it clamps) and orientation warping is not needed (eight directions).
@@ -591,6 +593,40 @@ surface spawner sets it in a storm for the entries that hide in them) turns a pr
 until it is lifted, a threat still making it flee; hostiles ignore it (`FVCNPCAIDecisionInput::bHoldsForWeather`,
 `VoxelCharacter.AI.WeatherHold`).
 
+### Bodies (the plan's P7)
+
+Every NPC animates a skeletal body on its own `Mesh`. The static placeholders are gone; each run of
+`Scripts/configure_surface_npcs.py` had stacked another on the creatures (G146).
+
+- **The dungeon foe** wears the CR pack's Grian04 (on the Mannequin skeleton) and plays `ABP_VoxelCharacter` with the
+  player's layers and action sets (its `ActionMontages` lists Unarmed and SwordShield). `HeldItem` names the item an NPC
+  holds as the player would: its Equipment fragment's mesh on the hand (the fragment's bone, else `hand_r`, at its
+  attach offset), its stance layer linked and its action set the NPC's unless `ActionSet` names one. The foe holds the
+  iron sword in the sword-and-shield stance. `Scripts/configure_dungeon_enemies.py` builds it.
+- **The animals** (the Animal Variety Pack, a content pack: the wolf and the doe) share `ABP_VCCreature`, a template
+  AnimBP bound to no skeleton, on `UVCAnimInstance`. It plays the body's locomotion blend space by speed at
+  `LocomotionPlayRate` (quicker past the run clip's own speed), an idle variant while the body stands (`bIdleVariant`:
+  after the set's `IdleVariantAfter` seconds, for its `IdleVariantFor`, again after the same wait; the doe grazes, the
+  wolf looks round), then the montage slot. The NPC's `UVCLocomotionAnimSet` names those assets, through
+  `IVCAnimatedCharacter::GetAnimLocomotionSet`. The animal's `UVCActionAnimSet`, its Unarmed set, holds the bite (it
+  lands at the montage's hit time), the hit reacts and the death. `Scripts/setup_creature_animation.py` builds the
+  template, the blend spaces (idle, walk and run at the clips' own speeds: the wolf's 93 and 445 uu/s, the doe's 108 and
+  574), the montages and the sets; `configure_surface_npcs.py` puts them on `BP_Wolf` and `BP_Deer`. A new animal is one
+  entry in the first script and its creature Blueprint. The capsules fit the bodies (half-heights: the wolf 52, the doe
+  78, the foe 94).
+- **The budget.** An NPC's mesh is `USkeletalMeshComponentBudgeted`: the engine's Animation Budget Allocator ticks the
+  NPCs' animation within `a.Budget.BudgetMs` of game thread (0.5, `Config/DefaultEngine.ini`). The less significant
+  meshes (by distance to the view) tick less often and are interpolated between; one off screen does not tick. A world's
+  allocator starts disabled, so the first NPC to play turns it on (`a.Budget.Enabled` is only a gate over every world's).
+  A living NPC's mesh has no collision (the capsule is its collision; arrows and the melee sweep meet the capsule) and
+  takes its bounds from the mesh's own: the physics asset's bodies would otherwise follow the pose every frame. A death
+  that ragdolls gives back both.
+- **Cost**, 48 wolves standing in view about 15 m away (the CSV profiler): with mesh collision 7.1 ms of game-thread
+  animation; with none 3.0; with fixed bounds too 2.5; with the allocator at work, the NPCs' budgeted animation 1.1 ms at
+  a 1 ms budget (every mesh ticked) and 0.52 ms at 0.5 (23 of the 48 a frame). `npc_bench.py` (wolves chasing a moving
+  player, the game thread's median): at 48 NPCs 20.9 ms on `VoxelDemo` and 18.9 on the cubic world, against 29.6 and 24.1
+  with the static placeholders; at 96, 24.1 and 19.2 against 43.0 and 27.3.
+
 ### NPCs at scale (G73, 2026-11-04)
 
 What an NPC costs the game thread, and the three things that keep it down (three more for a player on the move: G125
@@ -713,4 +749,5 @@ and `ToggleVoxelDebug` are on the controller and the character. Every name, defa
 
 `VoxelCharacter.*` in `Private/Tests/`: AI, Anim, Camera, Combat, Config, Cubic, Edit, EditMode, EquipmentLoop, Gather,
 Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, WorldEdge; the weather's `Movement.WindPush`,
-`Movement.WetLevel` and `AI.WeatherHold`.
+`Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
+`NPC.BodyBudgetAndHeldItem` (P7).
