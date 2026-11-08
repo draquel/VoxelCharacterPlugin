@@ -14,6 +14,16 @@
 #include "Materials/MaterialInterface.h"
 #include "VoxelCharacterPlugin.h"
 
+namespace
+{
+	/** The skeletal mesh component's post-process LOD threshold: a private property, set as a Blueprint would. */
+	const FIntProperty* PostProcessLODThreshold()
+	{
+		static const FIntProperty* Threshold = FindFProperty<FIntProperty>(USkeletalMeshComponent::StaticClass(), TEXT("PostProcessAnimBPLODThreshold"));
+		return Threshold;
+	}
+}
+
 UVCAppearanceComponent::UVCAppearanceComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
@@ -60,12 +70,7 @@ bool UVCAppearanceComponent::ApplyAppearance(const UVCCharacterAppearance* Appea
 	{
 		return false;
 	}
-	if (!bCapturedOriginal)
-	{
-		OriginalMesh = Mesh->GetSkeletalMeshAsset();
-		OriginalMaterials = Mesh->OverrideMaterials;
-		bCapturedOriginal = true;
-	}
+	CaptureOriginal(*Mesh);
 	RemoveParts();
 	Current = Appearance;
 
@@ -172,6 +177,7 @@ bool UVCAppearanceComponent::ApplyAppearance(const UVCCharacterAppearance* Appea
 		}
 		SetPartsOwnerNoSee(Mesh->bOwnerNoSee, Mesh->bCastHiddenShadow);
 	}
+	ApplyBodyPostProcess();
 	RefreshSimulations();
 	UE_LOG(LogVoxelCharacter, Log, TEXT("%s wears %s: body %s%s"), *GetNameSafe(Character), Appearance ? *Appearance->GetName() : TEXT("its own body"),
 		*GetNameSafe(Mesh->GetSkeletalMeshAsset()), PartsActor ? *FString::Printf(TEXT(", parts from %s"), *PartsActor->GetClass()->GetName()) : TEXT(""));
@@ -270,6 +276,51 @@ void UVCAppearanceComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	UpdateSimulationGravity();
+}
+
+void UVCAppearanceComponent::SetBodyHiddenFromView(bool bHidden)
+{
+	if (bBodyHiddenFromView != bHidden)
+	{
+		bBodyHiddenFromView = bHidden;
+		ApplyBodyPostProcess();
+	}
+}
+
+void UVCAppearanceComponent::CaptureOriginal(const USkeletalMeshComponent& Mesh)
+{
+	if (bCapturedOriginal)
+	{
+		return;
+	}
+	OriginalMesh = Mesh.GetSkeletalMeshAsset();
+	OriginalMaterials = Mesh.OverrideMaterials;
+	if (const FIntProperty* Threshold = PostProcessLODThreshold())
+	{
+		OriginalPostProcessLOD = Threshold->GetPropertyValue_InContainer(&Mesh);
+	}
+	bOriginalPostProcessDisabled = Mesh.GetDisablePostProcessBlueprint();
+	bCapturedOriginal = true;
+}
+
+void UVCAppearanceComponent::ApplyBodyPostProcess()
+{
+	const ACharacter* Character = Cast<ACharacter>(GetOwner());
+	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : nullptr;
+	if (!Mesh)
+	{
+		return;
+	}
+	CaptureOriginal(*Mesh);
+	if (const FIntProperty* Threshold = PostProcessLODThreshold())
+	{
+		Threshold->SetPropertyValue_InContainer(Mesh, Current ? Current->BodyPostProcessMaxLOD : OriginalPostProcessLOD);
+	}
+	const bool bOff = Current ? !Current->bBodyPostProcess : bOriginalPostProcessDisabled;
+	if (Mesh->GetDisablePostProcessBlueprint() != (bOff || bBodyHiddenFromView))
+	{
+		Mesh->SetDisablePostProcessBlueprint(bOff || bBodyHiddenFromView);
+	}
 }
 
 void UVCAppearanceComponent::RemoveParts()

@@ -167,6 +167,17 @@ public:
 	static bool SetMontageSlot(UAnimMontage* Montage, FName SlotName);
 
 	/**
+	 * Plays only part of a one-sequence montage's sequence (G147: the reach without its stowing half). The montage's
+	 * length follows; its sections and notifies are left where they are.
+	 * @param Montage   The montage, of one sequence
+	 * @param StartTime Where in the sequence it starts (seconds)
+	 * @param EndTime   Where in the sequence it ends (seconds), past StartTime and within the sequence
+	 * @return True when the montage plays that part afterwards
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static bool TrimMontage(UAnimMontage* Montage, float StartTime, float EndTime);
+
+	/**
 	 * Every graph of a blueprint by name: the event and anim graphs, functions, layers, state machines and their states
 	 * and transitions (character animation P4: reading another anim blueprint's graphs).
 	 * @param Blueprint The blueprint

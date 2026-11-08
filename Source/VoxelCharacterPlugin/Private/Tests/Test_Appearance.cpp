@@ -21,6 +21,8 @@
 //   meshing mode, the settings' default.
 // - The player's choice survives the save document.
 // - An appearance with a body mesh dresses the character's mesh, and none gives the class's own body back.
+// - The body's post-process AnimBP (a MetaHuman's correctives, G148): the appearance's LOD threshold and switch, off
+//   while the body is hidden from its player's view, the class's own settings back with its own body.
 // - The foot-bone placement's pure parts: the pelvis drops to the lowest foot, within its limit; a planted foot tilts
 //   to the ground, within its limit, and a foot in its swing does not.
 // ---------------------------------------------------------------------------
@@ -115,6 +117,51 @@ bool FVCAppearance_DressAndUndress::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Undressed"), Appearance->ApplyAppearance(nullptr));
 		TestTrue(TEXT("The class's own body is back"), Character->GetMesh()->GetSkeletalMeshAsset() == Own);
 		TestTrue(TEXT("The class's own body has its bones"), Appearance->HasIKFootBones());
+	}
+	GEngine->DestroyWorldContext(World);
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCAppearance_BodyPostProcess, "VoxelCharacter.Appearance.BodyPostProcess", VC_APPEARANCE_FLAGS)
+bool FVCAppearance_BodyPostProcess::RunTest(const FString& Parameters)
+{
+	const FIntProperty* ThresholdProperty = FindFProperty<FIntProperty>(USkeletalMeshComponent::StaticClass(), TEXT("PostProcessAnimBPLODThreshold"));
+	if (!TestNotNull(TEXT("The mesh component's post-process LOD threshold"), ThresholdProperty))
+	{
+		return false;
+	}
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("VCAppearancePostProcessWorld"));
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Context.SetCurrentWorld(World);
+	World->InitializeActorsForPlay(FURL());
+	ACharacter* Character = World->SpawnActor<ACharacter>();
+	UVCAppearanceComponent* Appearance = Character ? NewObject<UVCAppearanceComponent>(Character, TEXT("Appearance")) : nullptr;
+	if (TestNotNull(TEXT("A character"), Character) && Appearance)
+	{
+		Appearance->RegisterComponent();
+		USkeletalMeshComponent* Mesh = Character->GetMesh();
+		const auto Threshold = [&]() { return ThresholdProperty->GetPropertyValue_InContainer(Mesh); };
+		const int32 OwnThreshold = Threshold();
+
+		UVCCharacterAppearance* Data = NewObject<UVCCharacterAppearance>();
+		Data->BodyPostProcessMaxLOD = 0;
+		Appearance->ApplyAppearance(Data);
+		TestEqual(TEXT("Near the camera only: LOD 0"), Threshold(), 0);
+		TestFalse(TEXT("And on"), Mesh->GetDisablePostProcessBlueprint());
+
+		Appearance->SetBodyHiddenFromView(true);
+		TestTrue(TEXT("Hidden from its player's view (first person): off"), Mesh->GetDisablePostProcessBlueprint());
+		Appearance->SetBodyHiddenFromView(false);
+		TestFalse(TEXT("Seen again: on"), Mesh->GetDisablePostProcessBlueprint());
+
+		Data->bBodyPostProcess = false;
+		Appearance->ApplyAppearance(Data);
+		TestTrue(TEXT("An appearance that turns it off"), Mesh->GetDisablePostProcessBlueprint());
+
+		Appearance->ApplyAppearance(nullptr);
+		TestEqual(TEXT("The class's own threshold back"), Threshold(), OwnThreshold);
+		TestFalse(TEXT("The class's own body runs its post-process"), Mesh->GetDisablePostProcessBlueprint());
 	}
 	GEngine->DestroyWorldContext(World);
 	World->DestroyWorld(false);

@@ -58,4 +58,16 @@ public:
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Appearance")
 	bool bHasIKFootBones = true;
+
+	/**
+	 * Whether the body's post-process AnimBP runs: a MetaHuman's corrective pose drivers, the shapes of its shoulders,
+	 * elbows and knees, about 2 ms of animation worker a body at LOD 0 (G148). It never runs while the body is hidden from its
+	 * own player's view (first person).
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Appearance")
+	bool bBodyPostProcess = true;
+
+	/** The highest LOD the body's post-process AnimBP runs at: 0 near the camera only, -1 at every LOD. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Appearance", meta = (ClampMin = "-1"))
+	int32 BodyPostProcessMaxLOD = -1;
 };

@@ -1165,6 +1165,7 @@ void AVCCharacterBase::UpdateMeshVisibility()
 	if (AppearanceComponent)
 	{
 		AppearanceComponent->SetPartsOwnerNoSee(bIsLocalFP, bIsLocalFP);
+		AppearanceComponent->SetBodyHiddenFromView(bIsLocalFP); // no correctives for a body its player cannot see (G148)
 	}
 
 	if (FirstPersonArmsMesh)
