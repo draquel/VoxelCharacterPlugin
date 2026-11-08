@@ -59,6 +59,13 @@ public:
 	void SetPartsOwnerNoSee(bool bOwnerNoSee, bool bCastHiddenShadow);
 
 	/**
+	 * Whether the local player's view sees the body (false in first person): a hidden body skips its post-process AnimBP
+	 * (a MetaHuman's correctives, G148).
+	 * @param bHidden True while the body is hidden from its own player's view
+	 */
+	void SetBodyHiddenFromView(bool bHidden);
+
+	/**
 	 * Pure: which appearance a player wears, the first of: the player's own choice, the game mode's for its map, the
 	 * project settings' for the world's meshing mode, the settings' default.
 	 * @param Chosen      The player's own choice (saved), or null
@@ -102,6 +109,22 @@ private:
 
 	/** Destroys the parts actor (its components go with it, wherever they are attached). */
 	void RemoveParts();
+
+	/** Keeps the class's own body (its mesh, materials and post-process settings) on the first change. */
+	void CaptureOriginal(const USkeletalMeshComponent& Mesh);
+
+	/**
+	 * The body's post-process AnimBP as the worn appearance allows it (G148): its LOD threshold, and off where the
+	 * appearance turns it off or the body is hidden from its own player's view.
+	 */
+	void ApplyBodyPostProcess();
+
+	/** The body is hidden from its own player's view (first person). */
+	bool bBodyHiddenFromView = false;
+
+	/** The class's own body's post-process settings, kept on the first change. */
+	int32 OriginalPostProcessLOD = INDEX_NONE;
+	bool bOriginalPostProcessDisabled = false;
 
 	UPROPERTY(Transient)
 	TObjectPtr<const UVCCharacterAppearance> Current;

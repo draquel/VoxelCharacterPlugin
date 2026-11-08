@@ -16,8 +16,8 @@ editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the 
 2. `Documentation/MAP_UI_WIDGETS.md` — the minimap and world map, on planes and planets.
 3. `Documentation/EDITOR_CONSOLE_GUIDE.md` at the project root, §4 — every `vc.*` cvar and Exec function; the game
    module's `vox.*` commands drive this plugin's pawn for QA.
-4. `Documentation/FINDINGS.md` at the project root — open findings in this plugin: G145, G147 and G148, the character
-   animation plan's leftovers.
+4. `Documentation/FINDINGS.md` at the project root — open findings in this plugin: G145 (a MetaHuman on a block step),
+   the character animation plan's leftover.
 5. History only: `Documentation/CharacterController_Design.md` (the February design, frozen),
    `COMBAT_FOUNDATION_PLAN.md`, `EQUIPMENT_LOOP_PLAN.md`, `RANGED_COMBAT_PLAN.md` (the bow, D52-D57, done 2026-11-07,
    now in `CHARACTER_SYSTEM.md` "The bow") and `CHARACTER_ANIMATION_PLAN.md` (animation, IK and bodies, D43-D51, done

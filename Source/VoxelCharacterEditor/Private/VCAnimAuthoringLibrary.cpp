@@ -582,6 +582,33 @@ bool UVCAnimAuthoringLibrary::SetMontageSlot(UAnimMontage* Montage, FName SlotNa
 	return true;
 }
 
+bool UVCAnimAuthoringLibrary::TrimMontage(UAnimMontage* Montage, float StartTime, float EndTime)
+{
+	if (!Montage || Montage->SlotAnimTracks.Num() == 0 || Montage->SlotAnimTracks[0].AnimTrack.AnimSegments.Num() != 1)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("TrimMontage: no montage, or %s is not of one sequence"), *GetNameSafe(Montage));
+		return false;
+	}
+	FAnimTrack& Track = Montage->SlotAnimTracks[0].AnimTrack;
+	FAnimSegment& Segment = Track.AnimSegments[0];
+	const UAnimSequenceBase* Sequence = Segment.GetAnimReference();
+	const float Length = Sequence ? Sequence->GetPlayLength() : 0.f;
+	if (!Sequence || StartTime < 0.f || EndTime <= StartTime || EndTime > Length + UE_KINDA_SMALL_NUMBER)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("TrimMontage: %s cannot play %.3f to %.3f of a %.3f s sequence"),
+			*Montage->GetName(), StartTime, EndTime, Length);
+		return false;
+	}
+	Montage->Modify();
+	Segment.AnimStartTime = StartTime;
+	Segment.AnimEndTime = FMath::Min(EndTime, Length);
+	Montage->SetCompositeLength(Track.GetLength());
+	Montage->UpdateLinkableElements();
+	Montage->PostEditChange();
+	Montage->MarkPackageDirty();
+	return true;
+}
+
 TArray<FString> UVCAnimAuthoringLibrary::CopyAssetsWithReferences(const TMap<FString, FString>& SourceToDestination)
 {
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();

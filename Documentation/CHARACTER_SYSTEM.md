@@ -244,8 +244,8 @@ among them (P6); the NPCs' skeletal bodies within an animation budget (P7). The 
 GASP's set plays on it unconverted through skeleton compatibility (D50; `Scripts/setup_character_animation.py` marks the
 skeletons compatible). The animation content is built by scripts into content packs (D46), in this order:
 `setup_character_layers.py`, `setup_character_ik.py`, `setup_character_locomotion.py`,
-`setup_character_appearances.py`, `setup_creature_animation.py` (`Scripts/README.md`). Open: G145, G147, G148
-(`Documentation/FINDINGS.md`).
+`setup_character_appearances.py`, `setup_creature_animation.py` (`Scripts/README.md`). Open: G145
+(`Documentation/FINDINGS.md`); G147 (VanillaLoop's clips) and G148 (the correctives near the camera only) closed after it.
 
 - **Two halves.** `NativeUpdateAnimation` gathers an `FVCAnimInput` on the game thread (the character's state in world
   space, and a line trace along gravity for the ground under a falling character, on the movement's channel, up to
@@ -329,8 +329,9 @@ skeletons compatible). The animation content is built by scripts into content pa
     focus, at most 50 degrees (the node's clamp); it fades for a target more than `LookAtMaxAngle` from the facing
     (about local up), in first person, dead or downed. The node's look-up axis and interpolation stay off: with them on
     the head did not turn.
-  - Hands: an action set with `bOffHandIK` puts the left wrist at `OffHandGrip`, a point in `hand_r`'s space (the Tool
-    and TwoHand sets: (0, 2, 20), on the pickaxe's handle); the elbow keeps its plane.
+  - Hands: an action set with `bOffHandIK` puts the left wrist at `OffHandGrip`, a point in `hand_r`'s space, on the
+    handle 20 cm from the main hand (the TwoHand set (0, 2, 20); the Tool set's turned with the pickaxes' tilted grip,
+    G147); the elbow keeps its plane.
   - `vc.Anim.FootIK`, `vc.Anim.SprintPace`, `vc.Anim.LookAt` and `vc.Anim.HandIK` switch each off for an A/B;
     `vc.Anim.Debug 1` draws each character's look-at target and weights and turns on the engine's foot placement draw.
     `Scripts/setup_character_ik.py` builds the chain and the play rate; a crouched character has no pose yet (G140).
@@ -360,11 +361,17 @@ skeletons compatible). The animation content is built by scripts into content pa
   - Cost for one running player (the CSV profiler): 0.50 ms of animation on the game thread and 1.39 ms on the animation
     worker, against 0.22 and 0.33 ms for `ABP_VoxelCharacter`.
 - **The content.** `Scripts/setup_character_layers.py` builds the interface, the layers, the montages (from the
-  template mannequin's, Sword & Shield's, Bow and Arrow's and GASP's sequences, a hit notify at the strike; the bow's
-  draw a raise, a pull and a held loop in sections, `UVCAnimAuthoringLibrary::AppendMontageSegment`) and the five sets
-  under `/Game/CharacterAnimation` (a content pack), puts the layer into `ABP_VoxelCharacter` and tags the swords, the
-  pickaxes and the bow. Stand-ins (D51) until VanillaLoop's samples: the pickaxe digs with a two-handed strike and holds the
-  two-handed idle; placing and using by hand (and with the bow) play the bow pack's pickup and potion.
+  template mannequin's, Sword & Shield's, Bow and Arrow's, GASP's and VanillaLoop's sequences, a hit notify at the
+  strike; the bow's draw a raise, a pull and a held loop in sections, `UVCAnimAuthoringLibrary::AppendMontageSegment`;
+  part of a clip, `TrimMontage`) and the five sets under `/Game/CharacterAnimation` (a content pack), puts the layer
+  into `ABP_VoxelCharacter` and tags the swords, the pickaxes and the bow. A montage whose clip the tables change is
+  made again. The pickaxe digs with VanillaLoop's mining loop (`FreeSampleAnimationSet`, a content pack: one swing in
+  2 s, the dig landing at the strike, 0.28 of the clip); the pickaxes sit in the hand as the pack's own does (its
+  socket on `hand_r`: the handle tilted 13.6 degrees, the Equipment fragment's `AttachOffset`), so the strike lands
+  at knee height before the player. Placing by hand or with the bow reaches out with the pack's right-hand pickup (its
+  first second: the rest stows the item behind the back) (G147). Still
+  stand-ins (D51), for want of a clip in the packs: the pickaxe holds the two-handed idle, and using by hand drinks the
+  bow pack's potion.
 
 ## Appearance
 
@@ -372,8 +379,9 @@ A character's body is data (the plan's P6): `UVCCharacterAppearance` (`Animation
 data asset) names the mesh the character animates (`BodyMesh`), an actor whose skeletal meshes dress it
 (`PartsActorClass`, a MetaHuman's Blueprint) and its component that lends the body (`PartsBodyComponent`), the parts
 that animate themselves (`PartsWithOwnAnimation`), an anim class (`AnimClass`, else
-`UVCSettings::PlayerLocomotionAnimClass`) and whether the body has the Mannequin's `ik_foot` bones
-(`bHasIKFootBones`). Nothing links to the MetaHuman modules: a MetaHuman arrives as content.
+`UVCSettings::PlayerLocomotionAnimClass`), whether the body has the Mannequin's `ik_foot` bones (`bHasIKFootBones`)
+and where its post-process AnimBP runs (`bBodyPostProcess`, `BodyPostProcessMaxLOD`). Nothing links to the MetaHuman
+modules: a MetaHuman arrives as content.
 
 - **Dressing.** `UVCAppearanceComponent` ("Appearance", on both character classes) applies one. The character's `Mesh`
   stays the animated mesh and takes the body's mesh and materials. The parts actor is spawned (transient, without
@@ -406,8 +414,16 @@ that animate themselves (`PartsWithOwnAnimation`), an anim class (`AnimClass`, e
   it is animation-worker time the game thread waits for at the frame's end: the body's post-process AnimBP (the
   MetaHuman's corrective pose drivers, 2.3 ms), the face's RigLogic (0.9 ms), the hoodie's simulation (0.6 ms).
   `voxel.Bench.Run`'s `VoxelDemo` chord, three runs each, gives the frame's median 1 to 3 ms above the low-poly
-  body's. The body's correctives are the one large item: a project that does without them sets the mesh's
-  `bDisablePostProcessBlueprint` (no setting here yet).
+  body's.
+- **The correctives near the camera only** (G148). The body's post-process AnimBP is the one large item, so the
+  appearance says where it runs: `bBodyPostProcess` false never, `BodyPostProcessMaxLOD` up to that LOD (the
+  component's `PostProcessAnimBPLODThreshold`, -1 every LOD), and never while the body is hidden from its own player's
+  view (first person: `UVCAppearanceComponent::SetBodyHiddenFromView`, from the character's mesh visibility). A null
+  appearance gives the class's own settings back. Kellan's run at LOD 0: the local player in third person keeps them
+  (the body is at LOD 0 at the camera's distance); in first person the animation worker's total falls from 5.2 to 3.2
+  ms a frame; a body past LOD 0 (another player farther off) saves 0.85 ms (with the LOD forced to 1: 2.6 to 3.1 ms
+  with them, 1.8 to 2.2 without). The CSV profiler, one player standing in `VoxelDemo`, with two other editors open:
+  the game thread's numbers were noise, the worker's held across repeated runs.
 - `vc.Appearance [name|path|rule]` sets every player's choice on the server (an appearance the settings name, by its
   name, or a path; `rule` clears it; no argument lists them). `Scripts/setup_character_appearances.py` builds
   `DA_VCAppearance_LowPoly` and `DA_VCAppearance_Kellan` (`/Game/CharacterAnimation/Appearances`).
