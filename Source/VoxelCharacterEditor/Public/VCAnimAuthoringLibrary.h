@@ -178,6 +178,18 @@ public:
 	static bool TrimMontage(UAnimMontage* Montage, float StartTime, float EndTime);
 
 	/**
+	 * Makes a montage play another sequence, whole, in place (G150): its first track gets the one segment, its first
+	 * section stays and the others go, and it takes the sequence's skeleton. The asset keeps its path, so what refers to
+	 * it does not change; deleting it and making it again stops on the editor's "Overwrite Existing Object" dialog, the
+	 * deleted montage still loaded. Its notifies stay (AnimationLibrary removes them).
+	 * @param Montage  The montage
+	 * @param Sequence The sequence it plays from now on
+	 * @return True when the montage plays the sequence afterwards
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static bool ResetMontage(UAnimMontage* Montage, UAnimSequenceBase* Sequence);
+
+	/**
 	 * Every graph of a blueprint by name: the event and anim graphs, functions, layers, state machines and their states
 	 * and transitions (character animation P4: reading another anim blueprint's graphs).
 	 * @param Blueprint The blueprint

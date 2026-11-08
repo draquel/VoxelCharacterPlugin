@@ -365,7 +365,8 @@ skeletons compatible). The animation content is built by scripts into content pa
   strike; the bow's draw a raise, a pull and a held loop in sections, `UVCAnimAuthoringLibrary::AppendMontageSegment`;
   part of a clip, `TrimMontage`) and the five sets under `/Game/CharacterAnimation` (a content pack), puts the layer
   into `ABP_VoxelCharacter` and tags the swords, the pickaxes and the bow. A montage whose clip the tables change is
-  made again. The pickaxe digs with VanillaLoop's mining loop (`FreeSampleAnimationSet`, a content pack: one swing in
+  reset to it in place (`ResetMontage`: its path and what refers to it kept; deleting it and making it again stopped on
+  the editor's "Overwrite Existing Object" dialog, G150). The pickaxe digs with VanillaLoop's mining loop (`FreeSampleAnimationSet`, a content pack: one swing in
   2 s, the dig landing at the strike, 0.28 of the clip); the pickaxes sit in the hand as the pack's own does (its
   socket on `hand_r`: the handle tilted 13.6 degrees, the Equipment fragment's `AttachOffset`), so the strike lands
   at knee height before the player. Placing by hand or with the bow reaches out with the pack's right-hand pickup (its

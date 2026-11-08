@@ -9,6 +9,7 @@
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimSequenceBase.h"
 #include "Animation/BlendSpace.h"
+#include "Animation/Skeleton.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
@@ -603,6 +604,41 @@ bool UVCAnimAuthoringLibrary::TrimMontage(UAnimMontage* Montage, float StartTime
 	Segment.AnimStartTime = StartTime;
 	Segment.AnimEndTime = FMath::Min(EndTime, Length);
 	Montage->SetCompositeLength(Track.GetLength());
+	Montage->UpdateLinkableElements();
+	Montage->PostEditChange();
+	Montage->MarkPackageDirty();
+	return true;
+}
+
+bool UVCAnimAuthoringLibrary::ResetMontage(UAnimMontage* Montage, UAnimSequenceBase* Sequence)
+{
+	if (!Montage || !Sequence || Montage->SlotAnimTracks.Num() == 0)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ResetMontage: no montage, no sequence, or %s has no track"), *GetNameSafe(Montage));
+		return false;
+	}
+	Montage->Modify();
+	if (USkeleton* Skeleton = Sequence->GetSkeleton())
+	{
+		Montage->SetSkeleton(Skeleton);
+	}
+	Montage->SlotAnimTracks.SetNum(1);
+	FAnimTrack& Track = Montage->SlotAnimTracks[0].AnimTrack;
+	Track.AnimSegments.Reset();
+	FAnimSegment Segment;
+	Segment.SetAnimReference(Sequence, /*bInitialize*/ true);
+	Segment.StartPos = 0.f;
+	Track.AnimSegments.Add(Segment);
+	Montage->SetCompositeLength(Track.GetLength());
+
+	// One section at the start, under the first one's name, leading nowhere (a draw's led into its hold)
+	const FName First = Montage->CompositeSections.Num() > 0 ? Montage->CompositeSections[0].SectionName : FName(TEXT("Default"));
+	Montage->CompositeSections.Reset();
+	if (Montage->AddAnimCompositeSection(First, 0.f) == INDEX_NONE)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ResetMontage: %s refused the section %s"), *Montage->GetName(), *First.ToString());
+		return false;
+	}
 	Montage->UpdateLinkableElements();
 	Montage->PostEditChange();
 	Montage->MarkPackageDirty();
