@@ -25,7 +25,7 @@
 
 namespace
 {
-	/** Saved move carrying the sprint and swim-rise keys, so a client's predicted moves replay the same way. */
+	/** Saved move carrying the sprint, swim-rise and walk keys, so a client's predicted moves replay the same way (the gait table reads them, C4). */
 	class FSavedMove_VC : public FSavedMove_Character
 	{
 	public:
@@ -33,12 +33,14 @@ namespace
 
 		uint8 bSavedWantsToSprint : 1;
 		uint8 bSavedWantsToAscend : 1;
+		uint8 bSavedWantsToWalk : 1;
 
 		virtual void Clear() override
 		{
 			Super::Clear();
 			bSavedWantsToSprint = 0;
 			bSavedWantsToAscend = 0;
+			bSavedWantsToWalk = 0;
 		}
 
 		virtual uint8 GetCompressedFlags() const override
@@ -52,13 +54,18 @@ namespace
 			{
 				Flags |= FLAG_Custom_1;
 			}
+			if (bSavedWantsToWalk)
+			{
+				Flags |= FLAG_Custom_2;
+			}
 			return Flags;
 		}
 
 		virtual bool CanCombineWith(const FSavedMovePtr& NewMove, ACharacter* InCharacter, float MaxDelta) const override
 		{
 			const FSavedMove_VC* Other = static_cast<const FSavedMove_VC*>(NewMove.Get());
-			if (bSavedWantsToSprint != Other->bSavedWantsToSprint || bSavedWantsToAscend != Other->bSavedWantsToAscend)
+			if (bSavedWantsToSprint != Other->bSavedWantsToSprint || bSavedWantsToAscend != Other->bSavedWantsToAscend
+				|| bSavedWantsToWalk != Other->bSavedWantsToWalk)
 			{
 				return false;
 			}
@@ -72,6 +79,7 @@ namespace
 			{
 				bSavedWantsToSprint = Movement->bWantsToSprint;
 				bSavedWantsToAscend = Movement->bWantsToAscend;
+				bSavedWantsToWalk = Movement->bWantsToWalk;
 			}
 		}
 
@@ -82,6 +90,7 @@ namespace
 			{
 				Movement->bWantsToSprint = bSavedWantsToSprint;
 				Movement->bWantsToAscend = bSavedWantsToAscend;
+				Movement->bWantsToWalk = bSavedWantsToWalk;
 			}
 		}
 	};
@@ -150,6 +159,7 @@ void UVCMovementComponent::BeginPlay()
 	Super::BeginPlay();
 	BaseMaxWalkSpeed = MaxWalkSpeed;
 	BaseMaxAcceleration = MaxAcceleration;
+	ApplySessionTableOverride();
 
 	// Subscribe to chunk edit events for terrain cache invalidation
 	if (UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld()))
@@ -329,6 +339,8 @@ void UVCMovementComponent::PerformMovement(float DeltaTime)
 	// NPCs) starts from the gravity at its own position, so prediction and authority agree with no new replicated state;
 	// simulated proxies take the engine's replicated gravity direction.
 	UpdatePlanetGravity();
+	// The gait table's values for this move, from the saved-move state and the rotation mode both sides hold (C4).
+	ApplyGaitTable();
 	Super::PerformMovement(DeltaTime);
 }
 
@@ -392,6 +404,13 @@ void UVCMovementComponent::OnMovementModeChanged(EMovementMode PreviousMovementM
 	{
 		bDebugFlight = false;
 		FlightClimb = 0.f;
+	}
+	// Out of the water by any path (the swim exit, the shore climb, a flight, a teleport, the embed resolve): the
+	// ground's acceleration back (G154: only the first two restored it, so a pawn flown or teleported out of the sea
+	// kept the swim's 256 on land). The gait table sets it again every ground tick anyway; this is for the table off.
+	if (PreviousMovementMode == MOVE_Swimming && MovementMode != MOVE_Swimming && BaseMaxAcceleration > 0.f)
+	{
+		MaxAcceleration = BaseMaxAcceleration;
 	}
 }
 
@@ -727,9 +746,14 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 	}
 #endif
 
-	// Apply surface friction to ground friction; wet ground keeps less of it (the weather's wetness, P4)
-	GroundFriction = 8.f * CachedTerrainContext.FrictionMultiplier * VoxelSurfaceGripMultiplier
+	// The surface's friction and the grip, less what wet ground takes (the weather's wetness, P4): a scale the gait
+	// table's row is multiplied by every tick (C4), and the legacy constant 8 here with the table off (NPCs).
+	GroundFrictionScale = CachedTerrainContext.FrictionMultiplier * VoxelSurfaceGripMultiplier
 		* (1.f - FMath::Clamp(CachedWeatherWetness * WetGripFactor, 0.f, 0.95f));
+	if (!bUseGaitTable)
+	{
+		GroundFriction = 8.f * GroundFrictionScale;
+	}
 
 	// --- Swimming mode transition ---
 	// Not while flying: debug flight (vox.Fly) and the streaming benchmark's fly pawn cross the sea on purpose. Not while
@@ -1086,6 +1110,11 @@ bool UVCMovementComponent::IsSprinting() const
 float UVCMovementComponent::GetMaxSpeed() const
 {
 	const float Speed = Super::GetMaxSpeed();
+	// With the gait table the sprint row sets MaxWalkSpeed itself (C4); without it the sprint multiplies the walk.
+	if (bUseGaitTable)
+	{
+		return Speed;
+	}
 	return (MovementMode == MOVE_Walking && IsSprinting()) ? Speed * SprintSpeedMultiplier : Speed;
 }
 
@@ -1094,6 +1123,7 @@ void UVCMovementComponent::UpdateFromCompressedFlags(uint8 Flags)
 	Super::UpdateFromCompressedFlags(Flags);
 	bWantsToSprint = (Flags & FSavedMove_Character::FLAG_Custom_0) != 0;
 	bWantsToAscend = (Flags & FSavedMove_Character::FLAG_Custom_1) != 0;
+	bWantsToWalk = (Flags & FSavedMove_Character::FLAG_Custom_2) != 0;
 }
 
 FNetworkPredictionData_Client* UVCMovementComponent::GetPredictionData_Client() const

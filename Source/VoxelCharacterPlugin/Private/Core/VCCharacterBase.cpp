@@ -930,6 +930,13 @@ void AVCCharacterBase::SetFacesAim(bool bFaceAim)
 	{
 		return;
 	}
+	// The voxel movement eases the flip (C4): the capsule turns toward the view (or back toward where it moves) first,
+	// and the mode changes once the body is nearly there, so the mesh is not left 180 degrees behind an instant yaw.
+	if (UVCMovementComponent* VoxelMove = Cast<UVCMovementComponent>(Move))
+	{
+		VoxelMove->SetFacesAim(bFaceAim);
+		return;
+	}
 	// The engine's turn toward the controller's rotation keeps the body upright in a custom gravity frame.
 	Move->bOrientRotationToMovement = !bFaceAim;
 	Move->bUseControllerDesiredRotation = bFaceAim;
@@ -1709,6 +1716,17 @@ void AVCCharacterBase::DrawVoxelDebugInfo()
 		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Yellow,
 			FString::Printf(TEXT("GroundFriction: %.2f  Grip: %.2f"),
 				MovComp->GroundFriction, MovComp->VoxelSurfaceGripMultiplier));
+		// The gait table (C4): the gait and the rotation mode in force, and the row the values come from.
+		const UEnum* GaitEnum = StaticEnum<EVCGait>();
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Yellow,
+			FString::Printf(TEXT("Gait: %s  Rotation: %s%s  Table: %s"),
+				GaitEnum ? *GaitEnum->GetNameStringByValue(static_cast<int64>(MovComp->GetGait())) : TEXT("?"),
+				MovComp->GetRotationMode() == EVCRotationMode::Strafe ? TEXT("Strafe") : TEXT("Orient"),
+				MovComp->IsAimTurnPending() ? TEXT(" (turning)") : TEXT(""),
+				MovComp->bUseGaitTable ? TEXT("on") : TEXT("off")));
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Yellow,
+			FString::Printf(TEXT("Row: %s  Accel: %.0f  Brake: %.0f  RotRate: %.0f"),
+				*MovComp->GetGaitRow().ToString(), MovComp->MaxAcceleration, MovComp->BrakingDecelerationWalking, MovComp->RotationRate.Yaw));
 	}
 
 	// --- Camera ---

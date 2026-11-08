@@ -175,8 +175,46 @@ re-mesh).
 - **Swimming.** Entered at `SwimmingEntryDepth` (40 uu) of voxel water, left under `SwimmingExitDepth`; buoyancy, drag,
   surface damping, a shore climb and dive keys (jump rises, crouch dives; the held rise is a saved-move flag). Breath
   drains under water. `ImmersionDepth` uses the voxel sea, not physics volumes.
-- **Sprint and crouch.** `SetSprinting` (a saved-move flag, so clients predict it) at `SprintSpeedMultiplier` spends
-  stamina; regeneration waits `StaminaRegenDelay`. Crouch is a slow walk.
+- **Sprint and crouch.** `SetSprinting` (a saved-move flag, so clients predict it) spends stamina; regeneration waits
+  `StaminaRegenDelay`. With the gait table on (players) the sprint row sets the speed; with it off (NPCs) the sprint is
+  the walk times `SprintSpeedMultiplier`. Crouch is a slow walk. `SetWalking` (a third saved-move flag) asks for the walk
+  gait; no input is bound to it yet (the plan's §8).
+- **The gait table** (the character refinement plan's C4, D75, 2026-11-08). The player plays the Game Animation
+  Sample's motion-matching graph, whose clips were made for GASP's per-frame movement tuning, and ran it on the engine's
+  defaults (600 uu/s every direction, acceleration 2048, braking 4096, friction 8, a 500 degree a second yaw): the
+  capsule outran the clips and the offset root bone dragged the mesh after it, which read as sliding, worst into and out
+  of strafing. `FVCMovementTable GaitTable` holds a `FVCGaitSettings` row per gait (`EVCGait`: walk, run, sprint,
+  crouch: the speed caps forward / strafe / back, the acceleration, the braking with input and stopping, the friction,
+  the braking friction factor), the yaw rates by mode (ground orient, ground strafe, air, swim; negative = instant) and
+  the sprint's ramps (acceleration 800 to 300 over 300-700 uu/s, friction 5 to 3 over 0-500). `ApplyGaitTable` runs at
+  the start of every `PerformMovement`, so the server's replay and the client's prediction set the same engine values
+  from the same state: the gait from the saved-move flags (`GetGait`: crouched, else sprinting and not out of breath,
+  else walking, else the run), the rotation mode from the flags both sides set (`GetRotationMode`), the cap by the
+  movement's angle to the facing in strafe mode (`MaxSpeedAtAngle`, GASP's `Curve_StrafeSpeedMap`: forward within 45
+  degrees, the strafe speed at 90, backward from 135, linear between; the velocity's angle moving, the input's starting), the braking by whether there is input, the
+  friction times the surface and wetness scale (`GroundFrictionScale`, what used to multiply the constant 8), the yaw
+  rate by mode. `ComputeGaitValues` is the pure form (the tests'). The swim's and the flight's values are untouched (the
+  swim rotation rate aside); out of the water by any mode change `OnMovementModeChanged` restores the ground
+  acceleration (G154 closed). `bUseGaitTable` is on for players and off on `AVCNPCCharacterBase` (NPCs keep 300 uu/s,
+  360 degrees a second and the engine's acceleration; `npc_bench.py` unchanged). The defaults are GASP's, read from
+  `SandboxCharacter_CMC`'s class defaults (its `BrakingFrictionFactor` is 0: a stop is the deceleration alone, the same
+  on every surface); `vc.Move.Preset Legacy|GASP|Tuned` swaps the table live, `vc.Move.Set` one value, `vc.Move.Print`
+  logs it, and `ToggleVoxelDebug` shows the gait, the mode and the row in force (`Documentation/EDITOR_CONSOLE_GUIDE.md`
+  §4). The lane's pass (`Scripts/qa/lane_pass.py`, both bodies, the bow in hand): against the engine defaults GASP's
+  table halves the run's foot slide over the whole lane (262 to 150 uu/s on the low-poly body, 339 to 160 on Kellan)
+  and cuts the drawn strafe's four to five times (351 to 83, 517 to 127); the stop goes from the 0.13 s, 38 uu snap to
+  0.27 s and 67 uu (GASP's 2000 uu/s^2); the release leg and Kellan's second 180 pivot vary as much between identical
+  runs (105-230 and 106-419 uu/s) as between any change tried, so `Tuned` is GASP's table verbatim and the preset is
+  where the next pass's changes go. The numbers per leg: `CHARACTER_REFINEMENT_PLAN.md` §5, C4. Tests
+  `VoxelCharacter.Movement.GaitTable`, `GaitTableApplied`.
+- **The face-aim flip, eased** (C4). `AVCCharacterBase::SetFacesAim` (a bow's draw and release, the ranged ability on the
+  server) used to flip `bOrientRotationToMovement` and `bUseControllerDesiredRotation` in one frame; with the table's
+  instant ground yaw that would snap the capsule up to 180 degrees under the mesh. `UVCMovementComponent::SetFacesAim`
+  now starts a turn: `PhysicsRotation` turns the capsule toward the new mode's target (the view on a draw; where the body
+  moves on a release, nothing when standing) at `AimTurnRate` (540 degrees a second) about local up, and the flags change
+  once the body is within `AimTurnTolerance` (15 degrees) of it or `AimTurnMaxTime` (0.5 s) has passed (`AdvanceAimTurn`;
+  `IsAimTurnPending` meanwhile). A flip with nothing to turn through completes at once, as before. Test
+  `VoxelCharacter.Movement.AimTurnEase`.
 - **Planet gravity.** On a planet `PerformMovement` points the engine's custom gravity at the centre before every move
   (`UpdatePlanetGravity`), so the server's replay, the client's prediction and NPCs agree with no new replicated state.
   The component's own vertical code (swim controls, buoyancy, floor and landing traces, the shore climb, the embed
@@ -297,9 +335,9 @@ skeletons compatible). The animation content is built by scripts into content pa
   time, the first `UVCAnimNotify_ActionHit` (`GetHitTime`; 40% of the length without one), and at once with no montage.
   Dig, place and chop: the owner at input, the others once the server accepted the edit or the chop. Use and placing an
   item: everyone, from the server, since the server may refuse. The bow's draw and release: as the melee attack (ranged
-  combat plan B3); while drawn in third person the body turns toward the view at the movement's rotation rate
-  (`SetFacesAim`: the controller's desired rotation instead of the movement's direction, upright in the gravity frame),
-  set by the owner at its draw and release and by the server's ranged attack at its start and end.
+  combat plan B3); while drawn in third person the body turns toward the view (`SetFacesAim`: the controller's desired
+  rotation instead of the movement's direction, upright in the gravity frame, the flip eased by the movement since C4:
+  "Movement" above), set by the owner at its draw and release and by the server's ranged attack at its start and end.
 - **Where the sets come from.** The player's are `UVCSettings::PlayerActionAnimSets` (Project Settings > Voxel
   Character, `Config/DefaultGame.ini`) unless its Blueprint lists its own; an NPC lists its own (none yet: its attacks
   land at once, as before).
@@ -345,9 +383,14 @@ skeletons compatible). The animation content is built by scripts into content pa
   - Its parent, `UVCMotionMatchingAnimInstance`, lives in the module `VoxelCharacterAnimation`, which carries PoseSearch
     so the runtime module does not (D45). It is a `UVCAnimInstance`, so the layers, the montages and the IK work as on
     `ABP_VoxelCharacter`. GASP's graph reads its character through one struct, `CharacterProperties`; the parent fills
-    it from our pawn by its fields' names (the velocity, the input acceleration, the aim, the gait from the sprint and
-    the maximum speed, the stance, the rotation mode, the landing), and the copy's own fill through GASP's pawn interface
-    is emptied.
+    it from our pawn by its fields' names (the velocity, the input acceleration, the maximum acceleration and the
+    braking in force (`GetMaxBrakingDeceleration`, as GASP passes it; it was the constant 4096 before C4), the aim, the
+    gait (`UVCMovementComponent::GetGait` since C4: the crouch counts as the walk's pace, its stance says the rest; a
+    stock movement component's by the sprint and the maximum speed), the stance, the rotation mode, the landing), and the
+    copy's own fill through GASP's pawn interface is emptied. The trajectory's tuning is exposed for the handling pass
+    (C4): `RotateTowardsMovementSpeed` and `MaxControllerYawRate` on the instance override the graph's two
+    `FPoseSearchTrajectoryData` when set (negative, the default: the graph's), and `vc.Anim.TrajectoryRotateSpeed` /
+    `vc.Anim.TrajectoryYawRate` override those live (`TunedTrajectoryData`).
   - The gravity frame. GASP's arithmetic takes world Z as up (`VSizeXY`, `CalculateDirection`, rotator deltas, two Euler
     yaw sums, the engine's trajectory prediction); the script swaps each such node for the parent's function of the same
     pins, which measures in the gravity frame and is the engine's own arithmetic where up is world Z. The trajectory is
@@ -433,7 +476,9 @@ modules: a MetaHuman arrives as content.
 
 `UVCCameraManager` keeps a stack of `UVCCameraModeBase` instances and blends the top two over `ModeTransitionBlendTime`.
 First person sits at the head socket with a wider field of view; third person is an over-shoulder offset whose pivot
-follows at `LagSpeed` and snaps across a teleport (`ComputeLaggedPivot`, G41), with a trace against voxel terrain when
+follows at `LagSpeed`, never farther than `MaxLagDistance` behind the character (0 = no cap; the character refinement
+plan's C4: at a steady speed the pivot settles speed / `LagSpeed` behind and swings past on a direction change, which
+read as the body sliding) and snaps across a teleport (`ComputeLaggedPivot`, G41), with a trace against voxel terrain when
 `bUseVoxelCameraCollision` is set (`ResolveVoxelCameraCollision`). For a walker that
 `IsSteppingBlocks()` the view eases through each block step (`bEaseBlockSteps`, `BlockStepEaseSpeed`, pure
 `ComputeStepEaseOffset`). `UVCUnderwaterPostProcess` follows the camera, not the feet, so a third-person view above the
@@ -767,8 +812,8 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 
 ## Console variables
 
-`vc.*` groups: `vc.AI.*` (NPC AI), `vc.Anim.*` (the IK, pace and motion-matching switches, the debug draw), `vc.Dig.*` (the cubic break times' scale, the highlight), `vc.Minimap.*` (the
-minimap's refill stats), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
+`vc.*` groups: `vc.AI.*` (NPC AI), `vc.Anim.*` (the IK, pace and motion-matching switches, the trajectory tuning, the debug draw), `vc.Dig.*` (the cubic break times' scale, the highlight), `vc.Minimap.*` (the
+minimap's refill stats), `vc.Move.*` (the player's movement table: the preset, one value, the print), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
 and `ToggleVoxelDebug` are on the controller and the character. Every name, default and meaning:
 `Documentation/EDITOR_CONSOLE_GUIDE.md` §4 at the project root. The `vox.*` QA commands that drive this plugin's pawn
 (`vox.TP`, `vox.AutoRun`, `vox.Fly`, `vox.Mine`, `vox.Chop`, `vox.EditMode`, `vox.Shoot`, ...) live in the game module.
@@ -778,4 +823,5 @@ and `ToggleVoxelDebug` are on the controller and the character. Every name, defa
 `VoxelCharacter.*` in `Private/Tests/`: AI, Anim, Camera, Combat, Config, Cubic, Edit, EditMode, EquipmentLoop, Gather,
 Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, WorldEdge; the weather's `Movement.WindPush`,
 `Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
-`NPC.BodyBudgetAndHeldItem` (P7).
+`NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
+`Movement.AimTurnEase` (the character refinement plan's C4).

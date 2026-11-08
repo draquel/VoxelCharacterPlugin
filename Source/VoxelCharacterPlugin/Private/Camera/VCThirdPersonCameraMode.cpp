@@ -45,7 +45,7 @@ FTransform UVCThirdPersonCameraMode::ComputeDesiredTransform(const AVCCharacterB
 	else
 	{
 		bool bSnapped = false;
-		LaggedPivot = ComputeLaggedPivot(LaggedPivot, IdealPivot, LastIdealPivot, DeltaTime, LagSpeed, TeleportSnapDistance, bSnapped);
+		LaggedPivot = ComputeLaggedPivot(LaggedPivot, IdealPivot, LastIdealPivot, DeltaTime, LagSpeed, TeleportSnapDistance, bSnapped, MaxLagDistance);
 	}
 	LastIdealPivot = IdealPivot;
 
@@ -57,12 +57,23 @@ FTransform UVCThirdPersonCameraMode::ComputeDesiredTransform(const AVCCharacterB
 }
 
 FVector UVCThirdPersonCameraMode::ComputeLaggedPivot(const FVector& InLaggedPivot, const FVector& IdealPivot, const FVector& InLastIdealPivot,
-	float DeltaTime, float InLagSpeed, float SnapDistance, bool& bOutSnapped)
+	float DeltaTime, float InLagSpeed, float SnapDistance, bool& bOutSnapped, float InMaxLagDistance)
 {
 	bOutSnapped = SnapDistance > 0.f && FVector::DistSquared(IdealPivot, InLastIdealPivot) > FMath::Square(static_cast<double>(SnapDistance));
 	if (bOutSnapped || InLagSpeed <= 0.f || DeltaTime <= 0.f)
 	{
 		return IdealPivot;
 	}
-	return FMath::VInterpTo(InLaggedPivot, IdealPivot, DeltaTime, InLagSpeed);
+	FVector Lagged = FMath::VInterpTo(InLaggedPivot, IdealPivot, DeltaTime, InLagSpeed);
+	// The cap on the trail (C4): never farther behind the character than InMaxLagDistance.
+	if (InMaxLagDistance > 0.f)
+	{
+		const FVector Trail = Lagged - IdealPivot;
+		const double Distance = Trail.Size();
+		if (Distance > InMaxLagDistance)
+		{
+			Lagged = IdealPivot + Trail * (static_cast<double>(InMaxLagDistance) / Distance);
+		}
+	}
+	return Lagged;
 }

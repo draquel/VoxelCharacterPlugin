@@ -8,6 +8,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
 #include "HAL/IConsoleManager.h"
+#include "Movement/VCMovementComponent.h"
 #include "PoseSearch/AnimNode_MotionMatching.h"
 #include "PoseSearch/PoseSearchDatabase.h"
 #include "UObject/UnrealType.h"
@@ -19,6 +20,16 @@ namespace
 	TAutoConsoleVariable<int32> CVarAnimGravityTrajectory(
 		TEXT("vc.Anim.GravityTrajectory"), 1,
 		TEXT("The player's motion-matching trajectory: 1 predicted in the gravity frame, 0 the engine's world-Z prediction (A/B; character animation P5)."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<float> CVarAnimTrajectoryRotateSpeed(
+		TEXT("vc.Anim.TrajectoryRotateSpeed"), -1.f,
+		TEXT("The motion-matching trajectory's RotateTowardsMovementSpeed, live (how fast the predicted facing turns to the movement; GASP 10): negative = the anim instance's RotateTowardsMovementSpeed, itself negative for the graph's own (the character refinement plan's C4)."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<float> CVarAnimTrajectoryYawRate(
+		TEXT("vc.Anim.TrajectoryYawRate"), -1.f,
+		TEXT("The motion-matching trajectory's MaxControllerYawRate, live (degrees a second the prediction caps the view's turn at; GASP 70): negative = the anim instance's MaxControllerYawRate, itself negative for the graph's own (C4)."),
 		ECVF_Default);
 
 	/** A field of a Blueprint struct by the name its author gave it (the property's own name carries a GUID). */
@@ -207,20 +218,39 @@ FTransform UVCMotionMatchingAnimInstance::GravityTransformAddYaw(const FTransfor
 	return FTransform(AddYawInFrame(InTransform.Rotator(), Yaw, GravityUp), InTransform.GetLocation(), FVector::OneVector);
 }
 
+FPoseSearchTrajectoryData UVCMotionMatchingAnimInstance::TunedTrajectoryData(const FPoseSearchTrajectoryData& InData) const
+{
+	FPoseSearchTrajectoryData Data = InData;
+	const float RotateSpeedInForce = CVarAnimTrajectoryRotateSpeed.GetValueOnAnyThread() >= 0.f
+		? CVarAnimTrajectoryRotateSpeed.GetValueOnAnyThread() : RotateTowardsMovementSpeed;
+	if (RotateSpeedInForce >= 0.f)
+	{
+		Data.RotateTowardsMovementSpeed = RotateSpeedInForce;
+	}
+	const float YawRateInForce = CVarAnimTrajectoryYawRate.GetValueOnAnyThread() >= 0.f
+		? CVarAnimTrajectoryYawRate.GetValueOnAnyThread() : MaxControllerYawRate;
+	if (YawRateInForce >= 0.f)
+	{
+		Data.MaxControllerYawRate = YawRateInForce;
+	}
+	return Data;
+}
+
 void UVCMotionMatchingAnimInstance::GravityGenerateTransformTrajectory(const UObject* InAnimInstance,
 	const FPoseSearchTrajectoryData& InTrajectoryData, float InDeltaTime, FTransformTrajectory& InOutTrajectory,
 	float& InOutDesiredControllerYawLastUpdate, FTransformTrajectory& OutTrajectory, float InHistorySamplingInterval,
 	int32 InTrajectoryHistoryCount, float InPredictionSamplingInterval, int32 InTrajectoryPredictionCount)
 {
+	const FPoseSearchTrajectoryData Tuned = TunedTrajectoryData(InTrajectoryData);
 	if (CVarAnimGravityTrajectory.GetValueOnAnyThread() == 0 || !GravityPredictor)
 	{
 		// The A/B: the engine's prediction, turning about world Z
-		UPoseSearchTrajectoryLibrary::PoseSearchGenerateTransformTrajectory(InAnimInstance, InTrajectoryData, InDeltaTime,
+		UPoseSearchTrajectoryLibrary::PoseSearchGenerateTransformTrajectory(InAnimInstance, Tuned, InDeltaTime,
 			InOutTrajectory, InOutDesiredControllerYawLastUpdate, OutTrajectory, InHistorySamplingInterval,
 			InTrajectoryHistoryCount, InPredictionSamplingInterval, InTrajectoryPredictionCount);
 		return;
 	}
-	GravityPredictor->SetPrediction(InTrajectoryData, true);
+	GravityPredictor->SetPrediction(Tuned, true);
 	UPoseSearchTrajectoryLibrary::PoseSearchGenerateTransformTrajectoryWithPredictor(
 		TScriptInterface<IPoseSearchTrajectoryPredictorInterface>(GravityPredictor.Get()), InDeltaTime, InOutTrajectory,
 		InOutDesiredControllerYawLastUpdate, OutTrajectory, InHistorySamplingInterval, InTrajectoryHistoryCount,
@@ -361,8 +391,8 @@ void UVCMotionMatchingAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	if (GravityPredictor)
 	{
 		const FStructProperty* Tuning = GroundSpeed(Movement->Velocity, GravityUp) > 0.0 ? Fields.TrajectoryDataMoving : Fields.TrajectoryDataIdle;
-		const FPoseSearchTrajectoryData TrajectoryData = Tuning
-			? *Tuning->ContainerPtrToValuePtr<FPoseSearchTrajectoryData>(this) : FPoseSearchTrajectoryData();
+		const FPoseSearchTrajectoryData TrajectoryData = TunedTrajectoryData(Tuning
+			? *Tuning->ContainerPtrToValuePtr<FPoseSearchTrajectoryData>(this) : FPoseSearchTrajectoryData());
 		GravityPredictor->Capture(Character, DeltaSeconds, TrajectoryData);
 	}
 
@@ -388,7 +418,8 @@ void UVCMotionMatchingAnimInstance::FillCharacterProperties(const ACharacter& Ch
 	SetStructField(Properties, Fields.Velocity, Movement->Velocity);
 	SetStructField(Properties, Fields.InputAcceleration, Movement->GetCurrentAcceleration());
 	SetRealField(Properties, Fields.CurrentMaxAcceleration, Movement->GetMaxAcceleration());
-	SetRealField(Properties, Fields.CurrentMaxDeceleration, Movement->BrakingDecelerationWalking);
+	// The braking in force (GASP passes GetMaxBrakingDeceleration; the gait table sets the walking one by whether there is input, C4)
+	SetRealField(Properties, Fields.CurrentMaxDeceleration, Movement->GetMaxBrakingDeceleration());
 	SetStructField(Properties, Fields.OrientationIntent, Character.GetActorRotation());
 	const AController* Controller = Character.GetController();
 	SetStructField(Properties, Fields.AimingRotation,
@@ -397,8 +428,24 @@ void UVCMotionMatchingAnimInstance::FillCharacterProperties(const ACharacter& Ch
 	SetStructField(Properties, Fields.LandVelocity, LandVelocityInFrame);
 	SetStructField(Properties, Fields.GroundNormal, FVector(Movement->CurrentFloor.HitResult.ImpactNormal));
 
+	// The gait: the voxel movement's own where there is one (its table's row: the crouch is the stance, its gait the walk's
+	// pace; C4), else by the max speed.
 	const bool bSprinting = Input && Input->bSprinting;
-	const int64 Gait = bSprinting ? Fields.GaitSprint : (Movement->GetMaxSpeed() <= WalkGaitMaxSpeed ? Fields.GaitWalk : Fields.GaitRun);
+	int64 Gait;
+	if (const UVCMovementComponent* VoxelMovement = Cast<UVCMovementComponent>(Movement))
+	{
+		switch (VoxelMovement->GetGait())
+		{
+		case EVCGait::Sprint: Gait = Fields.GaitSprint; break;
+		case EVCGait::Walk:
+		case EVCGait::Crouch: Gait = Fields.GaitWalk; break;
+		default:              Gait = Fields.GaitRun; break;
+		}
+	}
+	else
+	{
+		Gait = bSprinting ? Fields.GaitSprint : (Movement->GetMaxSpeed() <= WalkGaitMaxSpeed ? Fields.GaitWalk : Fields.GaitRun);
+	}
 	SetEnumField(Properties, Fields.Gait, Gait);
 	// Swimming counts as the ground: the graph's own pose under a swimmer is replaced by the swim (the script's branch)
 	SetEnumField(Properties, Fields.MovementMode, Movement->IsFalling() || Movement->IsFlying() ? Fields.ModeInAir : Fields.ModeOnGround);

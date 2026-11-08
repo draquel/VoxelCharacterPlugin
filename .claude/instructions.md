@@ -98,6 +98,12 @@ calls.
   gravity-relative yaw across frames (the frame twists near a planet's south pole).
 - After placing a pawn on a planet: `UpdatePlanetGravity()` then `SnapUprightToGravity()`.
 - NPCs use `UVCMovementComponent` too; do not give a voxel walker the stock component.
+- The player's ground numbers (the speed caps, acceleration, braking, friction, yaw rates) come from the gait table
+  (`FVCMovementTable GaitTable`, D75), applied every tick inside `PerformMovement` from saved-move state and the
+  rotation mode; never set `MaxWalkSpeed`, `MaxAcceleration`, `BrakingDecelerationWalking`, `GroundFriction` or
+  `RotationRate` on a player's component from outside (the next tick overwrites them): change the table, or a preset.
+  Anything the table reads must be state both the server and the predicting client hold. NPCs have the table off and
+  keep their own numbers.
 - Edits must never trap a pawn: the server refuses a place overlapping any pawn (`WouldPlaceTrapPawn`), and
   `ResolveTerrainEmbedding` is the safety net for everything else. Keep both.
 

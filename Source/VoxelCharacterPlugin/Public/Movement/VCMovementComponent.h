@@ -12,6 +12,189 @@ struct FGameplayAttributeData;
 struct FOnAttributeChangeData;
 enum class EEditSource : uint8;
 
+/** The gaits the gait table has a row for (the character refinement plan's C4, D75). */
+UENUM(BlueprintType)
+enum class EVCGait : uint8
+{
+	Walk,
+	Run,
+	Sprint,
+	Crouch
+};
+
+/** The capsule's rotation mode: toward where it moves, or toward the view (the bow drawn, first person). */
+UENUM(BlueprintType)
+enum class EVCRotationMode : uint8
+{
+	OrientToMovement,
+	Strafe
+};
+
+/** The movement presets vc.Move.Preset swaps between (C4's A/B). */
+UENUM()
+enum class EVCMovePreset : uint8
+{
+	/** The engine defaults the player ran on before C4: 600 every direction, 2048, 4096, friction 8, 500 degrees a second. */
+	Legacy,
+	/** The Game Animation Sample's per-frame tuning (SandboxCharacter_CMC), the clips' own numbers. */
+	GASP,
+	/** GASP's numbers tuned on the character test lane (the plan's C4 result: GASP's verbatim so far; the next pass's changes go here). */
+	Tuned
+};
+
+/**
+ * One gait's movement numbers (D75): the speed caps by direction, the acceleration, the braking and the friction.
+ * The movement component applies the row of the gait in force every tick, inside the predicted movement.
+ */
+USTRUCT(BlueprintType)
+struct VOXELCHARACTERPLUGIN_API FVCGaitSettings
+{
+	GENERATED_BODY()
+
+	/** Max speed moving forward (uu/s): the only cap in orient mode, where the body faces where it goes. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float MaxSpeedForward = 500.f;
+
+	/** Max speed sideways in strafe mode (uu/s); the input's angle to the facing picks between forward, this and backward. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float MaxSpeedStrafe = 350.f;
+
+	/** Max speed backward in strafe mode (uu/s). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float MaxSpeedBackward = 300.f;
+
+	/** Max acceleration (uu/s^2); the sprint's falls toward FVCMovementTable::SprintTopSpeedAcceleration with speed. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float MaxAcceleration = 800.f;
+
+	/** Braking deceleration while there is input (over the cap: a sprint released, a strafe's lower cap), uu/s^2. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float BrakingDecelerationMoving = 500.f;
+
+	/** Braking deceleration with no input (stopping), uu/s^2. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float BrakingDecelerationStopping = 2000.f;
+
+	/** Ground friction on dry, plain ground; the surface and the wetness scale it as they scaled the constant before. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float GroundFriction = 5.f;
+
+	/**
+	 * The engine's braking friction factor (its braking friction is the ground friction times this). GASP's is 0: a stop
+	 * is the braking deceleration alone, so its length is the same on every surface.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float BrakingFrictionFactor = 0.f;
+
+	FVCGaitSettings() = default;
+	FVCGaitSettings(float Forward, float Strafe, float Backward, float Acceleration, float BrakingMoving, float BrakingStopping,
+		float Friction, float BrakingFactor)
+		: MaxSpeedForward(Forward), MaxSpeedStrafe(Strafe), MaxSpeedBackward(Backward), MaxAcceleration(Acceleration)
+		, BrakingDecelerationMoving(BrakingMoving), BrakingDecelerationStopping(BrakingStopping), GroundFriction(Friction)
+		, BrakingFrictionFactor(BrakingFactor)
+	{
+	}
+
+	/**
+	 * The speed cap for an input at an angle to the facing: forward within 45 degrees, the strafe speed at 90, backward
+	 * from 135, linear between (GASP's Curve_StrafeSpeedMap).
+	 * @param AngleDegrees The input's (or the velocity's) angle to the body's forward about local up, any sign
+	 * @return The cap, uu/s
+	 */
+	float MaxSpeedAtAngle(float AngleDegrees) const;
+
+	/** @return The row as a C++ initializer, "{ 500, 350, 300, 800, 500, 2000, 5, 1 }" (vc.Move.Print, to commit) */
+	FString ToString() const;
+
+	bool operator==(const FVCGaitSettings& Other) const;
+	bool operator!=(const FVCGaitSettings& Other) const { return !(*this == Other); }
+};
+
+/**
+ * The player's movement table (D75): a row per gait, the rotation rates by mode, and the sprint's ramps. GASP's numbers
+ * are the defaults; FVCMovementTable::Preset builds each of vc.Move.Preset's tables.
+ */
+USTRUCT(BlueprintType)
+struct VOXELCHARACTERPLUGIN_API FVCMovementTable
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gaits")
+	FVCGaitSettings Walk = FVCGaitSettings(200.f, 180.f, 150.f, 800.f, 500.f, 2000.f, 5.f, 0.f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gaits")
+	FVCGaitSettings Run = FVCGaitSettings(500.f, 350.f, 300.f, 800.f, 500.f, 2000.f, 5.f, 0.f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gaits")
+	FVCGaitSettings Sprint = FVCGaitSettings(700.f, 700.f, 700.f, 800.f, 500.f, 2000.f, 5.f, 0.f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gaits")
+	FVCGaitSettings Crouch = FVCGaitSettings(225.f, 200.f, 180.f, 800.f, 500.f, 2000.f, 5.f, 0.f);
+
+	/** Yaw rate on the ground in orient mode (degrees a second; negative = instant: the graph turns the body, GASP). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rotation")
+	float GroundOrientRotationRate = -1.f;
+
+	/** Yaw rate on the ground in strafe mode (negative = instant). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rotation")
+	float GroundStrafeRotationRate = -1.f;
+
+	/** Yaw rate in the air (GASP: 200). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rotation")
+	float AirRotationRate = 200.f;
+
+	/** Yaw rate swimming and in debug flight (the swim's tuning is otherwise untouched by the table). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rotation")
+	float SwimRotationRate = 500.f;
+
+	/** The sprint's acceleration falls from its row's to this between the two speeds of SprintAccelerationRamp (GASP: 800 to 300). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Sprint", meta = (ClampMin = "0.0"))
+	float SprintTopSpeedAcceleration = 300.f;
+
+	/** The speeds (uu/s) the sprint's acceleration ramps between. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Sprint")
+	FVector2D SprintAccelerationRamp = FVector2D(300.0, 700.0);
+
+	/** The sprint's ground friction falls from its row's to this between the two speeds of SprintFrictionRamp (GASP: 5 to 3). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Sprint", meta = (ClampMin = "0.0"))
+	float SprintTopSpeedFriction = 3.f;
+
+	/** The speeds (uu/s) the sprint's friction ramps between. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Sprint")
+	FVector2D SprintFrictionRamp = FVector2D(0.0, 500.0);
+
+	/** @return The row of a gait */
+	const FVCGaitSettings& Row(EVCGait Gait) const;
+	FVCGaitSettings& Row(EVCGait Gait);
+
+	/**
+	 * The sprint's acceleration and friction at a speed (the ramps above).
+	 * @param Speed The speed across local up, uu/s
+	 * @return The acceleration, uu/s^2
+	 */
+	float SprintAccelerationAtSpeed(float Speed) const;
+	float SprintFrictionAtSpeed(float Speed) const;
+
+	/** @return A preset's whole table */
+	static FVCMovementTable Preset(EVCMovePreset Preset);
+
+	/** @return The table as the rows and rates vc.Move.Print logs, one line each */
+	FString ToString() const;
+};
+
+/** The engine values one tick of the gait table sets (UVCMovementComponent::ComputeGaitValues). */
+struct FVCGaitValues
+{
+	/** Whether the row applies (on the ground or in the air); swimming and flying take the yaw rate alone. */
+	bool bRowApplies = false;
+	float MaxSpeed = 0.f;
+	float MaxAcceleration = 0.f;
+	float BrakingDeceleration = 0.f;
+	float GroundFriction = 0.f;
+	float BrakingFrictionFactor = 0.f;
+	float RotationRate = 0.f;
+};
+
 /**
  * Extended CharacterMovementComponent with voxel terrain awareness.
  *
@@ -401,6 +584,134 @@ public:
 	/** Swim-rise input state (saved-move flag FLAG_Custom_1). */
 	bool bWantsToAscend = false;
 
+	// --- The gait table (the character refinement plan's C4, decision D75) ---
+	// The player plays the Game Animation Sample's motion-matching graph, whose clips were made for GASP's per-frame
+	// movement tuning: a speed cap per gait and direction, a low acceleration, a soft braking with input and a firm one
+	// stopping, a friction of 5, and an instant capsule yaw on the ground (the graph turns the body: offset root bone,
+	// steering, orientation warping). ApplyGaitTable sets the engine's values from the table every tick at the start of
+	// PerformMovement, so the server's replay and the client's prediction compute the same numbers from the same
+	// saved-move state (the sprint, the walk and the crouch flags, the input) and the rotation mode both sides set.
+	// NPCs keep their own numbers (AVCNPCCharacterBase turns the table off). The swim and flight tuning is untouched.
+
+	/** Apply the gait table every tick (players). Off, the component keeps the values set on it (NPCs, G73's budget). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Gait")
+	bool bUseGaitTable = true;
+
+	/** The rows and rates in force (vc.Move.Preset swaps the whole table, vc.Move.Set one value, vc.Move.Print logs it). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Gait")
+	FVCMovementTable GaitTable;
+
+	/**
+	 * The gait in force: crouched, else sprinting (wanted and not out of breath), else walking (SetWalking), else the run.
+	 * @return The gait
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Gait")
+	EVCGait GetGait() const;
+
+	/** @return The rotation mode the engine's flags say: strafe when the body turns toward the view */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Gait")
+	EVCRotationMode GetRotationMode() const { return bOrientRotationToMovement ? EVCRotationMode::OrientToMovement : EVCRotationMode::Strafe; }
+
+	/** @return The table's row of the gait in force */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Gait")
+	const FVCGaitSettings& GetGaitRow() const { return GaitTable.Row(GetGait()); }
+
+	/**
+	 * Ask to walk (a walk gait; no input is bound to it yet, §8 of the plan: the walk row is reachable by code and the
+	 * console). Travels with the saved move.
+	 * @param bWantsWalk True while walking is wanted
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Movement|Gait")
+	void SetWalking(bool bWantsWalk);
+
+	/** Walk input state (saved-move flag FLAG_Custom_2). */
+	bool bWantsToWalk = false;
+
+	/**
+	 * Set the engine's movement values from the gait table for this tick: the row's cap by the rotation mode and the
+	 * input's angle to the facing, the sprint's acceleration and friction by speed, the braking by whether there is
+	 * input, the friction scaled by the surface and the wetness, the yaw rate by the mode. PerformMovement calls it;
+	 * public for the tests and the debug overlay. Does nothing with the table off, or swimming and flying.
+	 */
+	void ApplyGaitTable();
+
+	/**
+	 * Pure: the values one tick of the table sets (ApplyGaitTable's arithmetic). The cap is the row's forward speed in
+	 * orient mode, else the row's speed at the angle between the movement and the facing (the velocity's when moving,
+	 * the input's when starting); the sprint's acceleration and friction follow the table's ramps by speed; the braking
+	 * is the row's moving value with input and its stopping value without; the friction is scaled by the surface and
+	 * the wetness; the yaw rate is the mode's on the ground, the air's in the air, the swim's otherwise, where the row
+	 * does not apply.
+	 * @param Table           The table
+	 * @param Gait            The gait in force
+	 * @param Mode            The rotation mode in force
+	 * @param bOnGround       Walking (IsMovingOnGround)
+	 * @param bInAir          Falling
+	 * @param Velocity        The velocity, world
+	 * @param InAcceleration  The input acceleration, world (zero: no input)
+	 * @param Forward         The body's forward
+	 * @param Up              Local up
+	 * @param SpeedMultiplier The GAS move speed multiplier
+	 * @param FrictionScale   The surface and wetness scale on the friction
+	 * @return The values
+	 */
+	static FVCGaitValues ComputeGaitValues(const FVCMovementTable& Table, EVCGait Gait, EVCRotationMode Mode, bool bOnGround, bool bInAir,
+		const FVector& Velocity, const FVector& InAcceleration, const FVector& Forward, const FVector& Up, float SpeedMultiplier, float FrictionScale);
+
+	/**
+	 * Pure: the angle the strafe speed map reads: the velocity's angle to the forward about up when moving, the input's
+	 * when starting from rest, 0 with neither.
+	 * @param Velocity       The velocity
+	 * @param InAcceleration The input acceleration
+	 * @param Forward        The body's forward
+	 * @param Up             Local up
+	 * @return Degrees, 0 straight ahead
+	 */
+	static float MovementAngleToFacing(const FVector& Velocity, const FVector& InAcceleration, const FVector& Forward, const FVector& Up);
+
+	/**
+	 * Pure: the angle between two directions about an up axis (the strafe map's input).
+	 * @param Forward The body's forward
+	 * @param Direction The velocity or the input
+	 * @param Up Local up
+	 * @return Degrees in [-180, 180], positive to the right; 0 when either lies along Up
+	 */
+	static float AngleAboutUp(const FVector& Forward, const FVector& Direction, const FVector& Up);
+
+	// --- The face-aim flip, eased (C4) ---
+	// A bow's draw turns the body toward the view (AVCCharacterBase::SetFacesAim): the capsule's rotation mode flips from
+	// orient to strafe. Flipped in one frame with an instant yaw rate, the capsule snapped up to 180 degrees under the
+	// mesh. Now the flip is a short turn: the capsule turns toward the new mode's target (the view, or where it moves)
+	// at AimTurnRate, and the flags change once the body is within AimTurnTolerance of it or AimTurnMaxTime has passed,
+	// so the mode the graph sees changes when the body already faces the new way.
+
+	/**
+	 * Start turning the body toward the view (a draw) or back toward where it moves (the release): the eased flip above.
+	 * Called by the character on the machine that draws and on the server. Nothing in first person (the yaw follows the
+	 * controller there).
+	 * @param bFaceAim Whether the body is to face the view
+	 */
+	void SetFacesAim(bool bFaceAim);
+
+	/** @return True while the eased flip turns the body and the flags are still the old mode's */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Gait")
+	bool IsAimTurnPending() const { return bAimTurnPending; }
+
+	/** @return The mode the body is turning to (or has): true toward the view */
+	bool WantsToFaceAim() const { return bFacesAimTarget; }
+
+	/** Degrees from the new mode's target within which the flip completes. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Gait", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float AimTurnTolerance = 15.f;
+
+	/** Seconds after which the flip completes whatever the angle left. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Gait", meta = (ClampMin = "0.0"))
+	float AimTurnMaxTime = 0.5f;
+
+	/** The yaw rate of the eased turn (degrees a second). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Gait", meta = (ClampMin = "1.0"))
+	float AimTurnRate = 540.f;
+
 	// --- Debug flight (spherical Phase 6, WM-BP2, decision D20: QA tooling, not gameplay) ---
 
 	/**
@@ -529,7 +840,7 @@ protected:
 	/** The voxel world is a planet (its bounds are a shell): gravity points at CachedWorldBounds.Center (WM-W1). */
 	bool bPlanetGravity = false;
 
-	/** Planets: gravity from the position before the move (WM-W1), then the engine's movement. */
+	/** Planets: gravity from the position before the move (WM-W1), then the gait table's values (C4), then the engine's movement. */
 	virtual void PerformMovement(float DeltaTime) override;
 
 	/**
@@ -542,8 +853,34 @@ protected:
 	/** Debug flight (SetDebugFlight): the gravity-frame flight with its climb and altitude hold; else the engine's. */
 	virtual void PhysFlying(float DeltaTime, int32 Iterations) override;
 
-	/** Ends debug flight when another mode takes over (a landing, a teleport's settle, death). */
+	/**
+	 * Ends debug flight when another mode takes over (a landing, a teleport's settle, death); restores the ground's
+	 * acceleration on any way out of the water (G154: a flight or a teleport from the water kept the swim's 256).
+	 */
 	virtual void OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode) override;
+
+public:
+	/** The eased face-aim flip's turn while it is pending (C4), else the engine's rotation. Public as the engine's is. */
+	virtual void PhysicsRotation(float DeltaTime) override;
+
+protected:
+	/**
+	 * One frame of the eased flip: turns the capsule toward the new mode's target at AimTurnRate about local up and
+	 * completes the flip (the flags) within AimTurnTolerance or after AimTurnMaxTime.
+	 * @return True when it turned the body this frame (the engine's rotation is skipped), false once the flip is complete
+	 */
+	bool AdvanceAimTurn(float DeltaTime);
+
+	/** The mode the eased flip is heading to (SetFacesAim's argument) and whether the flags still hold the old one. */
+	bool bFacesAimTarget = false;
+	bool bAimTurnPending = false;
+	float AimTurnElapsed = 0.f;
+
+	/** The surface and the wetness as a factor on the table's friction (and on the legacy constant 8). */
+	float GroundFrictionScale = 1.f;
+
+	/** BeginPlay: take the table vc.Move.Preset / vc.Move.Set left for this session, so a respawned pawn keeps the A/B's. */
+	void ApplySessionTableOverride();
 
 	/** Debug flight state (SetDebugFlight). */
 	bool bDebugFlight = false;

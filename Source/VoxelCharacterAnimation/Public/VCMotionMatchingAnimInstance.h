@@ -131,9 +131,32 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|MotionMatching", meta = (ClampMin = "0"))
 	float JustLandedDuration = 0.3f;
 
-	/** A maximum speed at or below this is GASP's Walk gait (uu/s); above it Run, and Sprint while sprinting. */
+	/**
+	 * On a movement component without a gait table (not UVCMovementComponent): a maximum speed at or below this is GASP's
+	 * Walk gait (uu/s), above it Run, and Sprint while sprinting. UVCMovementComponent's own gait is used where there is one
+	 * (the character refinement plan's C4).
+	 */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|MotionMatching", meta = (ClampMin = "0"))
 	float WalkGaitMaxSpeed = 300.f;
+
+	// The trajectory's tuning, exposed for the handling pass (C4). GASP's graph holds two FPoseSearchTrajectoryData
+	// (TrajectoryGenerationData_Idle, _Moving); these override one field of whichever is in use when set (negative =
+	// the graph's own value), and the cvars vc.Anim.TrajectoryRotateSpeed / vc.Anim.TrajectoryYawRate override these live.
+
+	/** How fast the predicted facing turns toward the movement (the trajectory data's RotateTowardsMovementSpeed; GASP 10). Negative: the graph's. */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|MotionMatching")
+	float RotateTowardsMovementSpeed = -1.f;
+
+	/** The controller yaw rate the prediction is capped at, degrees a second (MaxControllerYawRate; GASP 70). Negative: the graph's. */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|MotionMatching")
+	float MaxControllerYawRate = -1.f;
+
+	/**
+	 * The trajectory tuning in force: the graph's data with the overrides above and the cvars' applied.
+	 * @param InData The graph's tuning (idle or moving)
+	 * @return The tuning the prediction runs with
+	 */
+	FPoseSearchTrajectoryData TunedTrajectoryData(const FPoseSearchTrajectoryData& InData) const;
 
 	/** @return The gravity-frame predictor (created in NativeInitializeAnimation) */
 	UVCGravityTrajectoryPredictor* GetGravityPredictor() const { return GravityPredictor; }
