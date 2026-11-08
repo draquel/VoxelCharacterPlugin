@@ -272,6 +272,40 @@ content scripts the phase changed (never while another editor runs, G150).
   order and the game mode script. Tests above. Docs: `EQUIPMENT_SYSTEM.md` (visual attachment, client sync),
   `CHARACTER_SYSTEM.md` ("The bow", "Appearance" › Sockets).
 
+**C1 result (2026-11-08; EquipmentPlugin, VoxelCharacterPlugin, the parent's scripts).**
+- **The bow's fit was never one number.** On the lane, drawn: the pack's clips hold the bow on a `weapon_l` bone our
+  skeletons lack, and between the idle (the arm hanging, the fingers down) and the draw (the arm raised) that bone turns
+  a quarter against `hand_l`. One fit is upright in one pose and horizontal in the other: pitch 90 (B1's) upright beside
+  the leg and flat along the raised arm; the identity (the stave along the bone's Z) upright across the raised fist and
+  flat across the hips at rest (tried live with `vc.Equip.Nudge`: pitch -90 on the fit, then yaw plus and minus 90 for
+  the stave along Y). So the item keeps its fit at rest and its action set names a second one for the draw:
+  `UVCActionAnimSet::bHasDrawnGrip` / `DrawnGrip`, and `AVCCharacterBase::UpdateDrawnGrip` (each tick while it
+  applies, once more when it stops) blends the main hand's visual from the fit to the drawn grip by the weight of the
+  montage in the `UpperBody` slot (`GetDrawnGripWeight`), so the quarter turn happens inside the raise. The Bow set's
+  drawn grip is the identity (`setup_character_layers.py`, `drawn_grip`). Both bodies: upright beside the leg at rest,
+  upright across the fist drawn, the string toward the archer (`Saved/Screenshots/Claudius/fit_*`).
+- **Per-body corrections (D71)**: `UVCCharacterAppearance::AttachCorrections` by bone, composed after the fit by
+  `ComposeAttachTransform` (fit, correction, nudge) in `UpdateEquipmentAttachments`, which `ApplyPlayerAppearance` now
+  calls. Kellan needed none at the shots' scale (the bow, the iron pickaxe and the iron sword sit in his hands as in the
+  low-poly body's), so his entry stays empty; the mechanism is there for a body that does.
+- **The swap on clients (G153)**: `FEquipmentSlot::AttachedVisualItemId` / `AttachedAnimLayerClass`,
+  `UEquipmentManagerComponent::IsVisualStale`, the third branch of `OnRep_EquipmentSlots` (remove, then apply), the
+  remembered layer unlinked by `RemoveVisuals`. Test `Equipment.Visuals.StaleAfterSwap` (the predicate); the step in
+  `VoxelEngine.Replication.Framework` is **not written** (the test's pawn is not a character; C3 adds an aiming step to
+  the same test and takes this one with it).
+- **First person**: `UpdateEquipmentVisualVisibility` hides a visual whose parent is the body mesh with the body
+  (`OwnerNoSee`), from `UpdateMeshVisibility` and after every re-attach; the torch's light stays. Checked on the lane: no
+  bow before the camera in first person.
+- **The scripts**: `configure_item_visuals.py` sets the scale alone (G157); `setup_character_layers.py` reads the
+  pickaxe socket's rotation from the pack's skeleton (`ObjectIterator` over `SkeletalMeshSocket`: a Skeleton's `Sockets`
+  is not readable from Python, nor is a socket a `find_object` subobject) and does not take its translation after all
+  (-2.7, 0, -25.2 on `hand_r` places the pack's pickaxe, whose pivot is at the handle's end; ours is at the grip, and the
+  C0 shots hold it right); `setup_gamemode.py` names `BP_VoxelDemoPlayerController` and warns on a missing asset (G158).
+- `vc.Equip.Nudge` / `vc.Equip.PrintFit` (`Core/VCEquipFitConsole.cpp`, dev builds; the console guide §4): the fit, the
+  body's entry and, while a draw plays, the set's drawn grip, each as the Python line to paste.
+- Tests: `VoxelCharacter.Appearance.AttachCorrection`, `Equipment.Visuals.StaleAfterSwap`. After the merge every
+  checkout re-runs `setup_character_layers.py` (the Bow set's drawn grip lives in the `CharacterAnimation` pack).
+
 ### C2: The upper body (VoxelCharacterPlugin, `setup_character_layers.py`; M)
 - The blend spaces and the depth ramp in `make_layer`, the layer versioning, `StanceWeight`, the lean re-applied,
   `vc.Anim.Stance`. Judged on the lane with each item, both bodies, walk / run / sprint / turn. Docs: "Animation" ›

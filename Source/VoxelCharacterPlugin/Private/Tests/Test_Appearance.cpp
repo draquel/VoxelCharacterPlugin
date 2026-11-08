@@ -7,6 +7,7 @@
 #include "Animation/VCAnimNode_FootBoneIK.h"
 #include "Animation/VCAppearanceComponent.h"
 #include "Animation/VCCharacterAppearance.h"
+#include "Core/VCCharacterBase.h"
 #include "Core/VCTypes.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/Engine.h"
@@ -192,5 +193,31 @@ bool FVCAppearance_FootBoneIKMath::RunTest(const FString& Parameters)
 }
 
 #undef VC_APPEARANCE_FLAGS
+
+// The attach composition (character refinement plan C1, D71): an item is fitted once to the Mannequin's hand, a body
+// corrects every item on that bone after the fit, a QA nudge comes last; each in the bone's space. An appearance without
+// an entry for the bone corrects nothing.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCAppearance_AttachCorrection, "VoxelCharacter.Appearance.AttachCorrection", EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+bool FVCAppearance_AttachCorrection::RunTest(const FString& Parameters)
+{
+	const FTransform Fit(FRotator(90.f, 0.f, 0.f), FVector(0.f, 0.f, 0.f));            // the bow: pitched 90 on hand_l
+	const FTransform Correction(FRotator::ZeroRotator, FVector(2.f, -1.f, 0.f));        // a body's hand: the grip 2 cm along
+	const FTransform Nudge(FRotator(0.f, 10.f, 0.f), FVector::ZeroVector);
+
+	const FTransform Composed = AVCCharacterBase::ComposeAttachTransform(Fit, Correction, Nudge);
+	TestTrue(TEXT("Fit, then the correction, then the nudge"), Composed.Equals(Fit * Correction * Nudge));
+	TestTrue(TEXT("Identity correction and nudge: the fit alone"),
+		AVCCharacterBase::ComposeAttachTransform(Fit, FTransform::Identity, FTransform::Identity).Equals(Fit));
+	// The correction moves the fitted item in the bone's space: a point at the fit's origin lands at the correction's offset.
+	TestTrue(TEXT("The correction's translation is in the bone's space"),
+		AVCCharacterBase::ComposeAttachTransform(Fit, Correction, FTransform::Identity).GetLocation().Equals(FVector(2.f, -1.f, 0.f)));
+
+	UVCCharacterAppearance* Appearance = NewObject<UVCCharacterAppearance>();
+	TestTrue(TEXT("No entries: identity"), Appearance->GetAttachCorrection(TEXT("hand_l")).Equals(FTransform::Identity));
+	Appearance->AttachCorrections.Add(TEXT("hand_l"), Correction);
+	TestTrue(TEXT("The bone's entry"), Appearance->GetAttachCorrection(TEXT("hand_l")).Equals(Correction));
+	TestTrue(TEXT("Another bone: identity"), Appearance->GetAttachCorrection(TEXT("hand_r")).Equals(FTransform::Identity));
+	return true;
+}
 
 #endif // WITH_AUTOMATION_TESTS
