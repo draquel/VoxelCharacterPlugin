@@ -234,7 +234,18 @@ custom gravity.
 with a character movement component (`UVCMovementComponent` adds the surface type and the sprint). What is not movement
 it reads through `IVCAnimatedCharacter` (`VCAnimatedCharacter.h`), which both character classes implement:
 `GetAnimViewMode` (the local player's mode for its own pawn, third person otherwise and for NPCs), `GetAnimActionSet`,
-`GetAnimCombatComponent` (dead and downed). The plan it belongs to is `CHARACTER_ANIMATION_PLAN.md` (P2).
+`GetAnimCombatComponent` (dead and downed).
+
+The character animation plan (2026-11-05 to 11-07, D43-D51; `CHARACTER_ANIMATION_PLAN.md`, frozen) built what this
+section, "Appearance" and "NPCs", "Bodies" describe: one anim instance for every character, its values in the gravity
+frame (P2); anim layers, action sets and their montages (P3); foot placement, the head's look-at, the off-hand grip and
+the sprint's pace (P4); the player's motion matching on the Game Animation Sample's set (P5); bodies as data, MetaHumans
+among them (P6); the NPCs' skeletal bodies within an animation budget (P7). The body skeleton is the UE5 Mannequin's, and
+GASP's set plays on it unconverted through skeleton compatibility (D50; `Scripts/setup_character_animation.py` marks the
+skeletons compatible). The animation content is built by scripts into content packs (D46), in this order:
+`setup_character_layers.py`, `setup_character_ik.py`, `setup_character_locomotion.py`,
+`setup_character_appearances.py`, `setup_creature_animation.py` (`Scripts/README.md`). Open: G145, G147, G148
+(`Documentation/FINDINGS.md`).
 
 - **Two halves.** `NativeUpdateAnimation` gathers an `FVCAnimInput` on the game thread (the character's state in world
   space, and a line trace along gravity for the ground under a falling character, on the movement's channel, up to
