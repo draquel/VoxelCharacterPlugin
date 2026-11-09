@@ -93,11 +93,89 @@ FVCGlobeProjection FVCGlobeProjection::Dragged(const FVector2D& DeltaPx) const
 	return Make(NewView, RadiusPx);
 }
 
+// ==================== The view's tiles ====================
+
+namespace
+{
+	/**
+	 * The tiles a fill shows at its level, each with the box of the texels it was seen at, reported nearest the texture's
+	 * centre first: the view's request (UVoxelMapSubsystem::RequestView, MAP_PYRAMID_PLAN.md P1).
+	 */
+	struct FVCViewTileCollector
+	{
+		struct FSpan
+		{
+			FIntPoint Tile;
+			int32 MinX, MinY, MaxX, MaxY;
+		};
+		TMap<FIntPoint, int32> Index;
+		TArray<FSpan> Spans;
+		int32 Last = INDEX_NONE;
+
+		void Touch(const FIntPoint& Tile, int32 X, int32 Y)
+		{
+			if (Last == INDEX_NONE || Spans[Last].Tile != Tile)
+			{
+				if (const int32* Found = Index.Find(Tile))
+				{
+					Last = *Found;
+				}
+				else
+				{
+					Last = Spans.Add(FSpan{ Tile, X, Y, X, Y });
+					Index.Add(Tile, Last);
+					return;
+				}
+			}
+			FSpan& Span = Spans[Last];
+			Span.MinX = FMath::Min(Span.MinX, X);
+			Span.MinY = FMath::Min(Span.MinY, Y);
+			Span.MaxX = FMath::Max(Span.MaxX, X);
+			Span.MaxY = FMath::Max(Span.MaxY, Y);
+		}
+
+		void NearestFirst(int32 TexSize, TArray<FIntPoint>& Out) const
+		{
+			const double Centre = 0.5 * TexSize;
+			TArray<TPair<double, FIntPoint>> Keyed;
+			Keyed.Reserve(Spans.Num());
+			for (const FSpan& Span : Spans)
+			{
+				const double DX = 0.5 * (Span.MinX + Span.MaxX + 1) - Centre;
+				const double DY = 0.5 * (Span.MinY + Span.MaxY + 1) - Centre;
+				Keyed.Emplace(DX * DX + DY * DY, Span.Tile);
+			}
+			Keyed.Sort([](const TPair<double, FIntPoint>& A, const TPair<double, FIntPoint>& B) { return A.Key < B.Key; });
+			Out.Reset(Keyed.Num());
+			for (const TPair<double, FIntPoint>& Entry : Keyed)
+			{
+				Out.Add(Entry.Value);
+			}
+		}
+	};
+
+	void WriteTexel(uint8* Texel, const FColor& Color)
+	{
+		Texel[0] = Color.B;
+		Texel[1] = Color.G;
+		Texel[2] = Color.R;
+		Texel[3] = Color.A;
+	}
+
+	/** Floor division (a pixel index's tile, negative on a plane). */
+	int64 FloorDiv(int64 A, int64 B)
+	{
+		const int64 Q = A / B;
+		return (A % B != 0 && ((A < 0) != (B < 0))) ? Q - 1 : Q;
+	}
+}
+
 // ==================== FVCPlanetMapSampler ====================
 
 int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 TexSize, int32 Step,
 	TFunctionRef<bool(double X, double Y, FVector& OutDirection)> TexelDirection) const
 {
+	const FVoxelMapTileFrame& Frame = Map.GetTileFrame();
 	const FVoxelCubeSphereGrid& Grid = Map.GetPlanetTileGrid();
 	const int32 Res = Map.GetTileResolution();
 	if (!Grid.IsValid() || Res <= 0 || TexSize <= 0 || !OutBGRA)
@@ -105,8 +183,17 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 		return 0;
 	}
 	const int32 N = Grid.GetCellsPerEdge();
-	const double CellUV = Grid.GetCellUV();
-	const double InvCellUV = 1.0 / CellUV;
+	// A face's level-0 pixels fit an int32 up to N of 2^31 / Res (a 1,000 km planet is 32,725 tiles a face edge: 2.1 million
+	// pixels at 64).
+	const int32 FacePixels = static_cast<int32>(FMath::Min<int64>(static_cast<int64>(N) * Res, MAX_int32));
+	const double PixelsPerUV = 0.5 * static_cast<double>(FacePixels);
+	const int32 MaxLevel = Frame.GetMaxLevel();
+	const int32 ViewLevel = FMath::Clamp(Level, 0, MaxLevel);
+	const int32 ViewTilesPerEdge = Frame.TilesPerFaceEdgeAt(ViewLevel);
+	// A pixel's tile by a shift where the resolution is a power of two (it is ChunkSize: 32 or 64): divisions per texel cost
+	// a fill at a million texels tens of milliseconds.
+	const bool bResPow2 = FMath::IsPowerOfTwo(Res);
+	const int32 ResShift = bResPow2 ? static_cast<int32>(FMath::FloorLog2(static_cast<uint32>(Res))) : 0;
 	Step = FMath::Clamp(Step, 1, TexSize);
 	const int32 Points = (TexSize + Step - 1) / Step + 1;
 
@@ -131,20 +218,41 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 		}
 	}
 
-	// The tile the last texel read, cached across texels (texels in a run share tiles).
-	uint64 CachedKey = MAX_uint64;
-	const FVoxelMapTile* CachedTile = nullptr;
+	// The level-0 tile the last texel fell in (its exploration), and the view's tile it read with the image it drew from:
+	// the tile's own at the view's level, or the nearest coarser one stored over it (cached across texels: texels in a run
+	// share tiles).
+	FIntPoint CachedTile0(MIN_int32, MIN_int32);
 	bool bCachedExplored = false;
-	TSet<FIntPoint> Requested;
+	FIntPoint CachedViewTile(MIN_int32, MIN_int32);
+	const FVoxelMapTile* CachedImage = nullptr;
+	int32 CachedShift = 0;
+	int32 CachedBaseU = 0;
+	int32 CachedBaseV = 0;
+	FVCViewTileCollector Collector;
 	int32 Drawn = 0;
 
 	auto Write = [OutBGRA, TexSize](int32 X, int32 Y, const FColor& Color)
 	{
-		uint8* Texel = OutBGRA + (static_cast<int64>(Y) * TexSize + X) * 4;
-		Texel[0] = Color.B;
-		Texel[1] = Color.G;
-		Texel[2] = Color.R;
-		Texel[3] = Color.A;
+		WriteTexel(OutBGRA + (static_cast<int64>(Y) * TexSize + X) * 4, Color);
+	};
+	auto Resolve = [&](int32 Face, int32 TU, int32 TV)
+	{
+		CachedImage = nullptr;
+		for (int32 Up = 0; Up <= MaxFallbackLevels && ViewLevel + Up <= MaxLevel; ++Up)
+		{
+			const int32 TileLevel = ViewLevel + Up;
+			const int32 U = TU >> Up;
+			const int32 V = TV >> Up;
+			const FVoxelMapTile* Image = Map.FindTile(FVoxelMapTileId(FIntPoint(Face * Frame.TilesPerFaceEdgeAt(TileLevel) + U, V), TileLevel));
+			if (Image && Image->Resolution == Res && Image->PixelData.Num() == Res * Res)
+			{
+				CachedImage = Image;
+				CachedShift = TileLevel;
+				CachedBaseU = U * Res;
+				CachedBaseV = V * Res;
+				return;
+			}
+		}
 	};
 	// Zoomed out: the globe albedo (WM-BP11), when it is there.
 	const FVoxelMapGlobeAlbedo* Albedo = bUseGlobeAlbedo ? Map.GetGlobeAlbedo() : nullptr;
@@ -165,44 +273,42 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 			++Drawn;
 			return;
 		}
-		// UV >= -1, so FU and FV are not negative (but by rounding, which the clamps take): truncation is the floor, without
-		// the library call (G64: this runs for every texel of the minimap).
-		const double FU = (UV.X + 1.0) * InvCellUV;
-		const double FV = (UV.Y + 1.0) * InvCellUV;
-		const int32 IU = FMath::Clamp(static_cast<int32>(FU), 0, N - 1);
-		const int32 IV = FMath::Clamp(static_cast<int32>(FV), 0, N - 1);
-		const FIntPoint Tile = Grid.ToAtlas(Face, IU, IV);
-		const uint64 Key = (static_cast<uint64>(static_cast<uint32>(Tile.X)) << 32) | static_cast<uint32>(Tile.Y);
-		if (Key != CachedKey)
+		// The texel's level-0 pixel along its face. UV >= -1, so the products are not negative (but by rounding, which the
+		// clamps take): truncation is the floor, without the library call (G64: this runs for every texel of the minimap).
+		const int32 PU = FMath::Clamp(static_cast<int32>((UV.X + 1.0) * PixelsPerUV), 0, FacePixels - 1);
+		const int32 PV = FMath::Clamp(static_cast<int32>((UV.Y + 1.0) * PixelsPerUV), 0, FacePixels - 1);
+		const FIntPoint Tile0 = bResPow2 ? Grid.ToAtlas(Face, PU >> ResShift, PV >> ResShift) : Grid.ToAtlas(Face, PU / Res, PV / Res);
+		if (Tile0 != CachedTile0)
 		{
-			CachedKey = Key;
-			if (VisitedTiles)
-			{
-				VisitedTiles->Add(Tile);
-			}
-			bCachedExplored = !bRequireExplored || Map.IsTileExplored(Tile);
-			CachedTile = bCachedExplored ? Map.GetTile(Tile) : nullptr;
-			const bool bNeedsImage = bCachedExplored && (!CachedTile || (bWantDetail && CachedTile->Resolution < Res));
-			if (bNeedsImage && bRequireExplored && !Requested.Contains(Tile))
-			{
-				Requested.Add(Tile);
-				Map.RequestTileImage(Tile, bWantDetail);
-			}
+			CachedTile0 = Tile0;
+			bCachedExplored = !bRequireExplored || Map.IsTileExplored(Tile0);
 		}
 		if (!bCachedExplored)
 		{
 			Write(X, Y, Unexplored);
 			return;
 		}
-		if (!CachedTile || CachedTile->Resolution <= 0)
+		// The view's tile at its level, its image or the nearest coarser one's.
+		const int32 TU = bResPow2 ? PU >> (ViewLevel + ResShift) : (PU >> ViewLevel) / Res;
+		const int32 TV = bResPow2 ? PV >> (ViewLevel + ResShift) : (PV >> ViewLevel) / Res;
+		const FIntPoint ViewTile(Face * ViewTilesPerEdge + TU, TV);
+		if (ViewTile != CachedViewTile)
+		{
+			CachedViewTile = ViewTile;
+			Resolve(Face, TU, TV);
+		}
+		if (ViewTiles)
+		{
+			Collector.Touch(ViewTile, X, Y);
+		}
+		if (!CachedImage)
 		{
 			Write(X, Y, Undrawn);
 			return;
 		}
-		const int32 TileRes = CachedTile->Resolution;
-		const int32 PX = FMath::Clamp(static_cast<int32>((FU - IU) * TileRes), 0, TileRes - 1);
-		const int32 PY = FMath::Clamp(static_cast<int32>((FV - IV) * TileRes), 0, TileRes - 1);
-		Write(X, Y, CachedTile->PixelData[PY * TileRes + PX]);
+		const int32 PX = FMath::Clamp((PU >> CachedShift) - CachedBaseU, 0, Res - 1);
+		const int32 PY = FMath::Clamp((PV >> CachedShift) - CachedBaseV, 0, Res - 1);
+		Write(X, Y, CachedImage->PixelData[PY * Res + PX]);
 		++Drawn;
 	};
 
@@ -254,6 +360,10 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 			}
 		}
 	}
+	if (ViewTiles)
+	{
+		Collector.NearestFirst(TexSize, *ViewTiles);
+	}
 	return Drawn;
 }
 
@@ -262,98 +372,125 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 int32 FVCPlaneMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 TexSize, const FVector& Center, double WorldPerPixel) const
 {
 	const double TileSize = Map.GetTileWorldSize();
-	if (!OutBGRA || TexSize <= 0 || TileSize <= 0.0 || WorldPerPixel <= 0.0)
+	const int32 Res = Map.GetTileResolution();
+	if (!OutBGRA || TexSize <= 0 || TileSize <= 0.0 || WorldPerPixel <= 0.0 || Res <= 0)
 	{
 		return 0;
 	}
+	const FVoxelMapTileFrame& Frame = Map.GetTileFrame();
+	const int32 ViewLevel = FMath::Clamp(Level, 0, Frame.GetMaxLevel());
 	const double Extent = 0.5 * TexSize * WorldPerPixel;
 	const double WorldMinX = Center.X - Extent;
 	const double WorldMinY = Center.Y - Extent;
 	const double WorldMaxX = Center.X + Extent;
-	const int32 TileResolution = Map.GetTileResolution();
-	auto Write = [](uint8* Texel, const FColor& Color)
-	{
-		Texel[0] = Color.B;
-		Texel[1] = Color.G;
-		Texel[2] = Color.R;
-		Texel[3] = Color.A;
-	};
-	// The tile at a coordinate as the fill may draw it: explored (or every tile without bRequireExplored), with a whole image.
-	// An explored tile without the image asked for is requested once a fill (bRequireExplored).
-	TSet<FIntPoint> Requested;
-	auto Resolve = [&](const FIntPoint& Coord, bool& bOutExplored) -> const FVoxelMapTile*
-	{
-		if (VisitedTiles)
-		{
-			VisitedTiles->Add(Coord);
-		}
-		bOutExplored = !bRequireExplored || Map.IsTileExplored(Coord);
-		const FVoxelMapTile* Tile = bOutExplored ? Map.GetTile(Coord) : nullptr;
-		if (bRequireExplored && bOutExplored && (!Tile || (bWantDetail && Tile->Resolution < TileResolution)) && !Requested.Contains(Coord))
-		{
-			// Drawn again in the background; the map redraws when it lands.
-			Requested.Add(Coord);
-			Map.RequestTileImage(Coord, bWantDetail);
-		}
-		if (Tile && (Tile->Resolution <= 0 || Tile->PixelData.Num() < Tile->Resolution * Tile->Resolution))
-		{
-			Tile = nullptr;
-		}
-		return Tile;
-	};
-	int32 Drawn = 0;
 
-	// Texel by texel: along each texture axis the tile and the position in it, worked out once per column and row. The
-	// sample point is just inside the texel's far corner in world +X and +Y: texel X runs along world +X (or +Y north up),
-	// texel Y along world +Y (or -X north up, where the far corner in X is the texel's first edge).
+	// Along each texture axis, worked out once per column and row: the texel's level-0 pixel (the pixel just inside the
+	// texel's far corner in world +X and +Y: texel X runs along world +X (or +Y north up), texel Y along world +Y (or -X
+	// north up, where the far corner in X is the texel's first edge)), its level-0 tile, its pixel at the view's level and
+	// that level's tile.
 	const FVector GridOrigin = Map.TileCoordToWorld(FIntPoint(0, 0));
 	const double Inside = WorldPerPixel * 1.0e-4;
-	TArray<int32> ColumnTile, RowTile;
-	TArray<double> ColumnFraction, RowFraction;
-	ColumnTile.SetNumUninitialized(TexSize);
-	RowTile.SetNumUninitialized(TexSize);
-	ColumnFraction.SetNumUninitialized(TexSize);
-	RowFraction.SetNumUninitialized(TexSize);
+	struct FAxis
+	{
+		int32 Tile0 = 0;
+		int64 ViewPixel = 0;
+		int32 ViewTile = 0;
+	};
+	TArray<FAxis> Columns, Rows;
+	Columns.SetNumUninitialized(TexSize);
+	Rows.SetNumUninitialized(TexSize);
+	auto MakeAxis = [Res, ViewLevel](double AlongTiles)
+	{
+		FAxis Axis;
+		const int64 Pixel0 = static_cast<int64>(FMath::FloorToDouble(AlongTiles * Res));
+		Axis.Tile0 = static_cast<int32>(FloorDiv(Pixel0, Res));
+		Axis.ViewPixel = Pixel0 >> ViewLevel;
+		Axis.ViewTile = static_cast<int32>(FloorDiv(Axis.ViewPixel, Res));
+		return Axis;
+	};
 	for (int32 I = 0; I < TexSize; ++I)
 	{
 		// Along texel X: world X, or world Y north up; along texel Y: world Y, or world X north up (descending).
-		const double AlongX = bNorthUp
+		Columns[I] = MakeAxis(bNorthUp
 			? (WorldMinY + (I + 1) * WorldPerPixel - Inside - GridOrigin.Y) / TileSize
-			: (WorldMinX + (I + 1) * WorldPerPixel - Inside - GridOrigin.X) / TileSize;
-		const double AlongY = bNorthUp
+			: (WorldMinX + (I + 1) * WorldPerPixel - Inside - GridOrigin.X) / TileSize);
+		Rows[I] = MakeAxis(bNorthUp
 			? (WorldMaxX - I * WorldPerPixel - Inside - GridOrigin.X) / TileSize
-			: (WorldMinY + (I + 1) * WorldPerPixel - Inside - GridOrigin.Y) / TileSize;
-		ColumnTile[I] = FMath::FloorToInt32(AlongX);
-		RowTile[I] = FMath::FloorToInt32(AlongY);
-		ColumnFraction[I] = AlongX - ColumnTile[I];
-		RowFraction[I] = AlongY - RowTile[I];
+			: (WorldMinY + (I + 1) * WorldPerPixel - Inside - GridOrigin.Y) / TileSize);
 	}
-	FIntPoint CachedCoord(MAX_int32, MAX_int32);
-	const FVoxelMapTile* Tile = nullptr;
-	bool bExplored = false;
+
+	// The level-0 tile the last texel fell in (its exploration), and the view's tile it read with the image it drew from:
+	// the tile's own at the view's level, or the nearest coarser one stored over it.
+	FIntPoint CachedTile0(MIN_int32, MIN_int32);
+	bool bCachedExplored = false;
+	FIntPoint CachedViewTile(MIN_int32, MIN_int32);
+	const FVoxelMapTile* CachedImage = nullptr;
+	int32 CachedUp = 0;
+	int64 CachedBaseX = 0;
+	int64 CachedBaseY = 0;
+	auto Resolve = [&](const FIntPoint& ViewTile)
+	{
+		CachedImage = nullptr;
+		const int32 MaxLevel = Frame.GetMaxLevel();
+		for (int32 Up = 0; Up <= MaxFallbackLevels && ViewLevel + Up <= MaxLevel; ++Up)
+		{
+			const FIntPoint Tile(ViewTile.X >> Up, ViewTile.Y >> Up);
+			const FVoxelMapTile* Image = Map.FindTile(FVoxelMapTileId(Tile, ViewLevel + Up));
+			if (Image && Image->Resolution == Res && Image->PixelData.Num() == Res * Res)
+			{
+				CachedImage = Image;
+				CachedUp = Up;
+				CachedBaseX = static_cast<int64>(Tile.X) * Res;
+				CachedBaseY = static_cast<int64>(Tile.Y) * Res;
+				return;
+			}
+		}
+	};
+	FVCViewTileCollector Collector;
+	int32 Drawn = 0;
 	for (int32 Y = 0; Y < TexSize; ++Y)
 	{
 		uint8* Row = OutBGRA + static_cast<int64>(Y) * TexSize * 4;
 		for (int32 X = 0; X < TexSize; ++X)
 		{
-			// North up the texel's column picks the tile's Y and the pixel's PY, its row the tile's X and PX.
-			const FIntPoint Coord = bNorthUp ? FIntPoint(RowTile[Y], ColumnTile[X]) : FIntPoint(ColumnTile[X], RowTile[Y]);
-			if (Coord != CachedCoord)
+			// North up the texel's column runs along world Y and its row along world X.
+			const FAxis& AlongX = bNorthUp ? Rows[Y] : Columns[X];
+			const FAxis& AlongY = bNorthUp ? Columns[X] : Rows[Y];
+			const FIntPoint Tile0(AlongX.Tile0, AlongY.Tile0);
+			if (Tile0 != CachedTile0)
 			{
-				CachedCoord = Coord;
-				Tile = Resolve(Coord, bExplored);
+				CachedTile0 = Tile0;
+				bCachedExplored = !bRequireExplored || Map.IsTileExplored(Tile0);
 			}
-			if (!Tile)
+			if (!bCachedExplored)
 			{
-				Write(Row + X * 4, bRequireExplored ? (bExplored ? Undrawn : Unexplored) : Background);
+				WriteTexel(Row + X * 4, Unexplored);
 				continue;
 			}
-			const int32 Res = Tile->Resolution;
-			const int32 PX = FMath::Min(static_cast<int32>((bNorthUp ? RowFraction[Y] : ColumnFraction[X]) * Res), Res - 1);
-			const int32 PY = FMath::Min(static_cast<int32>((bNorthUp ? ColumnFraction[X] : RowFraction[Y]) * Res), Res - 1);
-			Write(Row + X * 4, Tile->PixelData[PY * Res + PX]);
+			const FIntPoint ViewTile(AlongX.ViewTile, AlongY.ViewTile);
+			if (ViewTile != CachedViewTile)
+			{
+				CachedViewTile = ViewTile;
+				Resolve(ViewTile);
+			}
+			if (ViewTiles)
+			{
+				Collector.Touch(ViewTile, X, Y);
+			}
+			if (!CachedImage)
+			{
+				WriteTexel(Row + X * 4, bRequireExplored ? Undrawn : Background);
+				continue;
+			}
+			const int32 PX = FMath::Clamp(static_cast<int32>((AlongX.ViewPixel >> CachedUp) - CachedBaseX), 0, Res - 1);
+			const int32 PY = FMath::Clamp(static_cast<int32>((AlongY.ViewPixel >> CachedUp) - CachedBaseY), 0, Res - 1);
+			WriteTexel(Row + X * 4, CachedImage->PixelData[PY * Res + PX]);
 			++Drawn;
 		}
+	}
+	if (ViewTiles)
+	{
+		Collector.NearestFirst(TexSize, *ViewTiles);
 	}
 	return Drawn;
 }

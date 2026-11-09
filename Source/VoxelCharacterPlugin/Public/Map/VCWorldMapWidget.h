@@ -14,6 +14,66 @@ class UTextBlock;
 class UCanvasPanel;
 
 /**
+ * The world map's redraws for tile arrivals (MAP_PYRAMID_PLAN.md P1, G166): only the arrival of a tile the view showed (its
+ * last request, at its level) counts, and those arrivals coalesce into at most one redraw every Interval seconds, so a
+ * view's few hundred tiles landing one by one redraw the map a few times a second, not once per tile. A redraw that cost
+ * C seconds waits CostFactor x C before the next (from its start), so redraws for arrivals hold at most about a fifth of
+ * the game thread however slow the fill (a tile a texel on a fully explored 50 km planet: 0.8 s a fill, which held the
+ * drawing to the frame rate and redrew the map 41 times while the view's tiles arrived). Pure.
+ */
+struct VOXELCHARACTERPLUGIN_API FVCMapArrivalCoalescer
+{
+	/** Seconds between redraws for arrivals, at least. */
+	double Interval = 0.25;
+
+	/** A redraw costing C seconds waits this many times C (from its start) before the next for arrivals. */
+	double CostFactor = 4.0;
+
+	/**
+	 * The view as last requested.
+	 * @param InLevel Its pyramid level
+	 * @param Tiles Its tiles' coordinates at that level
+	 */
+	void SetView(int32 InLevel, TConstArrayView<FIntPoint> Tiles);
+
+	/**
+	 * A tile's image arrived.
+	 * @param InLevel Its level
+	 * @param Tile Its coordinate at that level
+	 * @return True if it is in the view (a redraw is now pending); false if it does not show (ignored)
+	 */
+	bool OnArrival(int32 InLevel, const FIntPoint& Tile);
+
+	/** @return True when a redraw for arrivals is pending and due at Now (seconds) */
+	bool IsDue(double Now) const { return bPending && Now - LastRedrawSeconds >= GetMinGap(); }
+
+	/** @return The seconds a redraw for arrivals waits after the last one's start: Interval, or CostFactor times its cost */
+	double GetMinGap() const { return FMath::Max(Interval, CostFactor * LastRedrawCost); }
+
+	/**
+	 * The map was redrawn, for whatever reason: the pending arrivals show.
+	 * @param Now When the redraw started (seconds)
+	 * @param CostSeconds What it cost
+	 */
+	void OnRedrawn(double Now, double CostSeconds = 0.0)
+	{
+		bPending = false;
+		LastRedrawSeconds = Now;
+		LastRedrawCost = CostSeconds;
+	}
+
+	/** @return Whether arrivals in view wait for a redraw */
+	bool IsPending() const { return bPending; }
+
+private:
+	int32 Level = -1;
+	TSet<FIntPoint> ViewTiles;
+	bool bPending = false;
+	double LastRedrawSeconds = -1.0e9;
+	double LastRedrawCost = 0.0;
+};
+
+/**
  * Full-screen world map overlay toggled with M key.
  *
  * Shows all explored terrain with fog of war on unexplored areas.
@@ -22,6 +82,10 @@ class UCanvasPanel;
  * On a planet (spherical Phase 4, D11, WM-SY9) the map is a globe: an orthographic view around a direction, north up,
  * opening on the player; dragging turns the globe, the wheel zooms (the same scale as a plane's map at each zoom, so it
  * becomes a local map zoomed in).
+ *
+ * The image is composed from the map's tile pyramid at the level matching its texels (MAP_PYRAMID_PLAN.md P1): about 300
+ * tiles at any zoom, asked for nearest the view's centre (UVoxelMapSubsystem::RequestView), the coarser stored levels
+ * shown while they draw; their arrivals redraw it coalesced (FVCMapArrivalCoalescer).
  *
  * Widget tree is built programmatically in NativeOnInitialized()
  * following the project's C++ widget construction pattern.
@@ -100,22 +164,8 @@ public:
 	 */
 	static UVCWorldMapWidget* FindOpen(const UWorld* World);
 
-	/**
-	 * A view of more than this many tiles redraws for tile arrivals at most every 2 s (world modes review WM-MP9, the
-	 * planet's G51 rule in every mode): a plane's most zoomed-out view holds about 66,000 tiles, and a voxel.Map.ExploreAll
-	 * streams an image for each; a redraw per arrival blits every tile in view each time. 256 tiles is a view zoomed in
-	 * to about 16 tiles across, where an arrival still redraws at once.
-	 */
-	static constexpr int32 TileRedrawThrottleTiles = 256;
-
-	/**
-	 * Pure: whether a tile arrival waits for the throttled redraw rather than redrawing the map at once.
-	 * @param bAlbedoWithTile The globe shows the map's albedo and the arrival is a tile (not the albedo itself)
-	 * @param TilesInView Tiles the rendered view holds (a heightmap view; 0 on a planet)
-	 * @param Threshold Views of more tiles than this wait
-	 * @return True to wait
-	 */
-	static bool DefersTileRedraw(bool bAlbedoWithTile, int32 TilesInView, int32 Threshold = TileRedrawThrottleTiles);
+	/** The fog of war follows new exploration at most this often (seconds; the minimap explores as the player walks). */
+	static constexpr double ExplorationRedrawSeconds = 1.0;
 
 protected:
 	virtual void NativeOnInitialized() override;
@@ -139,6 +189,13 @@ private:
 
 	/** The globe's radius on screen at the current zoom (the plane's scale: BaseWorldExtent / CurrentZoom per half texture). */
 	double GetGlobeRadiusPx() const;
+
+	/**
+	 * Ask the map for the tiles the view shows (UVoxelMapSubsystem::RequestView), replacing the world map's last request.
+	 * @param Level Their pyramid level
+	 * @param Tiles Their coordinates, nearest the view's centre first
+	 */
+	void RequestViewTiles(int32 Level, const TArray<FIntPoint>& Tiles);
 
 	/** Update the player marker position on the map. */
 	void UpdatePlayerMarker();
@@ -186,8 +243,15 @@ private:
 	/** Last mouse position during pan. */
 	FVector2D LastMousePos = FVector2D::ZeroVector;
 
-	/** Delegate handle for tile ready events. */
+	/** Delegate handles for tile and globe albedo arrivals. */
 	FDelegateHandle TileReadyHandle;
+	FDelegateHandle AlbedoReadyHandle;
+
+	/** Arrivals in view, coalesced into redraws (G166). */
+	FVCMapArrivalCoalescer Arrivals;
+
+	/** The map's exploration revision at the last rebuild: the fog of war redraws when it moves on. */
+	uint64 RenderedExplorationRevision = 0;
 
 	/** Whether the map needs a texture rebuild. */
 	bool bMapDirty = true;
@@ -199,19 +263,8 @@ private:
 	FVCGlobeProjection RenderedGlobe;
 	bool bRenderedPlanet = false;
 
-	/** Real time of the last planet rebuild: tile arrivals redraw at most 30 times a second. */
-	double LastPlanetRebuildSeconds = 0.0;
-
-	/** The globe was last drawn from the map subsystem's albedo (zoomed out, WM-BP11): tile images do not show in it. */
-	bool bRenderedFromAlbedo = false;
-
-	/**
-	 * Tile images (or exploration) arrived while a redraw for each would be waste (DefersTileRedraw: the globe showing its
-	 * albedo, or a view of more than TileRedrawThrottleTiles tiles in any mode): the map redraws for them at most every 2 s
-	 * after the last redraw (LastTileRedrawSeconds).
-	 */
-	bool bTileRedrawPending = false;
-	double LastTileRedrawSeconds = 0.0;
+	/** Real time of the last rebuild: a planet's redraws for dragging run at most 30 times a second. */
+	double LastRebuildSeconds = 0.0;
 
 	// Cached from last render — used by player marker positioning
 	FIntPoint RenderedCenterTile = FIntPoint(0, 0);

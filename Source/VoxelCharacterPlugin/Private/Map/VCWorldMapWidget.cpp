@@ -70,7 +70,7 @@ namespace VCWorldMapStats
 static FAutoConsoleCommand GVCWorldMapStatsCmd(
 	TEXT("vc.WorldMap.Stats"),
 	TEXT("Log the world map's rebuilds since the last reset: per second, each phase's mean and maximum (texture fill, upload, ")
-	TEXT("markers, the rebuild), and the tile arrivals that asked for one or were deferred. 'reset' clears it."),
+	TEXT("markers, the rebuild), and the tile arrivals: those in view (coalesced into rebuilds) and those that do not show. 'reset' clears it."),
 	FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
 	{
 		using namespace VCWorldMapStats;
@@ -81,8 +81,8 @@ static FAutoConsoleCommand GVCWorldMapStatsCmd(
 			return;
 		}
 		const double Elapsed = FMath::Max(FPlatformTime::Seconds() - SinceSeconds, 1.0e-3);
-		UE_LOG(LogVoxelCharacter, Warning, TEXT("vc.WorldMap.Stats: %lld rebuilds in %.1f s (%.1f/s), %lld over 2 ms; %lld tile arrivals, %lld deferred"),
-			Counts[Rebuild], Elapsed, static_cast<double>(Counts[Rebuild]) / Elapsed, Over2Ms, Arrivals, Deferred);
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("vc.WorldMap.Stats: %lld rebuilds in %.1f s (%.1f/s), %lld over 2 ms; %lld tile arrivals, %lld deferred (not in view), %lld in view"),
+			Counts[Rebuild], Elapsed, static_cast<double>(Counts[Rebuild]) / Elapsed, Over2Ms, Arrivals, Deferred, Arrivals - Deferred);
 		for (int32 Phase = 0; Phase < Num; ++Phase)
 		{
 			const double N = static_cast<double>(FMath::Max<int64>(1, Counts[Phase]));
@@ -90,6 +90,27 @@ static FAutoConsoleCommand GVCWorldMapStatsCmd(
 				Counts[Phase], SumMs[Phase] / N, MaxMs[Phase], SumMs[Phase]);
 		}
 	}));
+
+// ---------------------------------------------------------------------------
+// Arrivals in view (MAP_PYRAMID_PLAN.md P1, G166)
+// ---------------------------------------------------------------------------
+
+void FVCMapArrivalCoalescer::SetView(int32 InLevel, TConstArrayView<FIntPoint> Tiles)
+{
+	Level = InLevel;
+	ViewTiles.Reset();
+	ViewTiles.Append(Tiles);
+}
+
+bool FVCMapArrivalCoalescer::OnArrival(int32 InLevel, const FIntPoint& Tile)
+{
+	if (InLevel != Level || !ViewTiles.Contains(Tile))
+	{
+		return false;
+	}
+	bPending = true;
+	return true;
+}
 
 // ---------------------------------------------------------------------------
 // Widget Tree Construction
@@ -192,23 +213,21 @@ void UVCWorldMapWidget::NativeConstruct()
 		MapSubsystem = World->GetSubsystem<UVoxelMapSubsystem>();
 	}
 
-	// Bind to tile ready events so we can refresh while map is open
+	// Tile arrivals redraw the open map, coalesced, and only those the view shows (MAP_PYRAMID_PLAN.md P1, G166): a redraw
+	// per arrival held the 50 km globe at 94 ms frames, and before the pyramid an ExploreAll streamed images the view never
+	// showed. The globe albedo's arrival redraws at once.
 	if (MapSubsystem.IsValid() && !TileReadyHandle.IsValid())
 	{
-		TileReadyHandle = MapSubsystem->OnMapTileReady.AddLambda([this](FIntPoint Tile)
+		TileReadyHandle = MapSubsystem->OnMapTileReady.AddLambda([this](const FVoxelMapTileId& Id)
 		{
-			// Zoomed out to the globe's albedo the tile images do not show: only the albedo landing ((-1, -1)) redraws at
-			// once. Tiles, and the exploration they carry, redraw it at most every 2 s: an ExploreAll on a big planet
-			// streams tens of thousands of images, and a redraw for each held the map at 6 FPS (spherical Phase 6, P6.5).
-			// A wide heightmap view waits the same way (world modes review WM-MP9): a redraw blits every tile in view.
-			const int32 TilesInView = bRenderedPlanet ? 0 : FMath::Square(2 * RenderedTileRadius + 1);
 			++VCWorldMapStats::Arrivals;
-			if (DefersTileRedraw(bRenderedFromAlbedo && Tile != FIntPoint(-1, -1), TilesInView))
+			if (!Arrivals.OnArrival(Id.Level, Id.Coord))
 			{
 				++VCWorldMapStats::Deferred;
-				bTileRedrawPending = true;
-				return;
 			}
+		});
+		AlbedoReadyHandle = MapSubsystem->OnGlobeAlbedoReady.AddLambda([this]()
+		{
 			bMapDirty = true;
 		});
 	}
@@ -231,12 +250,15 @@ void UVCWorldMapWidget::NativeConstruct()
 
 void UVCWorldMapWidget::NativeDestruct()
 {
-	// Unbind delegate
-	if (MapSubsystem.IsValid() && TileReadyHandle.IsValid())
+	// Unbind the delegates, and drop the world map's request: its tiles stop waiting.
+	if (MapSubsystem.IsValid())
 	{
 		MapSubsystem->OnMapTileReady.Remove(TileReadyHandle);
-		TileReadyHandle.Reset();
+		MapSubsystem->OnGlobeAlbedoReady.Remove(AlbedoReadyHandle);
+		MapSubsystem->RequestView(EVoxelMapRequester::WorldMap, {});
 	}
+	TileReadyHandle.Reset();
+	AlbedoReadyHandle.Reset();
 
 	Super::NativeDestruct();
 }
@@ -246,29 +268,27 @@ void UVCWorldMapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 	Super::NativeTick(MyGeometry, InDeltaTime);
 
 	bool bViewChanged = false;
-	const bool bPlanet = MapSubsystem.IsValid() && MapSubsystem->IsPlanetMap();
-	if (bTileRedrawPending && FPlatformTime::Seconds() - LastTileRedrawSeconds >= 2.0)
+	const UVoxelMapSubsystem* Subsystem = MapSubsystem.Get();
+	const bool bPlanet = Subsystem && Subsystem->IsPlanetMap();
+	const double Now = FPlatformTime::Seconds();
+	// Arrivals in view, coalesced (G166); new exploration (the fog of war) at most every ExplorationRedrawSeconds. Both
+	// wait longer after a costly rebuild (FVCMapArrivalCoalescer::GetMinGap).
+	if (Arrivals.IsDue(Now))
 	{
-		bTileRedrawPending = false;
 		bMapDirty = true;
 	}
-	if (bMapDirty && bPlanet)
+	if (Subsystem && Subsystem->GetExplorationRevision() != RenderedExplorationRevision
+		&& Now - LastRebuildSeconds >= FMath::Max(ExplorationRedrawSeconds, Arrivals.GetMinGap()))
 	{
-		// The globe redraws at most 30 times a second (tiles stream in one by one).
-		const double Now = FPlatformTime::Seconds();
-		if (Now - LastPlanetRebuildSeconds >= 1.0 / 30.0)
-		{
-			LastPlanetRebuildSeconds = Now;
-			LastTileRedrawSeconds = Now;
-			RebuildMapTexture();
-			bMapDirty = false;
-			bViewChanged = true;
-		}
+		bMapDirty = true;
 	}
-	else if (bMapDirty)
+	// A planet's globe redraws at most 30 times a second while it is dragged.
+	if (bMapDirty && (!bPlanet || Now - LastRebuildSeconds >= 1.0 / 30.0))
 	{
-		LastTileRedrawSeconds = FPlatformTime::Seconds();
+		LastRebuildSeconds = Now;
+		RenderedExplorationRevision = Subsystem ? Subsystem->GetExplorationRevision() : 0;
 		RebuildMapTexture();
+		Arrivals.OnRedrawn(Now, FPlatformTime::Seconds() - Now);
 		bMapDirty = false;
 		bViewChanged = true;
 	}
@@ -311,9 +331,19 @@ void UVCWorldMapWidget::GetZoomRange(float& OutMinZoom, float& OutMaxZoom) const
 	}
 }
 
-bool UVCWorldMapWidget::DefersTileRedraw(bool bAlbedoWithTile, int32 TilesInView, int32 Threshold)
+void UVCWorldMapWidget::RequestViewTiles(int32 Level, const TArray<FIntPoint>& Tiles)
 {
-	return bAlbedoWithTile || TilesInView > Threshold;
+	Arrivals.SetView(Level, Tiles);
+	if (UVoxelMapSubsystem* Subsystem = MapSubsystem.Get())
+	{
+		TArray<FVoxelMapTileId> Request;
+		Request.Reserve(Tiles.Num());
+		for (const FIntPoint& Coord : Tiles)
+		{
+			Request.Emplace(Coord, Level);
+		}
+		Subsystem->RequestView(EVoxelMapRequester::WorldMap, Request);
+	}
 }
 
 UVCWorldMapWidget* UVCWorldMapWidget::FindOpen(const UWorld* World)
@@ -479,23 +509,25 @@ void UVCWorldMapWidget::RebuildMapTexture()
 	uint8* PixelData = static_cast<uint8*>(TextureData);
 
 	// The image through the plane sampler, north up (world +X up, +Y right, the minimap's compass convention; world modes
-	// review G64's texel fill; code review CR2, VCP-15): each texel the tile pixel just inside its far corner, explored tiles
-	// only with the fog colours for the rest. The map keeps tile images under a budget (WM-E2): a tile may have only its
-	// overview, or no image at all, until asked for; zoomed in far enough that the overview would show blurred (more texels
-	// per tile than half again its resolution) the tiles in view ask for detail, otherwise for an image of any kind.
-	const float TexelsPerTile = TileWorldSize / FMath::Max(RenderedWorldPerPixel, KINDA_SMALL_NUMBER);
+	// review G64's texel fill; code review CR2, VCP-15): each texel the pixel just inside its far corner, explored ground
+	// only with the fog colours for the rest, composed from the tile pyramid at the level matching the texels (about 300
+	// tiles at any zoom, MAP_PYRAMID_PLAN.md P1), the coarser stored levels shown while those draw. The tiles it shows are
+	// asked for, nearest the centre first.
 	FVCPlaneMapSampler Sampler;
 	Sampler.bNorthUp = true;
 	Sampler.bRequireExplored = true;
-	Sampler.bWantDetail = TexelsPerTile > 1.5f * Subsystem->GetTileOverviewResolution();
+	Sampler.Level = Subsystem->LevelForTexel(RenderedWorldPerPixel);
 	Sampler.Unexplored = FColor(10, 10, 10, 255);
 	Sampler.Undrawn = FColor(25, 25, 25, 255);
 	Sampler.Background = Sampler.Unexplored;
+	TArray<FIntPoint> ViewTiles;
+	Sampler.ViewTiles = &ViewTiles;
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(VCWorldMap_Fill);
 		const VCWorldMapStats::FScope TimedFill(VCWorldMapStats::Fill);
 		Sampler.Fill(*Subsystem, PixelData, TexSize, FVector(PanOffset.X, PanOffset.Y, 0.0), RenderedWorldPerPixel);
 	}
+	RequestViewTiles(Sampler.Level, ViewTiles);
 
 	TRACE_CPUPROFILER_EVENT_SCOPE(VCWorldMap_Upload);
 	const VCWorldMapStats::FScope TimedUpload(VCWorldMapStats::Upload);
@@ -548,14 +580,15 @@ void UVCWorldMapWidget::RebuildPlanetMapTexture()
 	RenderedTexSize = TexSize;
 	RenderedWorldPerPixel = static_cast<float>(Subsystem->GetPlanetRadius() / RenderedGlobe.RadiusPx);
 
-	// Detail where a tile spans more texels than half again its overview (as the plane's view decides).
+	// The pyramid level matching a texel at the view's centre (MAP_PYRAMID_PLAN.md P1); zoomed out so a texel spans many
+	// tiles (a big planet's globe), the albedo instead (WM-BP11; P2 retires it for the pyramid's top levels).
 	const double TexelsPerTile = Subsystem->GetTileWorldSize() * RenderedGlobe.RadiusPx / FMath::Max(Subsystem->GetPlanetRadius(), 1.0);
 	FVCPlanetMapSampler Sampler;
-	Sampler.bWantDetail = TexelsPerTile > 1.5 * Subsystem->GetTileOverviewResolution();
-	// Zoomed out so a texel spans many tiles (a big planet's globe): its albedo, not a tile pixel each (WM-BP11).
+	Sampler.Level = Subsystem->LevelForTexel(RenderedWorldPerPixel);
 	Sampler.bUseGlobeAlbedo = TexelsPerTile < GlobeAlbedoTexelsPerTile;
-	bRenderedFromAlbedo = Sampler.bUseGlobeAlbedo && Subsystem->GetGlobeAlbedo() != nullptr;
 	Sampler.Background = FColor(2, 2, 5, 255);
+	TArray<FIntPoint> ViewTiles;
+	Sampler.ViewTiles = &ViewTiles;
 	const double Half = 0.5 * TexSize;
 	const FVCGlobeProjection Globe = RenderedGlobe;
 	{
@@ -566,6 +599,7 @@ void UVCWorldMapWidget::RebuildPlanetMapTexture()
 			return Globe.ScreenToDirection(FVector2D(X - Half, Y - Half), OutDirection);
 		});
 	}
+	RequestViewTiles(Sampler.Level, ViewTiles);
 
 	TRACE_CPUPROFILER_EVENT_SCOPE(VCWorldMap_Upload);
 	const VCWorldMapStats::FScope TimedUpload(VCWorldMapStats::Upload);

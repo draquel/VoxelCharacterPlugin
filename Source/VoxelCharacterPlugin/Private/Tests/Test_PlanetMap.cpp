@@ -152,6 +152,13 @@ bool FVCPlanet_MapSampler::RunTest(const FString& Parameters)
 			const FVector Player = Center + Site * (Radius + 200.0);
 			constexpr double Extent = 3000.0;
 			Map->RequestTilesInRadius(Player, static_cast<float>(Extent * 1.5));
+			// The level-0 images the check reads, asked for as a view (MAP_PYRAMID_PLAN.md P1: exploring draws nothing).
+			TArray<FVoxelMapTileId> Explored;
+			for (const uint64 Key : Map->GetExploredTiles())
+			{
+				Explored.Emplace(FIntPoint(static_cast<int32>(static_cast<uint32>(Key >> 32)), static_cast<int32>(static_cast<uint32>(Key & 0xFFFFFFFF))));
+			}
+			Map->RequestView(EVoxelMapRequester::Minimap, Explored);
 			const double Deadline = FPlatformTime::Seconds() + 60.0;
 			while (!Map->GetDebugStats().Contains(TEXT("waiting=0 drawing=0")) && FPlatformTime::Seconds() < Deadline)
 			{
@@ -172,6 +179,8 @@ bool FVCPlanet_MapSampler::RunTest(const FString& Parameters)
 			Texels.SetNumZeroed(TexSize * TexSize * 4);
 			FVCPlanetMapSampler Sampler;
 			Sampler.bRequireExplored = false;
+			Sampler.Level = Map->LevelForTexel(WorldPerPixel);
+			TestEqual(TEXT("Texels finer than pixels: level 0"), Sampler.Level, 0);
 			const int32 Drawn = Sampler.Fill(*Map, Texels.GetData(), TexSize, 16, TexelDirection);
 
 			// Each texel against the tile pixel of its exact direction (texels at a pixel boundary may round either way).
