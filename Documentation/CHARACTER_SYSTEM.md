@@ -408,8 +408,19 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   take the stance), in local space, weighted by the body's `StanceWeight` (`UVCAnimInstance`: 1 on the ground,
   `StanceSprintWeight` at a sprint so the sprint's arms show through, 0 in the air, the water, dead or downed, eased at
   `IKBlendSpeed`). Every layer's parent is `UVCAnimLayerInstance`, which copies the body's `Speed` and `StanceWeight`
-  each update (and holds the speed at 0 under `vc.Anim.Stance 1`, the static stance as before). `vc.Anim.Stance 0|1|2`
-  is the A/B. `setup_character_layers.py` builds the blend spaces and versions the layers (`LAYER_VERSION` in the
+  each update (and holds the speed at 0 under `vc.Anim.Stance 1`, the static stance as before). **The bow's carry**
+  (D85, 2026-11-09, the user: "the running and walking is still using the standing idle"; G171): the pack's bow walk and
+  jog hold the bow as its idle does, the hands 3 to 8 cm from where they idle against the chest at a walk and 12 to 28 at
+  the jog (their whole swing), so laid over the upper body the bow walked and ran in its idle; and a crouch laid the
+  standing idle over the crouched legs, the torso upright. A layer's `MovingStanceWeight` (`UVCAnimLayerInstance`, a class
+  default the script sets; 1 unset) is its stance's share once the body moves: between `StanceFadeSpeeds` (10 and 150
+  uu/s) the layer's `StanceWeight` goes from the body's to that share of it (`ComputeStanceFade`, pure). The bow's is 0:
+  at a stand it holds the pack's idle, moving it gives the body to the locomotion, both arms swinging (GASP's walk, run,
+  sprint and crouch walk) and the bow riding in the left hand; aiming and drawing lay over it as before. The swords',
+  the two-handed set's and the tool's are 1, unchanged. A set's `stance_crouch` (the bow's: the pack's
+  `UE5_A_Crouch_Loop`, the bow low at the side) plays instead of the stance blend space while the body crouches (a blend
+  by the layer's `bIsCrouching`, 0.2 s each way), so a crouch at a stand bends the torso with the legs (`LAYER_VERSION`
+  `stance-v5`). `vc.Anim.Stance 0|1|2|3` is the A/B: 3 is C2's moving stance at every gait (no fade). `setup_character_layers.py` builds the blend spaces and versions the layers (`LAYER_VERSION` in the
   Blueprint's description: a wiring change rewires every layer in place on the next run). Montages play in the slot
   above, over the stance. **The upper-body action slot** (G162, 2026-11-09): between the layer and that slot both main
   graphs (`ABP_VoxelCharacter` and the motion matching copy) have a second slot, `UpperBodyAction`, laid over the body
@@ -979,7 +990,7 @@ Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, World
 `Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
-and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83) and `Anim.AimRaise` (D76); the sheaths'
+and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the sheaths'
 `EquipmentLoop.SheathSlots`, `SheathActionSet` (the set follows the drawn weapon, R and X, the snapshot's drawn state),
 `SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip` (the equipment sheathing plan's S2-S4). The feel is judged by hand on `/Game/PluginTesting/Tests/Character/CharacterTest`
 (the plan's C0; `Scripts/setup_character_test.py` builds it: a flat floor with a measured lane, block steps and a ramp,

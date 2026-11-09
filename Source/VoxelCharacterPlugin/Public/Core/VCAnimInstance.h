@@ -97,7 +97,10 @@ struct FVCAnimInput
 	bool bLookAtEnabled = true;
 	bool bHandIKEnabled = true;
 
-	/** vc.Anim.Stance: 0 no held stance, 1 the static idle over the upper body (as before C2), 2 the moving stance. */
+	/**
+	 * vc.Anim.Stance: 0 no held stance, 1 the static idle over the upper body (as before C2), 2 the moving stance, faded
+	 * by speed where the layer asks (D85), 3 the moving stance at every gait (C2, before D85).
+	 */
 	int32 StanceMode = 2;
 
 	/** The character aims a ranged weapon (IVCAnimatedCharacter::IsAnimAiming): the bow raised. */
@@ -296,7 +299,7 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float StanceWeight = 0.f;
 
-	/** vc.Anim.Stance as of the last update (the layer plays its stance blend space at speed 0 under mode 1). */
+	/** vc.Anim.Stance as of the last update (the layer plays its stance blend space at speed 0 under mode 1, fades it under 2). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	int32 StanceMode = 2;
 
