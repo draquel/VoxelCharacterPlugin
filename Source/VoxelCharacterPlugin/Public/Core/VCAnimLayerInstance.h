@@ -32,9 +32,21 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float AimYaw = 0.f;
 
-	/** The weight (0 to 1) of the montage playing in UpperBodySlot: how far the layer's drawn aim offset applies. */
+	/** The weight (0 to 1) of the montage playing in UpperBodySlot (DrawnAimWeight takes the larger of it and the raise). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float UpperBodyMontageWeight = 0.f;
+
+	/** The body's AimRaiseWeight: how far the aim has raised the held weapon (the layer's raised pose). */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float AimRaiseWeight = 0.f;
+
+	/**
+	 * How far the layer's aim branch (the raised pose, the UpperBody slot's draw and release, the drawn aim offset) lays
+	 * over the upper body in mesh space: the raise or the montage, the larger, so a draw from the hip and a raise both
+	 * show and a release while aiming returns to the raised pose.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float DrawnAimWeight = 0.f;
 
 	/** The slot whose montage weight UpperBodyMontageWeight follows. */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation")
@@ -52,7 +64,8 @@ public:
 	float StanceWeight = 0.f;
 
 	/**
-	 * Copies the body's values: its aim, and its montage weight in UpperBodySlot. Each update does it on the game thread.
+	 * Copies the body's values: its aim and aim raise, its montage weight in UpperBodySlot, its speed and stance weight.
+	 * Each update does it on the game thread.
 	 * @param Body The body's anim instance; null resets the values to 0
 	 */
 	void CopyBodyValues(const UVCAnimInstance* Body);

@@ -389,4 +389,32 @@ bool FVCRanged_AimCameraLocation::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// The arrow's launch (G159): from where it leaves straight at what the reticle is on, so it starts on the reticle's line
+// and only gravity takes it off; an aim point at the bow, behind it or far off the view gives the view's direction.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCRanged_LaunchDirection, "VoxelCharacter.Combat.LaunchDirection", VC_RANGED_FLAGS)
+bool FVCRanged_LaunchDirection::RunTest(const FString& Parameters)
+{
+	const FVector Bow(-1424.0, -1046.0, 147.0);
+	const FVector View = FVector(1.0, -0.06, -0.01).GetSafeNormal();
+	const float MinDistance = 150.f;
+
+	// The 20 m post's face: the direction is the line from the bow to it, whatever the view's own line.
+	const FVector Post(485.0, -1200.0, 120.0);
+	const FVector ToPost = UVCRangedAttackAbility::ComputeLaunchDirection(Bow, Post, View, MinDistance);
+	TestTrue(TEXT("At the aim point"), ToPost.Equals((Post - Bow).GetSafeNormal(), 1.0e-6));
+	TestTrue(TEXT("Unit"), FMath::IsNearlyEqual(ToPost.Size(), 1.0, 1.0e-6));
+	// No lift for the drop: the line passes through the point exactly.
+	const double Along = FVector::DotProduct(Post - Bow, ToPost);
+	TestTrue(TEXT("The line passes through the aim point"), (Bow + ToPost * Along).Equals(Post, 1.0e-3));
+
+	// A wall at the face, the point behind the bow, or far off the view: along the view.
+	TestTrue(TEXT("Too near: the view"), UVCRangedAttackAbility::ComputeLaunchDirection(Bow, Bow + View * 100.0, View, MinDistance).Equals(View, 1.0e-6));
+	TestTrue(TEXT("Behind: the view"), UVCRangedAttackAbility::ComputeLaunchDirection(Bow, Bow - View * 2000.0, View, MinDistance).Equals(View, 1.0e-6));
+	TestTrue(TEXT("Off the view: the view"),
+		UVCRangedAttackAbility::ComputeLaunchDirection(Bow, Bow + FVector(0.0, 2000.0, 0.0), View, MinDistance).Equals(View, 1.0e-6));
+	return true;
+}
+
 #endif // WITH_AUTOMATION_TESTS && WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN

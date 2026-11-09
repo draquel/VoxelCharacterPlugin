@@ -119,12 +119,17 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
   person the body's hand items are hidden with the body (`UpdateEquipmentVisualVisibility`, `OwnerNoSee` on a visual
   whose parent is the body mesh; a torch's light stays): no arms mesh draws them (D57), so a bow floated at the hidden
   hand (the character refinement plan's C1). A hotbar swap seen from another machine rebuilds the visual (G153,
-  EquipmentPlugin). **Two grips** (C1): the pack's clips hold the bow on a `weapon_l` bone our skeletons lack, which
-  turns a quarter against `hand_l` between the idle and the draw, so no one fit is upright in both; the item's
-  `AttachOffset` (pitch 90) is its fit at rest, upright beside the leg, and the Bow set's `DrawnGrip` (the identity:
-  the stave along the bone's Z) is where it sits across the raised fist. `AVCCharacterBase::UpdateDrawnGrip` blends
-  the visual between them each tick by the weight of the montage in the `UpperBody` slot (`GetDrawnGripWeight`),
-  inside the raise, on every machine that draws the pawn.
+  EquipmentPlugin). **One grip** (G161, 2026-11-08, after the character refinement plan): the item's `AttachOffset`
+  lays the stave (the mesh's Z) along the left fist's hole (`hand_l`'s Z), the grip 8 uu down the hand into the fist
+  and the string (the mesh's -X) away from the knuckles: up while the arm hangs at rest, the bow lying through the fist
+  from front to back, and toward the archer across the raised fist. The pack's clips hold their bow on a `weapon_l`
+  bone that stands still against `hand_l` in every bow clip (the idle, the raise, the draw, the release: (1.2, -1.3,
+  0.5) and one rotation at every key), so one fit is right at rest and drawn. C1 had read a quarter turn between the two
+  poses from its rest fit (pitch 90), which stood the stave along the forearm with the grip on the wrist bone and the
+  string ahead (upright from a distance; close up the stave rose behind the forearm), and added a drawn grip for the
+  draw (`UVCActionAnimSet::DrawnGrip`, blended by `AVCCharacterBase::UpdateDrawnGrip`); the mechanism stays for a set
+  that needs one, the Bow set has none. Close shots on both bodies at rest and drawn: the grip wrap in the fist, the
+  same numbers on Kellan and the low-poly body (no `AttachCorrections`).
 - **The data.** `UItemFragment_RangedWeapon` (ItemInventoryPlugin): the ammo's tag (`Item.Ammo.Arrow`), the arrow's
   class, the speed at full draw, the shortest and the full draw times and the power at the shortest (`GetDrawPower`: none
   below it, linear to full). Damage, crits and type stay on the Weapon fragment, times the draw's power.
@@ -135,8 +140,8 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
   attack (`AVCPlayerState::RangedAttackAbilityClass`), tag `Ability.Attack.Ranged`. Its activation starts the draw on
   the server's clock. The release reaches it as the ability system component's input release (`ReleaseDraw`:
   `ServerSetInputReleased` from a client, on the activation's channel so it cannot overtake it). At the release a draw
-  under the shortest is no shot; otherwise one arrow leaves the bag and `SpawnArrow` launches it from `ArrowStartOffset`
-  toward what the view meets within `AimRange`, at the bow's speed times the draw's power, and the bow wears by its
+  under the shortest is no shot; otherwise one arrow leaves the bag and `SpawnArrow` launches it from the drawn bow toward
+  what the reticle meets within `AimRange` (Aiming, below), at the bow's speed times the draw's power, and the bow wears by its
   `DegradeRate`. No ranged weapon, a dead or downed shooter or no arrow at the release: no shot, nothing used. The
   owner's check and the server's are one predicate, `CanStartDraw` (D-CR16).
 - **The arrow (D54).** `AVCArrowProjectile` (`Combat/VCArrowProjectile.h`), replicated and spawned by the server only
@@ -148,7 +153,8 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
   decides. `UVCArrowMovementComponent` is the engine's projectile movement with gravity replaced on a planet by the pull
   toward the centre from where the arrow is, read every forced 1/60 s substep; below the generated surface in a chunk with
   no cooked collision it stops at that surface.
-- **The look.** The Bow action set and `ABP_VCLayer_Bow` (Animation, below): the draw and the release play over the
+- **The look.** The Bow action set and `ABP_VCLayer_Bow` (Animation, below): aiming raises the bow (Aiming, below), the
+  draw and the release play over the
   upper body only, the drawn bow follows the view's pitch, and in third person the body turns toward the view while the
   bow is drawn (`SetFacesAim`). First person shows no draw (D57: the demo has no arms mesh); the crosshair, the shot and
   the arrow work the same.
@@ -167,6 +173,38 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
   anyone else aims from the eyes along the view as before. The arrow still leaves the bow (`ArrowStartOffset`) toward
   the ray's hit. Edit mode keeps the secondary action for placing (a held bow is no placing tool). Tests
   `VoxelCharacter.Combat.AimCameraLocation`.
+  **Raise, draw, release** (D76, 2026-11-08, the user's flow after the character refinement plan): holding the
+  secondary action raises the bow, the arm up and the string undrawn (the pack's `Aim_A_Loop`, faded in by
+  `UVCAnimInstance::AimRaiseWeight` over `AimRaiseTime`, 0.3 s, from `IVCAnimatedCharacter::IsAnimAiming`); holding the
+  primary action then draws from there (`UVCActionMontageComponent::PlayActionLocal` starts the Draw montage at its
+  second section, the string, once the raise is past one half) and the release looses; the primary action alone still
+  raises and draws in one. Measured on `CharacterTest`, aiming without a draw: the bow arm's pitch -73 degrees (hanging,
+  before) to +6 (raised). Test `VoxelCharacter.Anim.AimRaise`.
+  **The bow on the view** (G160): the bow layer laid the aim offsets, the draw and the release over the upper body in
+  local space from `spine_01` (C2's moving stance), so over the locomotion's forward-facing pelvis. The pack's aim and
+  draw turn the pelvis some 70 degrees (its heading in the clips' mesh space 103 in the idle, 144 in the raise, 173 in
+  the draw's hold, the root fixed; the arm then 10 degrees right of ahead), and that turn was lost: with the view fixed
+  on the 20 m post, the capsule on the view (yaw 0), the offset root at 0 and `AimYaw` 0, the bow arm (upper arm to
+  hand) pointed 61 degrees left of the view. None of the suspects named (GASP's offset root, the eased flip's
+  tolerance, the aim offsets' axes, the strafe databases) was it: the offset root reaches 6 degrees in a 350 uu/s
+  strafe and nothing at a stand. The layer's aim branch (the raised pose, the `UpperBody` slot, the drawn aim offset) is
+  now laid over the stance in mesh space from `spine_01` (the same ramp), weighted by `DrawnAimWeight` (the raise or the
+  slot's montage, the larger), so the upper body keeps the clips' turn wherever the hips face; the idle's stance stays in
+  local space as C2 made it. After: the bow arm 10 degrees right of the view drawn (the clip's own), 17 raised, 4 to 8
+  in the strafe; from behind and above, the drawn bow points down the range at the reticle on both bodies.
+  **The shot from the bow, on the reticle's line** (G159): the arrow leaves the drawn bow (`ComputeArrowStart`:
+  `hand_l` plus `BowGripOffset` where this machine poses the body, else the eyes plus `ArrowStartOffset`, now
+  (75, 4, -8), the grip as measured from the eyes on both bodies, (76, 4, -6) and (80, 4, -12); before, (50, -10, -20)
+  put it beside the face) straight at what the reticle is on (`ComputeLaunchDirection`, pure), at the bow's speed times
+  the draw's power: the power builds from 0.3 at the shortest draw (0.25 s) to full at one second
+  (`UItemFragment_RangedWeapon::GetDrawPower`), and gravity drops the arrow with distance, more for a weak draw. There is
+  no aim assist (the user, 2026-11-08: the player aims over a far target; what matters is that the aim is true from the
+  player's view); the server logs each shot's start and direction. On the range, 1.5 m beside the posts' line, the
+  reticle on each post's face, a full draw (6000 uu/s) stuck 11.5 uu under the reticle at 10 m and 49.7 at 20 m (the
+  drop from the bow, 11.2 and 49.6), within 1.4 uu aside; seen from the aim camera the 20 m hit is 0.003 degrees aside of
+  the reticle and 1.3 below it, straight under. At 40 m a full draw drops 2.1 m (it met the floor at 33 m aiming at the
+  post's face 1.5 m up); a half draw (0.5 s, 3200 uu/s) drops 40 uu at 10 m. Test
+  `VoxelCharacter.Combat.LaunchDirection`.
 
 ### Death and respawn
 
@@ -360,10 +398,11 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   Blueprint's description: a wiring change rewires every layer in place on the next run). Montages play in the slot
   above, over the stance. `ABP_VCLayer_Bow`
   (ranged combat plan B4) also aims: `UVCAnimLayerInstance` plays the body's montages in the layer's own
-  slots (`bUseMainInstanceMontageEvaluationData`) and copies the body's `AimPitch` and `AimYaw` and its montage weight in
-  the `UpperBody` slot each update; the bow idle follows the view through the stand aim offset, the draw and the release
-  play in the `UpperBody` slot inside the layer (the upper body only, so the legs keep walking), and the drawn aim
-  offset on that slot, weighted by its montage, points the drawn bow where the view looks.
+  slots (`bUseMainInstanceMontageEvaluationData`) and copies the body's `AimPitch`, `AimYaw` and `AimRaiseWeight` and its
+  montage weight in the `UpperBody` slot each update; the bow idle follows the view through the stand aim offset inside
+  the stance; an aim branch over the stance, in mesh space (G160), plays the raised bow, the `UpperBody` slot (the draw
+  and the release, the upper body only, so the legs keep walking) and the drawn aim offset that points the bow where the
+  view looks, weighted by `DrawnAimWeight` (the raise or the montage, the larger; `LAYER_VERSION` `stance-v4`).
 - **Action montages.** `UVCActionMontageComponent` (on both character classes) plays an action from the
   `UVCActionAnimSet` of what the character holds: `ChooseAttack` steps through the set's combo within its window and
   picks the play rate that fits one swing into an attack's interval; `PlayActionLocal` plays on this machine (a dig or a
@@ -411,7 +450,7 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   - Hands: an action set with `bOffHandIK` puts the left wrist at `OffHandGrip`, a point in `hand_r`'s space, on the
     handle 20 cm from the main hand (the TwoHand set (0, 2, 20); the Tool set's turned with the pickaxes' tilted grip,
     G147); the elbow keeps its plane. A set with `bHasDrawnGrip` re-seats the main hand's item at `DrawnGrip` while its
-    Draw plays (the bow: "The bow" above).
+    Draw plays (none since G161: the bow's one fit holds at rest and drawn, "The bow" above).
   - `vc.Anim.FootIK`, `vc.Anim.SprintPace`, `vc.Anim.LookAt` and `vc.Anim.HandIK` switch each off for an A/B;
     `vc.Anim.Debug 1` draws each character's look-at target and weights and turns on the engine's foot placement draw.
     `Scripts/setup_character_ik.py` builds the chain and the play rate; a crouched character has no pose yet (G140).
@@ -910,9 +949,9 @@ Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, World
 `Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
-and `Combat.AimCameraLocation` (C3); the sheaths' `EquipmentLoop.SheathSlots`, `SheathActionSet` (the set follows the
-drawn weapon, R and X, the snapshot's drawn state), `SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip`
-(the equipment sheathing plan's S2-S4). The feel is judged by hand on `/Game/PluginTesting/Tests/Character/CharacterTest`
+and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchDirection` (G159) and `Anim.AimRaise` (D76); the sheaths'
+`EquipmentLoop.SheathSlots`, `SheathActionSet` (the set follows the drawn weapon, R and X, the snapshot's drawn state),
+`SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip` (the equipment sheathing plan's S2-S4). The feel is judged by hand on `/Game/PluginTesting/Tests/Character/CharacterTest`
 (the plan's C0; `Scripts/setup_character_test.py` builds it: a flat floor with a measured lane, block steps and a ramp,
 a shooting range and a kit that hands out every held item): the game module's `vox.Lane` runs the lane hands-free with
 the foot slide per leg, `vox.Stop` measures a stop, `vox.FootSlide` the planted feet's drift; the QA rows are area F13.

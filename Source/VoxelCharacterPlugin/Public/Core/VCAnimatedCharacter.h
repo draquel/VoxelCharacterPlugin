@@ -50,4 +50,10 @@ public:
 	 * @return The set, or null for a body that plays the Mannequin's graph
 	 */
 	virtual const UVCLocomotionAnimSet* GetAnimLocomotionSet() const { return nullptr; }
+
+	/**
+	 * Whether the character aims a ranged weapon (the bow raised, AVCCharacterBase::IsAiming).
+	 * @return False for a character that never aims
+	 */
+	virtual bool IsAnimAiming() const { return false; }
 };
