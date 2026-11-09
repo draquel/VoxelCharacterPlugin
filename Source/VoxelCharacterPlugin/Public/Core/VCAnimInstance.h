@@ -96,6 +96,9 @@ struct FVCAnimInput
 	bool bSprintPaceEnabled = true;
 	bool bLookAtEnabled = true;
 	bool bHandIKEnabled = true;
+
+	/** vc.Anim.Stance: 0 no held stance, 1 the static idle over the upper body (as before C2), 2 the moving stance. */
+	int32 StanceMode = 2;
 };
 
 /**
@@ -282,6 +285,18 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	float FootBoneIKAlpha = 0.f;
 
+	/**
+	 * How far a held item's stance layer lays its upper body over the locomotion (the character refinement plan's C2, D72):
+	 * 1 on the ground, alive and not downed, not swimming or flying; StanceSprintWeight while sprinting (the sprint's arms
+	 * show through); 0 otherwise and with vc.Anim.Stance 0; eased at IKBlendSpeed. The layer copies it into its blend's weight.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float StanceWeight = 0.f;
+
+	/** vc.Anim.Stance as of the last update (the layer plays its stance blend space at speed 0 under mode 1). */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	int32 StanceMode = 2;
+
 	// ==================== A body's own locomotion (character animation P7) ====================
 
 	/** The body's locomotion blend space by speed (UVCLocomotionAnimSet::Locomotion), or null: the creature template plays it. */
@@ -347,6 +362,10 @@ public:
 	/** How fast the IK alphas move toward on or off (per second): 8 turns one fully in an eighth of a second. */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0"))
 	float IKBlendSpeed = 8.f;
+
+	/** StanceWeight while sprinting: how much of the held stance stays over the sprint's arms (C2). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0", ClampMax = "1"))
+	float StanceSprintWeight = 0.35f;
 
 	/** The locomotion's top authored speed (uu/s): the walk/run blend space's jog, above which the steps quicken. */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0"))

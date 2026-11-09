@@ -311,6 +311,34 @@ content scripts the phase changed (never while another editor runs, G150).
   `vc.Anim.Stance`. Judged on the lane with each item, both bodies, walk / run / sprint / turn. Docs: "Animation" ›
   Layers.
 
+**C2 result (2026-11-08; VoxelCharacterPlugin, `setup_character_layers.py`).**
+- **The moving stance.** Each stance layer plays its set's blend space `BS_VCStance_<Set>` (the pack's own idle, walk
+  and jog for that weapon: Sword & Shield's `SSH` and `2H`, Bow and Arrow's `A` set, at 0, 200 and 500 uu/s,
+  `STANCE_SPEEDS`; the Tool set shares `2H`'s) at the body's speed, laid over the base pose by a layered blend ramped
+  over three bones from `spine_01` (`STANCE_BLEND_DEPTH`), in local space (mesh-space rotation off), weighted by the
+  body's `StanceWeight`. On the lane at a run with the sword, side by side with `vc.Anim.Stance 1` (the static idle as
+  before): the static torso stands upright with both arms held out in the guard, stiff over running legs; the moving
+  one leans into the run, the free arm swings, the sword arm trails, on both bodies (`Saved/Screenshots/Claudius/
+  stance_sb_static_side2.png` against `stance_sb_moving_side2.png`, `stance_k_sword_moving_side2.png`); the pickaxe
+  runs carried in both hands, the bow arm swings with the bow. Unarmed is unchanged (no layer).
+- **The weight**: `UVCAnimInstance::StanceWeight` (1 on the ground, alive and not downed, not swimming or flying;
+  `StanceSprintWeight` 0.35 at a sprint; 0 otherwise and under `vc.Anim.Stance 0`), eased at `IKBlendSpeed`;
+  `StanceMode` kept for the layer. `UVCAnimLayerInstance` is every layer's parent now and copies `Speed` (0 under mode
+  1) and `StanceWeight`. Test `VoxelCharacter.Anim.StanceWeight`.
+- **GASP's lean** was not re-applied: with the ramp the lower spine keeps the locomotion's lean and the upper body's
+  own jog clip leans too; the shots show the lean. If a later pass wants GASP's additive on the chest it goes after the
+  layer.
+- **The script**: `make_stance_blend_space` (the blend space on the clips' own skeleton: a blend space takes samples of
+  its skeleton only, and it plays on the body through compatibility as the sequences do; the first attempt on the body's
+  skeleton refused every sample, and the four assets had to be deleted on disk with the editor closed since a deleted
+  loaded asset is saved back); `make_layer` rewires a layer whose `blueprint_description` is not `LAYER_VERSION`
+  (every node but the root and the input pose removed, `reparent_blueprint` to `UVCAnimLayerInstance`), the
+  `BlendWeights` pin exposed and wired. Python gotchas met: an AnimBlueprint's `parent_class`, a blend space's
+  `blend_samples` and a Skeleton's `Sockets` are not readable, `Transform.equals` takes one argument; the script logs
+  a traceback on a failure now. A second run keeps all 73 assets.
+- After the merge every checkout re-runs `setup_character_layers.py` (the four blend spaces and the rewired layers live
+  in the `CharacterAnimation` pack).
+
 ### C3: Aiming (VoxelCharacterPlugin, CommonGameFramework if the tag goes there; L)
 - `State.Aiming`, the aim ability or tag, `bWantsToAim`, `SetViewMode` fix, the camera mode and the pop, the reticle,
   `ComputeAimRay`, the RMB release binding. Tests above; the replication test gets an aiming step. Docs: "The bow",

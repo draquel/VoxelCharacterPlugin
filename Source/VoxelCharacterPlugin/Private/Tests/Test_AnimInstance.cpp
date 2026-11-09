@@ -669,4 +669,60 @@ bool FVCAnim_LayerInstance::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// The held stance's weight (character refinement plan C2, D72): 1 on the ground, StanceSprintWeight at a sprint, 0 in the
+// air, in the water, dead, downed or with vc.Anim.Stance 0; it eases at IKBlendSpeed and never snaps.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCAnim_StanceWeight, "VoxelCharacter.Anim.StanceWeight", EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+bool FVCAnim_StanceWeight::RunTest(const FString& Parameters)
+{
+	UVCAnimInstance* Anim = VCAnimTestHelpers::NewAnimInstance();
+	Anim->AddToRoot();
+	const float Dt = 1.f / 60.f;
+	FVCAnimInput In;
+	In.DeltaSeconds = Dt;
+	In.bOnGround = true;
+	In.StanceMode = 2;
+
+	Anim->ComputeValues(In);
+	TestTrue(TEXT("One update eases, it does not snap"), Anim->StanceWeight > 0.f && Anim->StanceWeight < 1.f);
+	TestTrue(TEXT("The step is IKBlendSpeed x dt"), FMath::IsNearlyEqual(Anim->StanceWeight, Anim->IKBlendSpeed * Dt, 1.0e-4f));
+	for (int32 i = 0; i < 60; ++i) { Anim->ComputeValues(In); }
+	TestTrue(TEXT("On the ground: 1"), FMath::IsNearlyEqual(Anim->StanceWeight, 1.f));
+	TestEqual(TEXT("The mode is kept for the layer"), Anim->StanceMode, 2);
+
+	In.bSprinting = true;
+	for (int32 i = 0; i < 60; ++i) { Anim->ComputeValues(In); }
+	TestTrue(TEXT("Sprinting: the sprint weight"), FMath::IsNearlyEqual(Anim->StanceWeight, Anim->StanceSprintWeight));
+	In.bSprinting = false;
+
+	FVCAnimInput Air = In;
+	Air.bOnGround = false;
+	Air.bFalling = true;
+	for (int32 i = 0; i < 60; ++i) { Anim->ComputeValues(Air); }
+	TestTrue(TEXT("In the air: 0"), FMath::IsNearlyZero(Anim->StanceWeight));
+
+	for (int32 i = 0; i < 60; ++i) { Anim->ComputeValues(In); }
+	FVCAnimInput Swim = In;
+	Swim.bSwimming = true;
+	for (int32 i = 0; i < 60; ++i) { Anim->ComputeValues(Swim); }
+	TestTrue(TEXT("Swimming: 0"), FMath::IsNearlyZero(Anim->StanceWeight));
+
+	for (int32 i = 0; i < 60; ++i) { Anim->ComputeValues(In); }
+	FVCAnimInput Downed = In;
+	Downed.bDowned = true;
+	for (int32 i = 0; i < 60; ++i) { Anim->ComputeValues(Downed); }
+	TestTrue(TEXT("Downed: 0"), FMath::IsNearlyZero(Anim->StanceWeight));
+
+	for (int32 i = 0; i < 60; ++i) { Anim->ComputeValues(In); }
+	FVCAnimInput Off = In;
+	Off.StanceMode = 0;
+	for (int32 i = 0; i < 60; ++i) { Anim->ComputeValues(Off); }
+	TestTrue(TEXT("vc.Anim.Stance 0: 0"), FMath::IsNearlyZero(Anim->StanceWeight));
+	TestEqual(TEXT("The mode 0 is kept"), Anim->StanceMode, 0);
+
+	Anim->RemoveFromRoot();
+	return true;
+}
+
 #endif // WITH_AUTOMATION_TESTS
