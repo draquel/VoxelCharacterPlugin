@@ -259,6 +259,7 @@ bool UVCAnimInstance::GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) co
 		OutInput.ViewMode = Animated->GetAnimViewMode();
 		OutInput.ActionSet = Animated->GetAnimActionSet();
 		OutInput.LocomotionSet = Animated->GetAnimLocomotionSet();
+		OutInput.bAiming = Animated->IsAnimAiming();
 		if (const UVCCombatComponent* Combat = Animated->GetAnimCombatComponent())
 		{
 			OutInput.bDead = ICGFDamageableInterface::Execute_IsDead(Combat);
@@ -400,6 +401,8 @@ void UVCAnimInstance::ComputeValues(const FVCAnimInput& Input)
 	const bool bStanceOn = Input.StanceMode != 0 && bAble && Input.bOnGround && !Input.bSwimming && !Input.bFlying;
 	const float StanceTarget = !bStanceOn ? 0.f : (Input.bSprinting ? StanceSprintWeight : 1.f);
 	StanceWeight = FMath::FInterpConstantTo(StanceWeight, StanceTarget, DeltaSeconds, IKBlendSpeed);
+	// The aim raises the bow over AimRaiseTime and lowers it as fast (the user's flow: aim raises, the draw pulls).
+	AimRaiseWeight = FMath::FInterpConstantTo(AimRaiseWeight, Input.bAiming && bAble ? 1.f : 0.f, DeltaSeconds, 1.f / AimRaiseTime);
 	const UVCLocomotionAnimSet* Locomotion = Input.LocomotionSet;
 	const float ReferenceSpeed = Locomotion && Locomotion->ReferenceSpeed > 0.f ? Locomotion->ReferenceSpeed : LocomotionReferenceSpeed;
 	LocomotionPlayRate = Input.bSprintPaceEnabled && Input.bOnGround ? ComputeLocomotionPlayRate(Speed, ReferenceSpeed) : 1.f;

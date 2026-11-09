@@ -2,6 +2,7 @@
 
 #include "Animation/VCActionMontageComponent.h"
 #include "Core/VCAnimatedCharacter.h"
+#include "Core/VCAnimInstance.h"
 #include "Core/VCGameplayTags.h"
 #include "Combat/VCCombatComponent.h"
 #include "Interfaces/CGFDamageableInterface.h"
@@ -124,7 +125,14 @@ float UVCActionMontageComponent::PlayActionLocal(EVCAnimAction Action, int32 Var
 	{
 		return 0.f;
 	}
-	return AnimInstance->Montage_Play(Montage, FMath::Max(PlayRate, 0.01f));
+	const float Length = AnimInstance->Montage_Play(Montage, FMath::Max(PlayRate, 0.01f));
+	// Raised by the aim already: the draw pulls the string from there (its first section is the raise).
+	const UVCAnimInstance* Body = Cast<UVCAnimInstance>(AnimInstance);
+	if (Action == EVCAnimAction::Draw && Length > 0.f && Body && Body->AimRaiseWeight > 0.5f && Montage->CompositeSections.Num() >= 3)
+	{
+		AnimInstance->Montage_JumpToSection(Montage->GetSectionName(1), Montage);
+	}
+	return Length;
 }
 
 void UVCActionMontageComponent::PlayActionForEveryone(EVCAnimAction Action, int32 Variant, float PlayRate, bool bOwnerPlayedIt)

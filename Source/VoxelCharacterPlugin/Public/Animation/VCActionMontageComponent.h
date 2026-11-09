@@ -70,6 +70,8 @@ public:
 
 	/**
 	 * Plays an action's montage on this machine only. A repeated non-attack action that is still playing keeps playing.
+	 * A draw (a montage of three sections or more: the raise, the draw, the hold) starts at its second section when the
+	 * aim has already raised the weapon (UVCAnimInstance::AimRaiseWeight past one half), so the bow is not raised twice.
 	 * @param Action   The action
 	 * @param Variant  The combo index, or an EVCHitDirection
 	 * @param PlayRate Play rate

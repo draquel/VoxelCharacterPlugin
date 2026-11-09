@@ -13,7 +13,9 @@
 #include "CollisionShape.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "GameFramework/Character.h"
 #include "GameFramework/Pawn.h"
+#include "Components/SkeletalMeshComponent.h"
 
 #if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
 #include "Components/EquipmentManagerComponent.h"
@@ -177,7 +179,34 @@ bool UVCRangedAttackAbility::ReleaseDraw(UAbilitySystemComponent* ASC)
 	return false;
 }
 
-bool UVCRangedAttackAbility::ComputeShot(const AActor* Avatar, FVector& OutStart, FVector& OutDirection) const
+FVector UVCRangedAttackAbility::ComputeArrowStart(const AActor* Avatar) const
+{
+	if (!Avatar)
+	{
+		return FVector::ZeroVector;
+	}
+	FVector Eyes;
+	FRotator View;
+	Avatar->GetActorEyesViewPoint(Eyes, View);
+	// The drawn bow's grip where this machine poses the body: a dedicated server never does (its bones stand still), nor
+	// does a body hidden in first person or out of every view, whose bones are not refreshed.
+	const ACharacter* Character = Cast<ACharacter>(Avatar);
+	const USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : nullptr;
+	if (Mesh && Avatar->GetNetMode() != NM_DedicatedServer && Mesh->WasRecentlyRendered(0.2f) && Mesh->GetBoneIndex(BowHandBone) != INDEX_NONE)
+	{
+		return Mesh->GetBoneLocation(BowHandBone) + View.RotateVector(BowGripOffset);
+	}
+	return Eyes + View.RotateVector(ArrowStartOffset);
+}
+
+FVector UVCRangedAttackAbility::ComputeLaunchDirection(const FVector& Start, const FVector& AimPoint, const FVector& ViewDirection, float MinDistance)
+{
+	const FVector ToAim = AimPoint - Start;
+	const FVector Direction = ToAim.GetSafeNormal();
+	return ToAim.Size() > MinDistance && FVector::DotProduct(Direction, ViewDirection) > 0.5 ? Direction : ViewDirection;
+}
+
+bool UVCRangedAttackAbility::ComputeShot(const AActor* Avatar, FVector& OutStart, FVector& OutDirection, FVector* OutAimPoint) const
 {
 	UWorld* World = Avatar ? Avatar->GetWorld() : nullptr;
 	if (!World)
@@ -188,7 +217,7 @@ bool UVCRangedAttackAbility::ComputeShot(const AActor* Avatar, FVector& OutStart
 	FRotator View;
 	Avatar->GetActorEyesViewPoint(Eyes, View);
 	const FVector ViewDirection = View.Vector();
-	OutStart = Eyes + View.RotateVector(ArrowStartOffset);
+	OutStart = ComputeArrowStart(Avatar);
 
 	// What the reticle is on (D74, G156): the aim ray starts at the aim camera while the character aims in third person
 	// (the same origin the owner's screen centre has, computed alike here), at the eyes otherwise. Terrain and props
@@ -200,11 +229,14 @@ bool UVCRangedAttackAbility::ComputeShot(const AActor* Avatar, FVector& OutStart
 	const FVector Far = RayOrigin + RayDirection * AimRange;
 	const FVector AimPoint = World->SweepSingleByChannel(Hit, RayOrigin, Far, FQuat::Identity, ECC_Pawn, FCollisionShape::MakeSphere(4.f), Params)
 		? Hit.ImpactPoint : Far;
+	if (OutAimPoint)
+	{
+		*OutAimPoint = AimPoint;
+	}
 
-	// An aim point at the bow or behind it (a wall at the face) gives no direction: fly along the view.
-	const FVector ToAim = AimPoint - OutStart;
-	OutDirection = (ToAim.Size() > 2.0 * ArrowStartOffset.Size() && FVector::DotProduct(ToAim.GetSafeNormal(), ViewDirection) > 0.5)
-		? ToAim.GetSafeNormal() : ViewDirection;
+	// From the bow straight at what the reticle is on (G159): the arrow leaves on the reticle's line and gravity drops it
+	// with distance, so the player aims over a far target; an aim point at the bow or behind it flies along the view.
+	OutDirection = ComputeLaunchDirection(OutStart, AimPoint, ViewDirection, 2.f * ArrowStartOffset.Size());
 	return true;
 }
 
@@ -395,8 +427,9 @@ bool UVCRangedAttackAbility::Shoot(AActor* Avatar, float DrawSeconds)
 	{
 		Weapon.Equipment->ApplyDurabilityLoss(CGFGameplayTags::Equipment_Slot_MainHand, Durability->DegradeRate);
 	}
-	UE_LOG(LogVoxelCharacter, Log, TEXT("%s shoots after %.2f s: power %.2f, %.0f uu/s, %s"), *GetNameSafe(Avatar), DrawSeconds, Power,
-		Ranged->LaunchSpeed * Power, *GetNameSafe(Arrow));
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s shoots after %.2f s: power %.2f, %.0f uu/s, %s from (%.0f, %.0f, %.0f) along (%.3f, %.3f, %.3f)"),
+		*GetNameSafe(Avatar), DrawSeconds, Power, Ranged->LaunchSpeed * Power, *GetNameSafe(Arrow), Start.X, Start.Y, Start.Z,
+		Direction.X, Direction.Y, Direction.Z);
 	return Arrow != nullptr;
 #else
 	return false;

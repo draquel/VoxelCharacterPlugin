@@ -75,6 +75,7 @@ public:
 	virtual EVCViewMode GetAnimViewMode() const override;
 	virtual FGameplayTag GetAnimActionSet() const override { return ActiveActionSet; }
 	virtual const UVCCombatComponent* GetAnimCombatComponent() const override;
+	virtual bool IsAnimAiming() const override { return IsAiming(); }
 
 	/**
 	 * The action set for what a character holds in its main hand: the item's own set when it names one under

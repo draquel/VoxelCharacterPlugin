@@ -34,9 +34,21 @@ class VOXELCHARACTERPLUGIN_API UVCRangedAttackAbility : public UGameplayAbility
 public:
 	UVCRangedAttackAbility();
 
-	/** Where the arrow starts, from the eyes in the view's frame (X ahead, Y right, Z up): ahead of the face, by the bow's hand. */
+	/**
+	 * Where the arrow starts when this machine does not pose the shooter (a dedicated server, first person, a body out of
+	 * sight): from the eyes in the view's frame (X ahead, Y right, Z up), where the drawn bow's grip is in third person
+	 * (measured on CharacterTest: (76, 4, -6) on the low-poly body, (80, 4, -12) on Kellan, steady over +-15 degrees of pitch).
+	 */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat")
-	FVector ArrowStartOffset = FVector(50.f, -10.f, -20.f);
+	FVector ArrowStartOffset = FVector(75.f, 4.f, -8.f);
+
+	/** The bone the bow is held on (the bow's AttachBoneOverride): the arrow leaves its grip while the body is posed here. */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat")
+	FName BowHandBone = TEXT("hand_l");
+
+	/** From BowHandBone to the arrow's rest on the drawn bow, in the view's frame (X ahead, Y right, Z up). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat")
+	FVector BowGripOffset = FVector(8.f, 0.f, 0.f);
 
 	/** How far the aim reaches (uu): the arrow flies toward what the view meets within it, else toward the view's point there. */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "100"))
@@ -78,15 +90,36 @@ public:
 	static bool ReleaseDraw(UAbilitySystemComponent* ASC);
 
 	/**
-	 * Where an avatar's arrow starts and which way it flies: from ArrowStartOffset toward the point its view meets within
-	 * AimRange (a thin sphere along the eyes' view on the Pawn channel, the avatar ignored), so the arrow converges on what
-	 * the crosshair shows.
-	 * @param Avatar The shooter
-	 * @param OutStart The arrow's start
+	 * Where an avatar's arrow starts (ComputeArrowStart) and which way it flies: straight at the point the aim ray meets
+	 * within AimRange (UVCCombatStatics::ComputeAimRay, a thin sphere on the Pawn channel, the avatar ignored), so it
+	 * leaves on the reticle's line; gravity then drops it with distance, more for a weaker draw (no aim assist: the player
+	 * aims over a far target). ComputeLaunchDirection decides the direction.
+	 * @param Avatar       The shooter
+	 * @param OutStart     The arrow's start
 	 * @param OutDirection Its unit direction
+	 * @param OutAimPoint  Optional: the point aimed at
 	 * @return False without a world
 	 */
-	bool ComputeShot(const AActor* Avatar, FVector& OutStart, FVector& OutDirection) const;
+	bool ComputeShot(const AActor* Avatar, FVector& OutStart, FVector& OutDirection, FVector* OutAimPoint = nullptr) const;
+
+	/**
+	 * Pure: the arrow's launch direction from its start toward the aim point, or along the view when the point is at the
+	 * bow or behind it (a wall at the face): nearer than MinDistance, or more than 60 degrees off the view.
+	 * @param Start          Where the arrow leaves
+	 * @param AimPoint       What the reticle is on
+	 * @param ViewDirection  The view's unit direction
+	 * @param MinDistance    The nearest aim point the arrow flies at (uu)
+	 * @return The unit direction
+	 */
+	static FVector ComputeLaunchDirection(const FVector& Start, const FVector& AimPoint, const FVector& ViewDirection, float MinDistance);
+
+	/**
+	 * Where an avatar's arrow leaves: the drawn bow's grip (BowHandBone plus BowGripOffset) when this machine poses the
+	 * shooter's body (not a dedicated server, the body drawn within the last moment), else the eyes plus ArrowStartOffset.
+	 * @param Avatar The shooter
+	 * @return The start (the avatar's location without a view)
+	 */
+	FVector ComputeArrowStart(const AActor* Avatar) const;
 
 	/** @return True between an activation and its release */
 	bool IsDrawing() const { return bDrawing; }

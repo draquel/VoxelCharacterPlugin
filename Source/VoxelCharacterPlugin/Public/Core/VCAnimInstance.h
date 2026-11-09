@@ -99,6 +99,9 @@ struct FVCAnimInput
 
 	/** vc.Anim.Stance: 0 no held stance, 1 the static idle over the upper body (as before C2), 2 the moving stance. */
 	int32 StanceMode = 2;
+
+	/** The character aims a ranged weapon (IVCAnimatedCharacter::IsAnimAiming): the bow raised. */
+	bool bAiming = false;
 };
 
 /**
@@ -297,6 +300,14 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	int32 StanceMode = 2;
 
+	/**
+	 * How far the aim raises a held ranged weapon (0 to 1): toward 1 while the character aims (the bow up, the string
+	 * undrawn; a draw then starts from there), 0 otherwise and dead or downed, moving at 1 / AimRaiseTime a second. A layer
+	 * with a raised pose blends it in by this (ABP_VCLayer_Bow).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	float AimRaiseWeight = 0.f;
+
 	// ==================== A body's own locomotion (character animation P7) ====================
 
 	/** The body's locomotion blend space by speed (UVCLocomotionAnimSet::Locomotion), or null: the creature template plays it. */
@@ -362,6 +373,10 @@ public:
 	/** How fast the IK alphas move toward on or off (per second): 8 turns one fully in an eighth of a second. */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0"))
 	float IKBlendSpeed = 8.f;
+
+	/** Seconds the aim takes to raise a held ranged weapon fully, and to lower it (AimRaiseWeight). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0.01"))
+	float AimRaiseTime = 0.3f;
 
 	/** StanceWeight while sprinting: how much of the held stance stays over the sprint's arms (C2). */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0", ClampMax = "1"))
