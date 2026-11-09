@@ -56,6 +56,8 @@ namespace VCArrowTestHelpers
 		if (Arrow)
 		{
 			Arrow->FinishSpawning(Transform);
+			// The flights measure gravity and hits: the test world's weather would push them aside (WindRule has the wind).
+			Arrow->GetArrowMovement()->WindResponse = 0.f;
 		}
 		return Arrow;
 	}
@@ -145,6 +147,45 @@ bool FVCArrow_GravityRule::RunTest(const FString& Parameters)
 	const FVCArrowShot Half = MakeArrowShot(20.f, 0.5f);
 	TestEqual(TEXT("A shot's damage scales by the draw"), Half.GetDamage(), 10.f);
 	TestEqual(TEXT("A full draw: the bow's damage"), MakeArrowShot(20.f, 1.f).GetDamage(), 20.f);
+	return true;
+}
+
+// The wind on an arrow (D83): across the launch heading in the local horizontal, the arrow's speed takes the cross wind's
+// at WindResponse a second; head and tail winds and the vertical are left alone. A full draw over 30 m in the weather's
+// strong wind drifts about 28 uu, and the drift never outruns the wind.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCArrow_WindRule, "VoxelCharacter.Combat.Arrow.WindRule", VC_ARROW_FLAGS)
+bool FVCArrow_WindRule::RunTest(const FString& Parameters)
+{
+	const FVector V(6000, 0, 0);
+	const FVector Heading(1, 0, 0);
+	const FVector Up(0, 0, 1);
+	const FVector Cross(0, 600, 0);
+	const float K = GetDefault<UVCArrowMovementComponent>()->WindResponse;
+	TestTrue(TEXT("Still air: no push"), UVCArrowMovementComponent::ComputeWindAcceleration(V, FVector::ZeroVector, Heading, Up, K).IsNearlyZero(1e-6));
+	TestTrue(TEXT("A tail wind: no push"), UVCArrowMovementComponent::ComputeWindAcceleration(V, FVector(600, 0, 0), Heading, Up, K).IsNearlyZero(1e-6));
+	TestTrue(TEXT("A cross wind: the response times the wind, across"),
+		UVCArrowMovementComponent::ComputeWindAcceleration(V, Cross, Heading, Up, K).Equals(FVector(0, 600.0 * K, 0), 1e-3));
+	TestTrue(TEXT("Falling: the drop is gravity's alone"),
+		UVCArrowMovementComponent::ComputeWindAcceleration(FVector(6000, 0, -2000), FVector::ZeroVector, Heading, Up, K).IsNearlyZero(1e-6));
+	TestTrue(TEXT("No response: no push"), UVCArrowMovementComponent::ComputeWindAcceleration(V, Cross, Heading, Up, 0.f).IsZero());
+	TestTrue(TEXT("No heading yet: no push"), UVCArrowMovementComponent::ComputeWindAcceleration(V, Cross, FVector::ZeroVector, Up, K).IsZero());
+	TestTrue(TEXT("Moving across with the wind: no push"),
+		UVCArrowMovementComponent::ComputeWindAcceleration(FVector(6000, 600, 0), Cross, Heading, Up, K).IsNearlyZero(1e-6));
+
+	// 30 m at a full draw, in 1/60 s steps as the arrow flies; then on for 10 s.
+	FVector Location = FVector::ZeroVector, Velocity = V;
+	while (Location.X < 3000.0)
+	{
+		Velocity += UVCArrowMovementComponent::ComputeWindAcceleration(Velocity, Cross, Heading, Up, K) * ArrowStep;
+		Location += Velocity * ArrowStep;
+	}
+	TestTrue(*FString::Printf(TEXT("About 28 uu aside at 30 m (%.1f)"), Location.Y), FMath::IsNearlyEqual(Location.Y, 28.0, 3.0));
+	TestTrue(*FString::Printf(TEXT("The bow's speed along the heading kept (%.1f)"), Velocity.X), FMath::IsNearlyEqual(Velocity.X, 6000.0, 1e-3));
+	for (int32 Step = 0; Step < 600; ++Step)
+	{
+		Velocity += UVCArrowMovementComponent::ComputeWindAcceleration(Velocity, Cross, Heading, Up, K) * ArrowStep;
+	}
+	TestTrue(*FString::Printf(TEXT("Never faster across than the wind (%.1f)"), Velocity.Y), Velocity.Y > 500.0 && Velocity.Y <= 600.0);
 	return true;
 }
 

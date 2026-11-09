@@ -12,8 +12,8 @@ class UCharacterMovementComponent;
  * The third-person aim camera (the character refinement plan's C3, D73 and D74): closer, over the shoulder, a narrower
  * field, and no lag, so the camera's place follows from the pawn and the control rotation alone. That makes it
  * deterministic: the server computes the same origin for the shot's ray (UVCCombatStatics::ComputeAimRay) as the owner
- * draws, and a reticle at the screen's centre marks where the arrow lands (G156). Pushed while the character aims
- * (AVCCharacterBase::IsAiming), popped when it stops.
+ * draws, and a reticle at the screen's centre marks the line the arrow leaves on (G156, D83: gravity and the wind take it
+ * off that line, nothing else). Pushed while the character aims (AVCCharacterBase::IsAiming), popped when it stops.
  */
 UCLASS()
 class VOXELCHARACTERPLUGIN_API UVCAimCameraMode : public UVCThirdPersonCameraMode

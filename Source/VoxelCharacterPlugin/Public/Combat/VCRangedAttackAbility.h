@@ -18,7 +18,7 @@ class UAbilitySystemComponent;
  * as the ability system component's input release (ReleaseDraw), which travels on the same channel as the activation
  * request and cannot overtake it. The server times the draw between the two, so a client cannot shoot faster than its
  * draw. At the release a draw shorter than the weapon's minimum is no shot; otherwise the server uses up one arrow from
- * the inventory, spawns it (AVCArrowProjectile::SpawnArrow) at the bow toward what the view meets, wears the bow by its
+ * the inventory, spawns it (AVCArrowProjectile::SpawnArrow) along the reticle's line (ComputeShot, D83), wears the bow by its
  * Durability fragment's DegradeRate, and sends the release to everyone else. Without an arrow the draw does not start
  * (CanStartDraw: the owner's check and the server's), and a release that finds none left is refused.
  *
@@ -35,24 +35,12 @@ public:
 	UVCRangedAttackAbility();
 
 	/**
-	 * Where the arrow starts when this machine does not pose the shooter (a dedicated server, first person, a body out of
-	 * sight): from the eyes in the view's frame (X ahead, Y right, Z up), where the drawn bow's grip is in third person
-	 * (measured on CharacterTest: (76, 4, -6) on the low-poly body, (80, 4, -12) on Kellan, steady over +-15 degrees of pitch).
+	 * Where the arrow is nocked, from the eyes in the view's frame (X ahead, Y right, Z up): the drawn bow's grip in third
+	 * person (measured on CharacterTest: (76, 4, -6) on the low-poly body, (80, 4, -12) on Kellan, steady over +-15 degrees
+	 * of pitch). The arrow starts on the aim ray abreast of this point (D83, ComputeLaunchStart).
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat")
 	FVector ArrowStartOffset = FVector(75.f, 4.f, -8.f);
-
-	/** The bone the bow is held on (the bow's AttachBoneOverride): the arrow leaves its grip while the body is posed here. */
-	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat")
-	FName BowHandBone = TEXT("hand_l");
-
-	/** From BowHandBone to the arrow's rest on the drawn bow, in the view's frame (X ahead, Y right, Z up). */
-	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat")
-	FVector BowGripOffset = FVector(8.f, 0.f, 0.f);
-
-	/** How far the aim reaches (uu): the arrow flies toward what the view meets within it, else toward the view's point there. */
-	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "100"))
-	float AimRange = 20000.f;
 
 	/** Damage multiplier for a bow worn to zero durability that was not destroyed (as the melee attack's). */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0", ClampMax = "1"))
@@ -90,36 +78,37 @@ public:
 	static bool ReleaseDraw(UAbilitySystemComponent* ASC);
 
 	/**
-	 * Where an avatar's arrow starts (ComputeArrowStart) and which way it flies: straight at the point the aim ray meets
-	 * within AimRange (UVCCombatStatics::ComputeAimRay, a thin sphere on the Pawn channel, the avatar ignored), so it
-	 * leaves on the reticle's line; gravity then drops it with distance, more for a weaker draw (no aim assist: the player
-	 * aims over a far target). ComputeLaunchDirection decides the direction.
+	 * Where an avatar's arrow starts and which way it flies (D83): along the aim ray (UVCCombatStatics::ComputeAimRay, the
+	 * reticle's line, the same on the owner and the server, D74) from the ray's point abreast of the nocked arrow
+	 * (ArrowStartOffset from the eyes). Nothing the ray meets changes the shot, so the reticle is the launch line at every
+	 * range and only gravity, wind and the shooter's own motion take the arrow off it (no aim assist: the player holds over
+	 * for range and off for wind). A wall between the eyes and that point starts the arrow at the wall.
 	 * @param Avatar       The shooter
 	 * @param OutStart     The arrow's start
-	 * @param OutDirection Its unit direction
-	 * @param OutAimPoint  Optional: the point aimed at
+	 * @param OutDirection Its unit direction (the aim ray's)
 	 * @return False without a world
 	 */
-	bool ComputeShot(const AActor* Avatar, FVector& OutStart, FVector& OutDirection, FVector* OutAimPoint = nullptr) const;
+	bool ComputeShot(const AActor* Avatar, FVector& OutStart, FVector& OutDirection) const;
 
 	/**
-	 * Pure: the arrow's launch direction from its start toward the aim point, or along the view when the point is at the
-	 * bow or behind it (a wall at the face): nearer than MinDistance, or more than 60 degrees off the view.
-	 * @param Start          Where the arrow leaves
-	 * @param AimPoint       What the reticle is on
-	 * @param ViewDirection  The view's unit direction
-	 * @param MinDistance    The nearest aim point the arrow flies at (uu)
-	 * @return The unit direction
+	 * Pure: the point on the aim ray abreast of the nocked arrow, its projection onto the ray (the ray's origin when the
+	 * arrow is behind it).
+	 * @param RayOrigin    The aim ray's origin (the aim camera, or the eyes)
+	 * @param RayDirection Its unit direction
+	 * @param Nock         Where the arrow is nocked (the eyes plus ArrowStartOffset)
+	 * @return The arrow's start on the ray
 	 */
-	static FVector ComputeLaunchDirection(const FVector& Start, const FVector& AimPoint, const FVector& ViewDirection, float MinDistance);
+	static FVector ComputeLaunchStart(const FVector& RayOrigin, const FVector& RayDirection, const FVector& Nock);
 
 	/**
-	 * Where an avatar's arrow leaves: the drawn bow's grip (BowHandBone plus BowGripOffset) when this machine poses the
-	 * shooter's body (not a dedicated server, the body drawn within the last moment), else the eyes plus ArrowStartOffset.
-	 * @param Avatar The shooter
-	 * @return The start (the avatar's location without a view)
+	 * Pure: the arrow's launch velocity, the bow's speed along the aim plus the shooter's own velocity (the bow moves with
+	 * the archer).
+	 * @param Direction       The unit launch direction
+	 * @param Speed           The bow's speed at this draw (uu/s)
+	 * @param ShooterVelocity The shooter's velocity (uu/s)
+	 * @return The arrow's velocity
 	 */
-	FVector ComputeArrowStart(const AActor* Avatar) const;
+	static FVector ComputeLaunchVelocity(const FVector& Direction, float Speed, const FVector& ShooterVelocity);
 
 	/** @return True between an activation and its release */
 	bool IsDrawing() const { return bDrawing; }
