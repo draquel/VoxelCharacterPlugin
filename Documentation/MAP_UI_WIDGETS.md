@@ -177,6 +177,10 @@ war above. A view of more than `TileRedrawThrottleTiles` (256) tiles redraws for
 streams an image for each. A view zoomed in to about 16 tiles across still redraws at each arrival
 (`VoxelCharacter.Map.TileRedrawThrottle`).
 
+`vc.WorldMap.Stats [reset]` logs the rebuilds since the last reset (per second, those over 2 ms, the tile arrivals and
+those deferred) and each phase's count, mean and maximum: texture fill, upload, markers, the rebuild. Insights shows the
+same phases as `VCWorldMap_*` scopes (the map scaling plan's M0, G163).
+
 ### Markers
 
 Both maps draw the markers `UVCMapMarkerRegistry` gathers around the view, at most `MaxMarkers` (minimap 24, world map 64,

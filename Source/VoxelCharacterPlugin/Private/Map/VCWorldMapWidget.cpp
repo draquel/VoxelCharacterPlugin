@@ -14,6 +14,82 @@
 #include "UObject/UObjectIterator.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/Pawn.h"
+#include "HAL/IConsoleManager.h"
+#include "HAL/PlatformTime.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
+
+// ---------------------------------------------------------------------------
+// Rebuild timing (the map scaling plan's M0, G163): what the open world map costs the game thread, by phase, and how
+// often tile arrivals rebuild it.
+// ---------------------------------------------------------------------------
+
+namespace VCWorldMapStats
+{
+	enum EPhase : int32 { Fill = 0, Upload, Markers, Rebuild, Num };
+	static const TCHAR* PhaseNames[Num] = { TEXT("texture fill"), TEXT("texture upload"), TEXT("markers"), TEXT("rebuild") };
+	static double SumMs[Num] = {};
+	static double MaxMs[Num] = {};
+	static int64 Counts[Num] = {};
+	static int64 Arrivals = 0;
+	static int64 Deferred = 0;
+	static int64 Over2Ms = 0;
+	static double SinceSeconds = FPlatformTime::Seconds();
+
+	static void Add(EPhase Phase, double Ms)
+	{
+		SumMs[Phase] += Ms;
+		MaxMs[Phase] = FMath::Max(MaxMs[Phase], Ms);
+		++Counts[Phase];
+	}
+
+	static void Reset()
+	{
+		FMemory::Memzero(SumMs, sizeof(SumMs));
+		FMemory::Memzero(MaxMs, sizeof(MaxMs));
+		FMemory::Memzero(Counts, sizeof(Counts));
+		Arrivals = Deferred = Over2Ms = 0;
+		SinceSeconds = FPlatformTime::Seconds();
+	}
+
+	/** Times a scope into a phase. */
+	struct FScope
+	{
+		EPhase Phase;
+		uint64 Start;
+		explicit FScope(EPhase InPhase) : Phase(InPhase), Start(FPlatformTime::Cycles64()) {}
+		~FScope()
+		{
+			const double Ms = FPlatformTime::ToMilliseconds64(FPlatformTime::Cycles64() - Start);
+			Add(Phase, Ms);
+			Over2Ms += (Phase == Rebuild && Ms > 2.0) ? 1 : 0;
+		}
+	};
+}
+
+// Console: vc.WorldMap.Stats [reset]
+static FAutoConsoleCommand GVCWorldMapStatsCmd(
+	TEXT("vc.WorldMap.Stats"),
+	TEXT("Log the world map's rebuilds since the last reset: per second, each phase's mean and maximum (texture fill, upload, ")
+	TEXT("markers, the rebuild), and the tile arrivals that asked for one or were deferred. 'reset' clears it."),
+	FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+	{
+		using namespace VCWorldMapStats;
+		if (Args.Num() > 0 && Args[0].Equals(TEXT("reset"), ESearchCase::IgnoreCase))
+		{
+			Reset();
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("vc.WorldMap.Stats: reset"));
+			return;
+		}
+		const double Elapsed = FMath::Max(FPlatformTime::Seconds() - SinceSeconds, 1.0e-3);
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("vc.WorldMap.Stats: %lld rebuilds in %.1f s (%.1f/s), %lld over 2 ms; %lld tile arrivals, %lld deferred"),
+			Counts[Rebuild], Elapsed, static_cast<double>(Counts[Rebuild]) / Elapsed, Over2Ms, Arrivals, Deferred);
+		for (int32 Phase = 0; Phase < Num; ++Phase)
+		{
+			const double N = static_cast<double>(FMath::Max<int64>(1, Counts[Phase]));
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("vc.WorldMap.Stats: %s: %lld, mean %.3f ms, max %.3f ms, total %.1f ms"), PhaseNames[Phase],
+				Counts[Phase], SumMs[Phase] / N, MaxMs[Phase], SumMs[Phase]);
+		}
+	}));
 
 // ---------------------------------------------------------------------------
 // Widget Tree Construction
@@ -126,8 +202,10 @@ void UVCWorldMapWidget::NativeConstruct()
 			// streams tens of thousands of images, and a redraw for each held the map at 6 FPS (spherical Phase 6, P6.5).
 			// A wide heightmap view waits the same way (world modes review WM-MP9): a redraw blits every tile in view.
 			const int32 TilesInView = bRenderedPlanet ? 0 : FMath::Square(2 * RenderedTileRadius + 1);
+			++VCWorldMapStats::Arrivals;
 			if (DefersTileRedraw(bRenderedFromAlbedo && Tile != FIntPoint(-1, -1), TilesInView))
 			{
+				++VCWorldMapStats::Deferred;
 				bTileRedrawPending = true;
 				return;
 			}
@@ -338,6 +416,8 @@ void UVCWorldMapWidget::RefreshMap()
 
 void UVCWorldMapWidget::RebuildMapTexture()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(VCWorldMap_Rebuild);
+	const VCWorldMapStats::FScope Timed(VCWorldMapStats::Rebuild);
 	UVoxelMapSubsystem* Subsystem = MapSubsystem.Get();
 	if (!Subsystem || !MapImage)
 	{
@@ -411,8 +491,14 @@ void UVCWorldMapWidget::RebuildMapTexture()
 	Sampler.Unexplored = FColor(10, 10, 10, 255);
 	Sampler.Undrawn = FColor(25, 25, 25, 255);
 	Sampler.Background = Sampler.Unexplored;
-	Sampler.Fill(*Subsystem, PixelData, TexSize, FVector(PanOffset.X, PanOffset.Y, 0.0), RenderedWorldPerPixel);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(VCWorldMap_Fill);
+		const VCWorldMapStats::FScope TimedFill(VCWorldMapStats::Fill);
+		Sampler.Fill(*Subsystem, PixelData, TexSize, FVector(PanOffset.X, PanOffset.Y, 0.0), RenderedWorldPerPixel);
+	}
 
+	TRACE_CPUPROFILER_EVENT_SCOPE(VCWorldMap_Upload);
+	const VCWorldMapStats::FScope TimedUpload(VCWorldMapStats::Upload);
 	Mip.BulkData.Unlock();
 	WorldMapTexture->UpdateResource();
 
@@ -472,11 +558,17 @@ void UVCWorldMapWidget::RebuildPlanetMapTexture()
 	Sampler.Background = FColor(2, 2, 5, 255);
 	const double Half = 0.5 * TexSize;
 	const FVCGlobeProjection Globe = RenderedGlobe;
-	Sampler.Fill(*Subsystem, PixelData, TexSize, 16, [&Globe, Half](double X, double Y, FVector& OutDirection)
 	{
-		return Globe.ScreenToDirection(FVector2D(X - Half, Y - Half), OutDirection);
-	});
+		TRACE_CPUPROFILER_EVENT_SCOPE(VCWorldMap_Fill);
+		const VCWorldMapStats::FScope TimedFill(VCWorldMapStats::Fill);
+		Sampler.Fill(*Subsystem, PixelData, TexSize, 16, [&Globe, Half](double X, double Y, FVector& OutDirection)
+		{
+			return Globe.ScreenToDirection(FVector2D(X - Half, Y - Half), OutDirection);
+		});
+	}
 
+	TRACE_CPUPROFILER_EVENT_SCOPE(VCWorldMap_Upload);
+	const VCWorldMapStats::FScope TimedUpload(VCWorldMapStats::Upload);
 	Mip.BulkData.Unlock();
 	WorldMapTexture->UpdateResource();
 	MapImage->SetBrushFromTexture(WorldMapTexture);
@@ -552,6 +644,8 @@ void UVCWorldMapWidget::UpdatePlayerMarker()
 
 void UVCWorldMapWidget::UpdateMarkers()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(VCWorldMap_Markers);
+	const VCWorldMapStats::FScope Timed(VCWorldMapStats::Markers);
 	if (!RootCanvas || !WidgetTree || RenderedTexSize <= 0 || RenderedWorldPerPixel <= 0.0f)
 	{
 		return;
