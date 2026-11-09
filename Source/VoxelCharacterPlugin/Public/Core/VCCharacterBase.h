@@ -468,6 +468,49 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
 	bool UnequipSlotToInventory(FGameplayTag SlotTag);
 
+	// --- Sheaths (the equipment sheathing plan, D77-D82; VCCharacterBase_Sheath.cpp) ---
+
+	/**
+	 * Draw a carried weapon from its sheath: the weapon drawn now is sheathed first (its montage), then this one's
+	 * unsheathe plays and the server puts it in the hand at the montage's hand-off (D79, D82). The owner plays the
+	 * montages at once; the server checks again.
+	 * @param SheathSlotTag The sheath (Equipment.Slot.Sheath.*)
+	 * @return True when the request was issued
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
+	bool RequestDrawWeapon(FGameplayTag SheathSlotTag);
+
+	/**
+	 * Put the drawn weapon back in its sheath (its montage; the weapon leaves the hand's use at once).
+	 * @return True when the request was issued (a weapon was drawn)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
+	bool RequestSheatheWeapon();
+
+	/** R: sheathe the drawn weapon, or with none drawn draw the last one drawn (else the first carried). @return Issued */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
+	bool RequestToggleSheathe();
+
+	/** X: sheathe the drawn weapon and draw the next carried one (the sheaths' order: belt, hip, back). @return Issued */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
+	bool RequestCycleWeapon();
+
+	/** The sheaths holding a weapon, in the cycle's order (every machine, from the replicated slots). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Equipment")
+	TArray<FGameplayTag> GetCarriedWeaponSlots() const;
+
+	/** The sheath whose weapon is in the main hand; invalid when none is drawn. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Equipment")
+	FGameplayTag GetDrawnSheath() const;
+
+	/**
+	 * The draw's and the sheathe's predicate on the owner and the server (D-CR16): alive and not downed, and for a draw an
+	 * occupied sheath not drawn yet, for a sheathe (an invalid tag) a weapon drawn.
+	 * @param SheathSlotTag The sheath to draw; invalid to ask about a sheathe
+	 * @return True when the request may go ahead
+	 */
+	bool CanSheathAction(FGameplayTag SheathSlotTag) const;
+
 	/** Use the active hotbar item (F): consume it, place it, or equip it. Client: sends the server request. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Inventory")
 	void RequestUseActiveItem();
@@ -1012,6 +1055,45 @@ protected:
 
 	UFUNCTION(Server, Reliable)
 	void Server_UseItemInSlot(int32 SlotIndex);
+
+	void Input_Sheathe(const FInputActionValue& Value);
+	void Input_CycleWeapon(const FInputActionValue& Value);
+
+	/** The owner's draw (a sheath) or sheathe (an invalid tag): the server checks and runs the same sequence. */
+	UFUNCTION(Server, Reliable)
+	void Server_SheathSequence(FGameplayTag DrawSheath);
+
+	/**
+	 * The sheathe of the drawn weapon (when another or none is wanted), then the unsheathe of DrawSheath after it. On the
+	 * owning client: its montages only. On the server: the montages to everyone (the owner skipping what it played when
+	 * bOwnerPlayedIt), the sheathe at once and the draw at the unsheathe's hand-off (D82).
+	 * @param DrawSheath     The sheath to draw; invalid to sheathe only
+	 * @param bOwnerPlayedIt The owning client played the montages itself
+	 */
+	void RunSheathSequence(FGameplayTag DrawSheath, bool bOwnerPlayedIt);
+
+	/** One montage of a sequence (and on the server, its state change). */
+	void PlaySheathStep(EVCAnimAction Action, FGameplayTag Sheath, bool bOwnerPlayedIt);
+
+	/** The action set of the weapon in a sheath (its Equipment fragment's ActionSetTag through PickActionSet). */
+	FGameplayTag GetSheathActionSet(FGameplayTag Sheath) const;
+
+	/** The unsheathe after a sequence's sheathe, and the server's draw at an unsheathe's hand-off. */
+	FTimerHandle SheathStepTimer;
+	FTimerHandle SheathHandOffTimer;
+
+	/** The sheath drawn last on this machine (R draws it again). */
+	FGameplayTag LastDrawnSheath;
+
+	/** Whether a sheath's hand-off was pending at the last tick, so the visual is re-seated once more when it passes. */
+	bool bSheathHandOffWasPending = false;
+
+	/** Each tick while an unsheathe or a sheathe plays: re-seat the visuals so the weapon changes bone at the hand-off. */
+	void UpdateSheathHandOff();
+
+	/** A sheath's weapon was drawn or put back (every machine): re-seat the visuals, remember the drawn sheath. */
+	UFUNCTION()
+	void HandleEquipmentDrawnChanged(FGameplayTag SlotTag, bool bDrawn);
 
 	UFUNCTION(Server, Reliable)
 	void Server_DropItemInSlot(int32 SlotIndex, int32 Count);

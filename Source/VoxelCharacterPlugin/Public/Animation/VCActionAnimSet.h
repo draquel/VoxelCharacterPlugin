@@ -26,6 +26,13 @@ enum class EVCAnimAction : uint8
 	Draw,
 	/** Loosing the arrow. */
 	Release,
+	/**
+	 * Taking a carried weapon from its sheath into the hand (the equipment sheathing plan, D79). Not "Draw": that is the
+	 * bow's string. The montage depends on the sheath (UVCActionAnimSet::SheathMontages).
+	 */
+	Unsheathe,
+	/** Putting the weapon in the hand back in its sheath. */
+	Sheathe,
 };
 
 /** The side a hit came from, in the victim's gravity frame (the variant of a hit react or a death). */
@@ -50,6 +57,37 @@ class VOXELCHARACTERPLUGIN_API UVCAnimNotify_ActionHit : public UAnimNotify
 
 public:
 	virtual FString GetNotifyName_Implementation() const override;
+};
+
+/**
+ * Marks the frame of an Unsheathe where the hand closes on the grip, or of a Sheathe where it lets go at the sheath: the
+ * weapon's visual moves between the sheath and the hand there on every machine, and the server puts the drawn weapon in
+ * the hand at an Unsheathe's (UVCActionAnimSet::GetHandOffTime, read from the asset as the hit time is).
+ */
+UCLASS(meta = (DisplayName = "VC Item Hand-off"))
+class VOXELCHARACTERPLUGIN_API UVCAnimNotify_ItemHandOff : public UAnimNotify
+{
+	GENERATED_BODY()
+
+public:
+	virtual FString GetNotifyName_Implementation() const override;
+};
+
+/** The unsheathe and the sheathe of one sheath (Equipment.Slot.Sheath.*) for an action set (D79). */
+USTRUCT(BlueprintType)
+struct VOXELCHARACTERPLUGIN_API FVCSheathMontages
+{
+	GENERATED_BODY()
+
+	/** The sheath these montages draw from and put back into. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation", meta = (Categories = "Equipment.Slot.Sheath"))
+	FGameplayTag Sheath;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UAnimMontage> Unsheathe;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UAnimMontage> Sheathe;
 };
 
 /** One montage for each side a hit can come from; an empty side falls back to Front. Its members are EditAnywhere so a
@@ -159,6 +197,27 @@ public:
 	/** Loosing the arrow. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UAnimMontage> Release;
+
+	/** Taking this set's weapon from a sheath and putting it back, per sheath (the equipment sheathing plan, D79). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TArray<FVCSheathMontages> SheathMontages;
+
+	/**
+	 * The unsheathe or the sheathe for a sheath.
+	 * @param Action Unsheathe or Sheathe
+	 * @param Sheath The sheath (Equipment.Slot.Sheath.*)
+	 * @return That sheath's montage, else the first entry's, else null
+	 */
+	UAnimMontage* GetSheathMontage(EVCAnimAction Action, const FGameplayTag& Sheath) const;
+
+	/**
+	 * When the hand-off happens in an unsheathe or a sheathe montage: its first UVCAnimNotify_ItemHandOff, else
+	 * DefaultFraction of its length.
+	 * @param Montage         The montage (null gives 0)
+	 * @param DefaultFraction The fraction without a notify
+	 * @return Seconds into the montage at play rate 1
+	 */
+	static float GetHandOffTime(const UAnimMontage* Montage, float DefaultFraction = 0.4f);
 
 	/**
 	 * The montage for an action.

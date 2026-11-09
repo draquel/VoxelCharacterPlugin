@@ -338,7 +338,9 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
 - **Action sets.** `Equipment.AnimSet.*` (`VCGameplayTags.h`: Unarmed, Tool, SwordShield, TwoHand, Bow) name which
   layer and montages animate a character. An item names its set in its Equipment fragment's `ActionSetTag`
   (ItemInventoryPlugin); `AVCCharacterBase::PickActionSet` makes the main hand's set the item's own, `Tool` for an item
-  that names none and `Unarmed` for an empty hand. The character refreshes `ActiveActionSet` on the equipment's
+  that names none and `Unarmed` for an empty hand (the held item: a weapon drawn from a sheath counts, a sheathed one
+  does not). A set's `SheathMontages` hold its `Unsheathe` and `Sheathe` per sheath ("Items, progression and saves" ›
+  Carried weapons). The character refreshes `ActiveActionSet` on the equipment's
   `OnEquipmentChanged`, which fires on every machine (on clients from the replicated slots). An NPC's set is its
   `ActionSet` property (`Unarmed` unset).
 - **Layers.** `ABP_VoxelCharacter` runs the layer `UpperBodyStance` of `ALI_VCCharacter` between its state machine and
@@ -560,7 +562,7 @@ joins this sequence, on the local machine.
 
 Enhanced Input only. `UVCInputConfig` holds the actions (`IA_Move`, `IA_Look`, `IA_Jump`, `IA_Interact`,
 `IA_PrimaryAction`, `IA_SecondaryAction`, `IA_ToggleView`, `IA_OpenInventory`, `IA_OpenMap`, `IA_HotbarSlot`,
-`IA_ScrollHotbar`, `IA_Drop`, `IA_Use` (F), `IA_ToggleEditMode` (B), `IA_Craft` (C), `IA_Sprint` (Shift), `IA_Crouch`
+`IA_ScrollHotbar`, `IA_Drop`, `IA_Use` (F), `IA_Sheathe` (R), `IA_CycleWeapon` (X), `IA_ToggleEditMode` (B), `IA_Craft` (C), `IA_Sprint` (Shift), `IA_Crouch`
 (Ctrl), `IA_Pause` (P)) and two mapping contexts: `IMC_Gameplay` at priority 0, always on, and `IMC_UI` at 1 while an
 inventory or menu is open (cursor shown). The asset is the controller's `InputConfig`; the character binds the actions,
 the controller adds the contexts. The secondary action is bound on its release too (C3): held with a ranged weapon in
@@ -569,7 +571,8 @@ hand it aims ("The bow" › Aiming), in edit mode it places.
 ### The primary action
 
 Primary and secondary actions (LMB / RMB) go through one chain; new action types insert into it, they do not replace
-it. Dead or downed characters ignore both.
+it. Dead or downed characters ignore both; the primary action waits while a weapon is being unsheathed or sheathed.
+"The main hand" below is the held item: the hand slot's own or a weapon drawn from a sheath.
 
 1. A ranged weapon in the main hand (the code's step 0): `TryStartRangedAttack` on the press, arrows or not ("No
    arrows" as a toast and no draw without one), and `ReleaseRangedAttack` when the input ends (`Input_StopPrimaryAction`,
@@ -691,6 +694,31 @@ runs `FellOutOfWorld`; `RecoverFromMissingTerrain` puts a pawn whose terrain nev
   subsystem's item JSON), and the next avatar's `PossessedBy` restores them by slot and equips them again
   (`TryEquipFromInventory`). Server only.
 - **Callables.** `EquipHotbarItem(slot)`, `UnequipSlotToInventory(tag)`, `RequestUseActiveItem()`.
+- **Carried weapons** (the equipment sheathing plan, 2026-11-08, D77-D82; EquipmentPlugin's "Sheaths"). The character
+  has three sheaths beside its four slots, in the cycle's order: `Equipment.Slot.Sheath.Belt` (`pelvis`, the
+  pickaxes), `.HipLeft` (`pelvis`, the swords), `.Back` (`spine_05`, the bow), each drawn into the main hand. A weapon
+  lives in its sheath and is drawn by the slot's replicated state; everything that asks what the player wields asks
+  the hand (`GetHeldItem(MainHand)`): the action set (all sheathed is `Unarmed`), the primary chain, digging (a belted
+  pickaxe grants no mining speed: a sheath's GAS applies while drawn), the drawn grip.
+  - **Asking.** R (`IA_Sheathe`): sheathe the drawn weapon, or draw the last one drawn (else the first carried). X
+    (`IA_CycleWeapon`): sheathe it and draw the next carried one. F on a weapon in the bag (`UseItemInSlot`, on the
+    server): into its sheath (the sheath's weapon to the bag), then drawn with its montage, the weapon drawn before
+    back to its own sheath. `RequestDrawWeapon(sheath)`, `RequestSheatheWeapon()`, `RequestToggleSheathe()`,
+    `RequestCycleWeapon()`, one predicate on the owner and the server (`CanSheathAction`, D-CR16). No auto-sheathe.
+  - **The sequence** (`VCCharacterBase_Sheath.cpp`). `RunSheathSequence`: the drawn weapon's `Sheathe`, then after it
+    the wanted one's `Unsheathe`. The owner plays both at input; the server plays them to everyone else
+    (`PlaySheathActionForEveryone`, the owner skipping, D49), sheathes at once (the weapon leaves the hand's use) and
+    draws at the unsheathe's hand-off, timed from the montage asset (`UVCActionAnimSet::GetHandOffTime`, its
+    `UVCAnimNotify_ItemHandOff`, else 40% of it; a dedicated server plays nothing). Dead or downed before the hand-off:
+    still sheathed. The owner ignores the primary action while either montage plays.
+  - **The visual's hand-off.** On every machine `UpdateEquipmentAttachments` seats a sheath's weapon where its montage
+    has it until the hand-off (at the sheath while an unsheathe reaches for it, in the hand while a sheathe carries it
+    back), else where the state says (`GetVisualAttachSocketForState` / `GetVisualAttachOffsetForState`); in the hand
+    it takes the main hand's view mapping, and the bow's drawn grip as before. `UpdateSheathHandOff` re-seats each tick
+    while a hand-off is pending and once after; `OnDrawnChanged` re-seats on a replicated change.
+  - **Saves.** `FVCSnapshotEquipmentEntry::bDrawn`: a drawn weapon comes back drawn (no montage); an old save's
+    main-hand weapon lands in its sheath, drawn (EquipmentPlugin maps it).
+  - **NPCs** keep `HeldItem` in the hand (no sheaths); drawing on aggro is not built.
 - **Progression.** `FVCProgressionStats { DungeonsCleared, BossesKilled }` replicated on `AVCPlayerState`
   (`AddDungeonCleared(bBossKilled)` on the authority, `OnProgressionChanged`). Layers above (VoxelWorldPOI's dungeon
   objective) push objective text to the controller; this plugin knows nothing of dungeons.

@@ -157,6 +157,60 @@ void UVCActionMontageComponent::StopActionForEveryone(EVCAnimAction Action, bool
 	Multicast_StopAction(Action, bOwnerStoppedIt);
 }
 
+float UVCActionMontageComponent::PlaySheathActionLocal(EVCAnimAction Action, const FGameplayTag& ActionSet, const FGameplayTag& Sheath)
+{
+	++ActionsPlayed;
+	LastAction = Action;
+
+	float HandOff = 0.f;
+	UAnimMontage* Montage = GetSheathMontage(Action, ActionSet, Sheath, HandOff);
+	UAnimInstance* AnimInstance = Montage ? GetBodyAnimInstance() : nullptr;
+	if (!AnimInstance)
+	{
+		return 0.f;
+	}
+	SheathAction = Action;
+	SheathSlot = Sheath;
+	SheathMontage = Montage;
+	return AnimInstance->Montage_Play(Montage, 1.f);
+}
+
+void UVCActionMontageComponent::PlaySheathActionForEveryone(EVCAnimAction Action, const FGameplayTag& ActionSet, const FGameplayTag& Sheath, bool bOwnerPlayedIt)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	Multicast_PlaySheathAction(Action, ActionSet, Sheath, bOwnerPlayedIt);
+}
+
+UAnimMontage* UVCActionMontageComponent::GetSheathMontage(EVCAnimAction Action, const FGameplayTag& ActionSet, const FGameplayTag& Sheath, float& OutHandOff) const
+{
+	const UVCActionAnimSet* Set = FindActionAnimSet(ActionSet);
+	UAnimMontage* Montage = Set ? Set->GetSheathMontage(Action, Sheath) : nullptr;
+	OutHandOff = UVCActionAnimSet::GetHandOffTime(Montage);
+	return Montage;
+}
+
+bool UVCActionMontageComponent::IsSheathHandOffPending(const FGameplayTag& Sheath, EVCAnimAction& OutAction) const
+{
+	const UAnimMontage* Montage = SheathMontage.Get();
+	const UAnimInstance* AnimInstance = Montage && SheathSlot == Sheath ? GetBodyAnimInstance() : nullptr;
+	if (!AnimInstance || !AnimInstance->Montage_IsPlaying(Montage))
+	{
+		return false;
+	}
+	OutAction = SheathAction;
+	return AnimInstance->Montage_GetPosition(Montage) < UVCActionAnimSet::GetHandOffTime(Montage);
+}
+
+bool UVCActionMontageComponent::IsSheathActionPlaying() const
+{
+	const UAnimMontage* Montage = SheathMontage.Get();
+	const UAnimInstance* AnimInstance = Montage ? GetBodyAnimInstance() : nullptr;
+	return AnimInstance && AnimInstance->Montage_IsPlaying(Montage);
+}
+
 int32 UVCActionMontageComponent::GetHitDirection(const FCGFDamageContext& Context) const
 {
 	const ACharacter* Character = Cast<ACharacter>(GetOwner());
@@ -214,6 +268,21 @@ void UVCActionMontageComponent::Multicast_PlayAction_Implementation(EVCAnimActio
 		return;
 	}
 	PlayActionLocal(Action, Variant, PlayRate);
+}
+
+void UVCActionMontageComponent::Multicast_PlaySheathAction_Implementation(EVCAnimAction Action, FGameplayTag ActionSet, FGameplayTag Sheath, bool bOwnerPlayedIt)
+{
+	// As Multicast_PlayAction: a dedicated server draws nothing, the owner already played what it started at input.
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+	const APawn* Pawn = Cast<APawn>(GetOwner());
+	if (bOwnerPlayedIt && Pawn && Pawn->IsLocallyControlled())
+	{
+		return;
+	}
+	PlaySheathActionLocal(Action, ActionSet, Sheath);
 }
 
 void UVCActionMontageComponent::Multicast_StopAction_Implementation(EVCAnimAction Action, bool bOwnerStoppedIt)

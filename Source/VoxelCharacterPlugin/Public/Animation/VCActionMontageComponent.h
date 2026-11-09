@@ -101,6 +101,43 @@ public:
 	 */
 	void StopActionForEveryone(EVCAnimAction Action, bool bOwnerStoppedIt = false);
 
+	/**
+	 * Plays an unsheathe or a sheathe on this machine (the equipment sheathing plan, D79): the montage of the weapon's own
+	 * set for its sheath, which need not be the set the owner holds now (an unsheathe starts with the hand empty). This
+	 * machine remembers it, so the weapon's visual changes bone at the montage's hand-off (IsSheathHandOffPending).
+	 * @param Action    Unsheathe or Sheathe
+	 * @param ActionSet The weapon's set (Equipment.AnimSet.*)
+	 * @param Sheath    The weapon's sheath slot
+	 * @return The montage's length, 0 when nothing played
+	 */
+	float PlaySheathActionLocal(EVCAnimAction Action, const FGameplayTag& ActionSet, const FGameplayTag& Sheath);
+
+	/**
+	 * Authority: plays an unsheathe or a sheathe on every machine that draws the character (one unreliable multicast).
+	 * @param bOwnerPlayedIt True when the owning player already played it at input: its machine skips it
+	 */
+	void PlaySheathActionForEveryone(EVCAnimAction Action, const FGameplayTag& ActionSet, const FGameplayTag& Sheath, bool bOwnerPlayedIt);
+
+	/**
+	 * The montage an unsheathe or a sheathe plays and its hand-off time, from the assets (a dedicated server times the
+	 * draw with this; it plays nothing).
+	 * @param OutHandOff Seconds into it at play rate 1
+	 * @return The montage, or null when the set has none for that sheath
+	 */
+	UAnimMontage* GetSheathMontage(EVCAnimAction Action, const FGameplayTag& ActionSet, const FGameplayTag& Sheath, float& OutHandOff) const;
+
+	/**
+	 * Whether this machine plays an unsheathe or a sheathe of a sheath and has not reached its hand-off: until then the
+	 * weapon's visual stays where the montage started it (at the sheath for an unsheathe, in the hand for a sheathe).
+	 * @param Sheath    The sheath slot
+	 * @param OutAction Unsheathe or Sheathe, when pending
+	 * @return True while pending
+	 */
+	bool IsSheathHandOffPending(const FGameplayTag& Sheath, EVCAnimAction& OutAction) const;
+
+	/** Whether an unsheathe or a sheathe montage plays on this machine (the owner ignores the primary action meanwhile). */
+	bool IsSheathActionPlaying() const;
+
 	/** How many actions this machine was asked to play (locally or by the multicast), for tests. */
 	int32 GetActionsPlayed() const { return ActionsPlayed; }
 
@@ -121,6 +158,14 @@ protected:
 
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_StopAction(EVCAnimAction Action, bool bOwnerStoppedIt);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_PlaySheathAction(EVCAnimAction Action, FGameplayTag ActionSet, FGameplayTag Sheath, bool bOwnerPlayedIt);
+
+	/** The unsheathe or sheathe this machine played last, for the visual's hand-off. */
+	EVCAnimAction SheathAction = EVCAnimAction::Unsheathe;
+	FGameplayTag SheathSlot;
+	TWeakObjectPtr<UAnimMontage> SheathMontage;
 
 	/** Server: a hit landed on the owner. */
 	UFUNCTION()
