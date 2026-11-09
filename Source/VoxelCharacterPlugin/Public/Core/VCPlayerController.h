@@ -190,6 +190,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
 	TSubclassOf<UUserWidget> VitalsWidgetClass;
 
+	/** The aim reticle (centre; the character refinement plan's C3). Defaults to UVCReticleWidget. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> ReticleWidgetClass;
+
 	/**
 	 * Optional HUD clock (top-centre), any UUserWidget — the world-clock plugin's widget in the demo.
 	 * None = no clock. This plugin never reads the time itself.
@@ -365,6 +369,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UUserWidget> ClockWidget;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> ReticleWidget;
 
 	UPROPERTY()
 	TObjectPtr<UUserWidget> InventoryPanelWidget;

@@ -51,6 +51,18 @@ public:
 	 */
 	static FVCViewSweep SweepHostileUnderView(AActor* Viewer, float Range, float ProbeRadius, const FCollisionQueryParams& Params);
 
+	/**
+	 * The ray a viewer aims along, the same on the owner and the server (the character refinement plan's D74, G156): a
+	 * character aiming in third person (AVCCharacterBase::IsAiming) aims from its aim camera, whose place follows from the
+	 * pawn and the view alone (UVCAimCameraMode::ComputeDefaultCameraLocation), so a reticle at the screen's centre marks
+	 * where the shot lands; anything else aims from its eyes along its view, as before.
+	 * @param Viewer       The aiming actor
+	 * @param OutOrigin    Where the ray starts
+	 * @param OutDirection Its direction (unit)
+	 * @return False without a viewer
+	 */
+	static bool ComputeAimRay(const AActor* Viewer, FVector& OutOrigin, FVector& OutDirection);
+
 	/** The combat component on an actor, or null. */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
 	static UVCCombatComponent* FindCombatComponent(AActor* Actor);

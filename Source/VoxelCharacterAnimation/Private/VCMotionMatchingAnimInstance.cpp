@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "VCMotionMatchingAnimInstance.h"
+#include "Core/VCCharacterBase.h"
 
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
@@ -457,7 +458,9 @@ void UVCMotionMatchingAnimInstance::FillCharacterProperties(const ACharacter& Ch
 		SetBoolField(InputState, Fields.WantsToSprint, bSprinting);
 		SetBoolField(InputState, Fields.WantsToWalk, Gait == Fields.GaitWalk);
 		SetBoolField(InputState, Fields.WantsToStrafe, !Movement->bOrientRotationToMovement);
-		SetBoolField(InputState, Fields.WantsToAim, false);
+		// The aim set while the character aims (the character refinement plan's C3): the secondary action held, or a draw.
+		const AVCCharacterBase* AimingCharacter = Cast<AVCCharacterBase>(Movement->GetOwner());
+		SetBoolField(InputState, Fields.WantsToAim, AimingCharacter && AimingCharacter->IsAiming());
 	}
 }
 

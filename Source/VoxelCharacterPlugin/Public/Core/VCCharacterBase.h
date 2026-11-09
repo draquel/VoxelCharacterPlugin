@@ -296,6 +296,41 @@ public:
 	/** @return True between TryStartRangedAttack and ReleaseRangedAttack on this machine */
 	bool IsDrawingRangedWeapon() const { return bDrawingRangedWeapon; }
 
+	// ==================== Aiming (the character refinement plan's C3, D73) ====================
+
+	/**
+	 * Whether the character aims a ranged weapon: the owner holds the secondary action with one in the main hand, or a
+	 * draw is on. The server decides (bIsAiming, replicated, the ASC's State.Aiming); the owner counts its own input and
+	 * draw at once, so the camera and the reticle do not wait a round trip. While aiming the body faces the view and
+	 * strafes (SetFacesAim), the motion matching plays its aim set, the third-person camera moves in (UVCAimCameraMode)
+	 * and the reticle shows.
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
+	bool IsAiming() const;
+
+	/** The local view mode (third person on every machine but the owner's: it is not replicated, G87). */
+	EVCViewMode GetViewMode() const { return CurrentViewMode; }
+
+	/**
+	 * The owner's secondary action with a ranged weapon in hand (pressed or released): aims at once on this machine and
+	 * asks the server. Nothing without a ranged weapon. Callable so a Blueprint or a script can aim as the input does.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Combat")
+	void SetWantsToAim(bool bWantsToAim);
+
+	/** The server's ranged attack says a draw began or ended (the ability's activation and end): a draw aims. */
+	void SetDrawingOnServer(bool bDrawing);
+
+	/**
+	 * The power the owner's draw has now (UItemFragment_RangedWeapon::GetDrawPower from its own start time), 0 without a
+	 * draw: the reticle's ring closes with it.
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
+	float GetOwnDrawPower() const;
+
+	/** Whether the aim ray (UVCCombatStatics::ComputeAimRay) meets a hostile within AimRange: the reticle reddens. */
+	bool IsAimOnHostile(float Range = 20000.f) const;
+
 	/**
 	 * Turns the body toward the view while a bow is drawn (ranged combat plan B4): in third person the movement turns
 	 * the body toward the control rotation at its rotation rate instead of toward where it moves, in the gravity frame;
@@ -729,6 +764,38 @@ protected:
 	UFUNCTION()
 	void OnRep_IsCorpse();
 
+	/** The server's aim state (C3): the owner's request or a draw on the server; clients apply it as it arrives. */
+	UPROPERTY(ReplicatedUsing = OnRep_IsAiming)
+	bool bIsAiming = false;
+
+	UFUNCTION()
+	void OnRep_IsAiming();
+
+	/** The owner's request to aim, as the server knows it (Server_SetWantsToAim). */
+	bool bServerWantsToAim = false;
+
+	/** A draw on the server (SetDrawingOnServer). */
+	bool bServerDrawing = false;
+
+	/** The owner's own request (SetWantsToAim), counted before the server answers. */
+	bool bLocalWantsToAim = false;
+
+	/** What ApplyAimState last applied, so the camera is pushed and popped once per change. */
+	bool bAimStateApplied = false;
+
+	UFUNCTION(Server, Reliable)
+	void Server_SetWantsToAim(bool bWantsToAim);
+
+	/** The server's rule: bIsAiming from the request and the draw; applies it here and replicates it. */
+	void UpdateServerAiming();
+
+	/**
+	 * Apply what IsAiming says on this machine: the body facing the view (SetFacesAim, third person), the ASC's
+	 * State.Aiming (authority), and for the local player the aim camera pushed or popped. Called on every change of input,
+	 * draw, replication or view mode.
+	 */
+	void ApplyAimState();
+
 	/** Corpse state on this machine: no capsule or movement, keep the ragdoll, watch for it to settle. */
 	void ApplyCorpseState();
 
@@ -932,6 +999,8 @@ protected:
 	/** The primary action is released (or cancelled): a timed block break stops (WM-C15). */
 	void Input_StopPrimaryAction(const FInputActionValue& Value);
 	void Input_SecondaryAction(const FInputActionValue& Value);
+	/** The secondary action is released (or cancelled): the aim ends (C3). */
+	void Input_StopSecondaryAction(const FInputActionValue& Value);
 	void Input_OpenInventory(const FInputActionValue& Value);
 	void Input_OpenMap(const FInputActionValue& Value);
 	void Input_Pause(const FInputActionValue& Value);

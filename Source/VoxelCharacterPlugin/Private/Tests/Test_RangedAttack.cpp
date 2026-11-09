@@ -4,7 +4,9 @@
 
 #if WITH_AUTOMATION_TESTS && WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
 
+#include "Camera/VCAimCameraMode.h"
 #include "Combat/VCArrowMovementComponent.h"
+#include "UI/VCReticleWidget.h"
 #include "Combat/VCArrowProjectile.h"
 #include "Combat/VCCombatComponent.h"
 #include "Combat/VCRangedAttackAbility.h"
@@ -341,6 +343,49 @@ bool FVCRanged_FacesAimWhileDrawn::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Drawn: the body turns toward the view"), !Move->bOrientRotationToMovement && Move->bUseControllerDesiredRotation);
 	Player->SetFacesAim(false);
 	TestTrue(TEXT("Released: back to where it moves"), Move->bOrientRotationToMovement && !Move->bUseControllerDesiredRotation);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The aim camera's place is a function of the pawn and the view alone (the character refinement plan's D74): the pivot
+// is the pawn plus the offset turned by the view's yaw, the camera the arm back along the view; pitch moves the camera,
+// not the pivot; without a movement component up is world Z. The reticle's ticks close with the draw's power.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCRanged_AimCameraLocation, "VoxelCharacter.Combat.AimCameraLocation", VC_RANGED_FLAGS)
+bool FVCRanged_AimCameraLocation::RunTest(const FString& Parameters)
+{
+	const FVector Actor(1000.0, -500.0, 200.0);
+	const FVector Offset(0.0, 60.0, 55.0);
+	const float Arm = 150.f;
+
+	// Looking along +X, level: the pivot is 60 to the right (+Y) and 55 up, the camera 150 back along -X.
+	FVector Camera = UVCAimCameraMode::ComputeCameraLocation(Actor, FRotator(0.f, 0.f, 0.f), nullptr, Offset, Arm);
+	TestTrue(TEXT("Level +X"), Camera.Equals(Actor + FVector(-150.0, 60.0, 55.0), 1.0e-3));
+
+	// Looking along +Y: the offset turns with the yaw (the right is now -X).
+	Camera = UVCAimCameraMode::ComputeCameraLocation(Actor, FRotator(0.f, 90.f, 0.f), nullptr, Offset, Arm);
+	TestTrue(TEXT("Level +Y"), Camera.Equals(Actor + FVector(-60.0, -150.0, 55.0), 1.0e-3));
+
+	// Pitched 30 degrees up along +X: the pivot stays, the camera goes back and down along the view.
+	const FRotator Up(30.f, 0.f, 0.f);
+	Camera = UVCAimCameraMode::ComputeCameraLocation(Actor, Up, nullptr, Offset, Arm);
+	TestTrue(TEXT("Pitched: pivot unmoved, camera along the view"), Camera.Equals(Actor + FVector(0.0, 60.0, 55.0) - Up.Vector() * Arm, 1.0e-3));
+
+	// Deterministic: the same inputs twice give the same place (no state, no lag).
+	TestTrue(TEXT("Deterministic"), Camera.Equals(UVCAimCameraMode::ComputeCameraLocation(Actor, Up, nullptr, Offset, Arm), 0.0));
+
+	// The class defaults are the ones the owner's camera uses.
+	const UVCAimCameraMode* Defaults = GetDefault<UVCAimCameraMode>();
+	TestTrue(TEXT("Default location uses the class defaults"),
+		UVCAimCameraMode::ComputeDefaultCameraLocation(Actor, Up, nullptr).Equals(
+			UVCAimCameraMode::ComputeCameraLocation(Actor, Up, nullptr, Defaults->TargetOffset, Defaults->ArmLength), 0.0));
+	TestTrue(TEXT("The aim camera has no lag"), Defaults->LagSpeed <= 0.f);
+
+	// The reticle: open with no draw, closed at a full one, between in between, clamped beyond.
+	TestEqual(TEXT("Reticle open"), UVCReticleWidget::ComputeSpread(0.f, 18.f, 6.f), 18.f);
+	TestEqual(TEXT("Reticle closed"), UVCReticleWidget::ComputeSpread(1.f, 18.f, 6.f), 6.f);
+	TestEqual(TEXT("Reticle half"), UVCReticleWidget::ComputeSpread(0.5f, 18.f, 6.f), 12.f);
+	TestEqual(TEXT("Reticle clamped"), UVCReticleWidget::ComputeSpread(2.f, 18.f, 6.f), 6.f);
 	return true;
 }
 

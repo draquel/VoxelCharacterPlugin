@@ -39,5 +39,7 @@ namespace VCGameplayTags
 
 	// The weather on the character (the weather plan's P5): loose tags the server sets, replicated
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Weather_Wet);
+	/** The character aims a ranged weapon (holds the secondary action, or draws): the server sets it, replicated (character refinement plan C3, D73). */
+	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Aiming);
 	VOXELCHARACTERPLUGIN_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Weather_Cold);
 }
