@@ -396,7 +396,19 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   each update (and holds the speed at 0 under `vc.Anim.Stance 1`, the static stance as before). `vc.Anim.Stance 0|1|2`
   is the A/B. `setup_character_layers.py` builds the blend spaces and versions the layers (`LAYER_VERSION` in the
   Blueprint's description: a wiring change rewires every layer in place on the next run). Montages play in the slot
-  above, over the stance. `ABP_VCLayer_Bow`
+  above, over the stance. **The upper-body action slot** (G162, 2026-11-09): between the layer and that slot both main
+  graphs (`ABP_VoxelCharacter` and the motion matching copy) have a second slot, `UpperBodyAction`, laid over the body
+  as the stance is (a layered blend on the same three-bone ramp from `spine_01`, local space, full weight; the layer's
+  pose reaches the slot and the blend's base through the cached pose `VCStanced`, since a pose pin feeds one input).
+  With no montage in it the slot passes the pose through; a montage in it moves the spine, arms and head while the
+  legs keep the locomotion. The sheaths' `Unsheathe` and `Sheathe` play there (before, in the default slot, a draw on
+  the move stood the legs still for the clip's second). It is not the layer's `UpperBody`: a layer plays the body's
+  montages in its own slots, so a second `UpperBody` after the bow's layer would lay the bare draw over the aimed one.
+  On `CharacterTest` (both graphs, the bow, the sword and the pickaxe, under `slomo 0.1`): the speed holds at 200 uu/s
+  walking and 500 running through every sheathe and draw and both feet keep their stride; at the hand-off the hand
+  comes as near its sheath as in the clip itself, standing or running (24 uu at the hip's draw, 30 at its sheathe, 30
+  to 32 at the back's, the clips' 24, 31 and 32 to 33), since the layered blend keeps the clip's arms on the spine.
+  `ABP_VCLayer_Bow`
   (ranged combat plan B4) also aims: `UVCAnimLayerInstance` plays the body's montages in the layer's own
   slots (`bUseMainInstanceMontageEvaluationData`) and copies the body's `AimPitch`, `AimYaw` and `AimRaiseWeight` and its
   montage weight in the `UpperBody` slot each update; the bow idle follows the view through the stand aim offset inside
@@ -479,7 +491,8 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
     follows the movement's gravity. `vc.Anim.GravityTrajectory 0` is the A/B with the engine's prediction, and
     `vc.Anim.Debug 1` draws the trajectory and writes what motion matching plays (`GetMotionMatchingSelection`).
   - The copy's AnimGraph gets what `ABP_VoxelCharacter` has: a swimmer plays `AS_Swim` in place of the locomotion, the
-    held item's `UpperBodyStance` layer runs before GASP's slot, and after GASP's foot placement and leg IK (which
+    held item's `UpperBodyStance` layer runs before GASP's slot, the `UpperBodyAction` slot between them (G162), and
+    after GASP's foot placement and leg IK (which
     `FootIKAlpha` drives) come P4's look-at and off-hand IK. GASP's member `RelativeAcceleration` is
     `RootRelativeAcceleration` in the copy (`UVCAnimInstance` has one of that name).
   - Cost for one running player (the CSV profiler): 0.50 ms of animation on the game thread and 1.39 ms on the animation
@@ -749,7 +762,9 @@ runs `FellOutOfWorld`; `RecoverFromMissingTerrain` puts a pawn whose terrain nev
     (`PlaySheathActionForEveryone`, the owner skipping, D49), sheathes at once (the weapon leaves the hand's use) and
     draws at the unsheathe's hand-off, timed from the montage asset (`UVCActionAnimSet::GetHandOffTime`, its
     `UVCAnimNotify_ItemHandOff`, else 40% of it; a dedicated server plays nothing). Dead or downed before the hand-off:
-    still sheathed. The owner ignores the primary action while either montage plays.
+    still sheathed. The owner ignores the primary action while either montage plays. Both montages play in the main
+    graphs' `UpperBodyAction` slot ("Animation" › Layers; G162), so a draw or a sheathe on the move keeps the legs
+    walking or running.
   - **The visual's hand-off.** On every machine `UpdateEquipmentAttachments` seats a sheath's weapon where its montage
     has it until the hand-off (at the sheath while an unsheathe reaches for it, in the hand while a sheathe carries it
     back), else where the state says (`GetVisualAttachSocketForState` / `GetVisualAttachOffsetForState`); in the hand
