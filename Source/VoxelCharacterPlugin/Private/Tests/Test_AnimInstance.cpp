@@ -725,4 +725,49 @@ bool FVCAnim_StanceWeight::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// The aim raises the bow (the user's flow after the character refinement plan: aim raises, the draw pulls, the release
+// shoots): AimRaiseWeight moves toward 1 while aiming at 1 / AimRaiseTime a second, back to 0 when the aim ends or the
+// character is downed; the layer's aim branch takes the larger of it and the upper body's montage.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCAnim_AimRaise, "VoxelCharacter.Anim.AimRaise", EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+bool FVCAnim_AimRaise::RunTest(const FString& Parameters)
+{
+	UVCAnimInstance* Anim = VCAnimTestHelpers::NewAnimInstance();
+	Anim->AddToRoot();
+	const float Dt = 1.f / 60.f;
+	FVCAnimInput In;
+	In.DeltaSeconds = Dt;
+	In.bOnGround = true;
+	In.bAiming = true;
+
+	Anim->ComputeValues(In);
+	TestTrue(TEXT("One update raises a step: dt / AimRaiseTime"), FMath::IsNearlyEqual(Anim->AimRaiseWeight, Dt / Anim->AimRaiseTime, 1.0e-4f));
+	const int32 Steps = FMath::CeilToInt(Anim->AimRaiseTime / Dt) + 1; // one spare for the rounding
+	for (int32 i = 0; i < Steps; ++i) { Anim->ComputeValues(In); }
+	TestTrue(TEXT("Raised within AimRaiseTime"), FMath::IsNearlyEqual(Anim->AimRaiseWeight, 1.f));
+
+	// The layer's aim branch: the raise when no montage plays.
+	UVCAnimLayerInstance* Layer = NewObject<UVCAnimLayerInstance>(Anim->GetOuter());
+	Layer->CopyBodyValues(Anim);
+	TestTrue(TEXT("The layer copies the raise"), FMath::IsNearlyEqual(Layer->AimRaiseWeight, 1.f));
+	TestTrue(TEXT("The aim branch shows the raise"), FMath::IsNearlyEqual(Layer->DrawnAimWeight, 1.f));
+
+	FVCAnimInput Down = In;
+	Down.bAiming = false;
+	for (int32 i = 0; i < Steps; ++i) { Anim->ComputeValues(Down); }
+	TestTrue(TEXT("Lowered when the aim ends"), FMath::IsNearlyZero(Anim->AimRaiseWeight));
+	Layer->CopyBodyValues(Anim);
+	TestTrue(TEXT("No raise, no montage: no aim branch"), FMath::IsNearlyZero(Layer->DrawnAimWeight));
+
+	for (int32 i = 0; i < Steps; ++i) { Anim->ComputeValues(In); }
+	FVCAnimInput Downed = In;
+	Downed.bDowned = true;
+	for (int32 i = 0; i < Steps; ++i) { Anim->ComputeValues(Downed); }
+	TestTrue(TEXT("Downed: lowered"), FMath::IsNearlyZero(Anim->AimRaiseWeight));
+
+	Anim->RemoveFromRoot();
+	return true;
+}
+
 #endif // WITH_AUTOMATION_TESTS

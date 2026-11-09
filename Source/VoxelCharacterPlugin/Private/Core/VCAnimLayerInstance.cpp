@@ -17,6 +17,8 @@ void UVCAnimLayerInstance::CopyBodyValues(const UVCAnimInstance* Body)
 	UpperBodyMontageWeight = Body ? Body->GetSlotMontageGlobalWeight(UpperBodySlot) : 0.f;
 	Speed = Body && Body->StanceMode != 1 ? Body->Speed : 0.f;
 	StanceWeight = Body ? Body->StanceWeight : 0.f;
+	AimRaiseWeight = Body ? Body->AimRaiseWeight : 0.f;
+	DrawnAimWeight = FMath::Max(UpperBodyMontageWeight, AimRaiseWeight);
 }
 
 void UVCAnimLayerInstance::NativeUpdateAnimation(float DeltaSeconds)

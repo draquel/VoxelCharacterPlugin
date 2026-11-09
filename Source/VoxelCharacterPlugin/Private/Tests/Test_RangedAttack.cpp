@@ -8,6 +8,7 @@
 #include "Combat/VCArrowMovementComponent.h"
 #include "UI/VCReticleWidget.h"
 #include "Combat/VCArrowProjectile.h"
+#include "Combat/VCCombatStatics.h"
 #include "Combat/VCCombatComponent.h"
 #include "Combat/VCRangedAttackAbility.h"
 #include "Core/VCCharacterBase.h"
@@ -386,6 +387,81 @@ bool FVCRanged_AimCameraLocation::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Reticle closed"), UVCReticleWidget::ComputeSpread(1.f, 18.f, 6.f), 6.f);
 	TestEqual(TEXT("Reticle half"), UVCReticleWidget::ComputeSpread(0.5f, 18.f, 6.f), 12.f);
 	TestEqual(TEXT("Reticle clamped"), UVCReticleWidget::ComputeSpread(2.f, 18.f, 6.f), 6.f);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The shot over the drop (G159): the launch direction the ballistic solve gives makes a projectile at that speed, under
+// that gravity, pass through the target (the flight in closed form, as the projectile movement integrates a constant
+// acceleration); level, up and down a slope, under a tilted pull (a planet's), the low arc; beyond the speed's reach the
+// solve says so and keeps the straight line; no gravity flies straight.
+// ---------------------------------------------------------------------------
+namespace VCBallisticTestHelpers
+{
+	/** How far the flight from Start along Direction at Speed under Gravity passes from Target: the miss at the closest pass. */
+	double MissDistance(const FVector& Start, const FVector& Direction, float Speed, const FVector& Gravity, const FVector& Target)
+	{
+		const FVector Velocity = Direction * Speed;
+		double Best = TNumericLimits<double>::Max();
+		const double Duration = 2.0 * (Target - Start).Size() / FMath::Max(1.f, Speed) + 1.0;
+		for (double T = 0.0; T <= Duration; T += 1.0e-4)
+		{
+			const FVector At = Start + Velocity * T + 0.5 * Gravity * T * T;
+			Best = FMath::Min(Best, (At - Target).Size());
+		}
+		return Best;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCRanged_BallisticShot, "VoxelCharacter.Combat.BallisticShot", VC_RANGED_FLAGS)
+bool FVCRanged_BallisticShot::RunTest(const FString& Parameters)
+{
+	using namespace VCBallisticTestHelpers;
+	const FVector Gravity(0.0, 0.0, -980.0);
+	const FVector Start(-1500.0, -1200.0, 150.0);
+	const float Speed = 6000.f;
+	FVector Direction;
+
+	// The range's posts at 10, 20 and 40 m, level: each reached, launched above the line by the drop it makes up.
+	for (const double Distance : {1000.0, 2000.0, 4000.0})
+	{
+		const FVector Target = Start + FVector(Distance, 0.0, 0.0);
+		TestTrue(FString::Printf(TEXT("Level %.0f m reachable"), Distance / 100.0), UVCCombatStatics::SolveLaunchDirection(Start, Target, Speed, Gravity, Direction));
+		TestTrue(FString::Printf(TEXT("Level %.0f m unit"), Distance / 100.0), FMath::IsNearlyEqual(Direction.Size(), 1.0, 1.0e-6));
+		TestTrue(FString::Printf(TEXT("Level %.0f m lands on the target"), Distance / 100.0), MissDistance(Start, Direction, Speed, Gravity, Target) < 0.5);
+		// Straight at it, the arrow would fall g x^2 / (2 v^2) below it: 13.6, 54.4 and 217.8 uu at 10, 20 and 40 m.
+		const double Drop = 980.0 * Distance * Distance / (2.0 * Speed * Speed);
+		TestTrue(FString::Printf(TEXT("Level %.0f m: the straight line misses by the drop"), Distance / 100.0),
+			FMath::IsNearlyEqual(MissDistance(Start, FVector::ForwardVector, Speed, Gravity, Target), Drop, 0.05 * Drop + 1.0));
+		TestTrue(FString::Printf(TEXT("Level %.0f m: aimed up, the low arc"), Distance / 100.0), Direction.Z > 0.0 && Direction.Z < UE_INV_SQRT_2);
+	}
+
+	// Up and down a slope, off the axis.
+	for (const FVector& Offset : {FVector(2500.0, 900.0, 600.0), FVector(1800.0, -1300.0, -700.0)})
+	{
+		TestTrue(TEXT("Slope reachable"), UVCCombatStatics::SolveLaunchDirection(Start, Start + Offset, Speed, Gravity, Direction));
+		TestTrue(TEXT("Slope lands on the target"), MissDistance(Start, Direction, Speed, Gravity, Start + Offset) < 0.5);
+	}
+
+	// A planet's pull, tilted: the same solve in the plane of the pull.
+	const FVector Tilted = FVector(0.3, -0.2, -1.0).GetSafeNormal() * 980.0;
+	const FVector Far = Start + FVector(3000.0, 500.0, -200.0);
+	TestTrue(TEXT("Tilted pull reachable"), UVCCombatStatics::SolveLaunchDirection(Start, Far, Speed, Tilted, Direction));
+	TestTrue(TEXT("Tilted pull lands on the target"), MissDistance(Start, Direction, Speed, Tilted, Far) < 0.5);
+
+	// A weak draw (0.3 of the speed) reaches about v^2 / g = 33 m on the level: 40 m is out of reach, the line kept.
+	const FVector Post40 = Start + FVector(4000.0, 0.0, 0.0);
+	TestFalse(TEXT("Weak draw: 40 m out of reach"), UVCCombatStatics::SolveLaunchDirection(Start, Post40, Speed * 0.3f, Gravity, Direction));
+	TestTrue(TEXT("Out of reach keeps the straight line"), Direction.Equals(FVector::ForwardVector, 1.0e-6));
+
+	// No gravity: straight; no speed or no distance: not solvable.
+	TestTrue(TEXT("No gravity reachable"), UVCCombatStatics::SolveLaunchDirection(Start, Post40, Speed, FVector::ZeroVector, Direction));
+	TestTrue(TEXT("No gravity straight"), Direction.Equals(FVector::ForwardVector, 1.0e-6));
+	TestFalse(TEXT("No speed"), UVCCombatStatics::SolveLaunchDirection(Start, Post40, 0.f, Gravity, Direction));
+	TestFalse(TEXT("No distance"), UVCCombatStatics::SolveLaunchDirection(Start, Start, Speed, Gravity, Direction));
+
+	// No world, no gravity to solve for.
+	TestTrue(TEXT("No world, no gravity"), UVCRangedAttackAbility::GetArrowGravity(nullptr, Start).IsZero());
 	return true;
 }
 

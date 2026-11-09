@@ -83,3 +83,38 @@ bool UVCCombatStatics::ComputeAimRay(const AActor* Viewer, FVector& OutOrigin, F
 	}
 	return true;
 }
+
+bool UVCCombatStatics::SolveLaunchDirection(const FVector& Start, const FVector& Target, float Speed, const FVector& Gravity, FVector& OutDirection)
+{
+	const FVector ToTarget = Target - Start;
+	OutDirection = ToTarget.GetSafeNormal();
+	const double G = Gravity.Size();
+	if (OutDirection.IsZero() || Speed <= UE_KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+	if (G <= UE_KINDA_SMALL_NUMBER)
+	{
+		return true; // no gravity: the straight line is the solution
+	}
+	// In the plane of the shot: X across gravity toward the target, Y up (against gravity).
+	const FVector Up = -Gravity / G;
+	const double Y = FVector::DotProduct(ToTarget, Up);
+	const FVector Across = ToTarget - Up * Y;
+	const double X = Across.Size();
+	const double V2 = double(Speed) * Speed;
+	// tan(angle) = (v^2 -+ sqrt(v^4 - g (g x^2 + 2 y v^2))) / (g x); the minus root is the low arc.
+	const double Discriminant = V2 * V2 - G * (G * X * X + 2.0 * Y * V2);
+	if (Discriminant < 0.0)
+	{
+		return false; // beyond reach: the caller keeps the straight line
+	}
+	if (X <= UE_KINDA_SMALL_NUMBER)
+	{
+		// Straight up or down: along the line (up reaches when the discriminant allows it).
+		return true;
+	}
+	const double Angle = FMath::Atan2(V2 - FMath::Sqrt(Discriminant), G * X);
+	OutDirection = (Across / X) * FMath::Cos(Angle) + Up * FMath::Sin(Angle);
+	return true;
+}
