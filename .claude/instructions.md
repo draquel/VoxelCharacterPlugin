@@ -21,7 +21,9 @@ editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the 
 5. History only: `Documentation/CharacterController_Design.md` (the February design, frozen),
    `COMBAT_FOUNDATION_PLAN.md`, `EQUIPMENT_LOOP_PLAN.md`, `RANGED_COMBAT_PLAN.md` (the bow, D52-D57, done 2026-11-07,
    now in `CHARACTER_SYSTEM.md` "The bow") and `CHARACTER_ANIMATION_PLAN.md` (animation, IK and bodies, D43-D51, done
-   2026-11-07, now in `CHARACTER_SYSTEM.md` "Animation", "Appearance" and "NPCs"), all frozen;
+   2026-11-07, now in `CHARACTER_SYSTEM.md` "Animation", "Appearance" and "NPCs") and `CHARACTER_REFINEMENT_PLAN.md`
+   (holding, the upper body, aiming, handling, D70-D75, done 2026-11-08, now in `CHARACTER_SYSTEM.md` "The bow",
+   "Movement", "Animation", "Camera", "HUD and widgets" and "Tests"), all frozen;
    `Documentation/Archive/ImplementationPlan.md`.
 
 Across plugins: `Plugins/CommonGameFramework/Documentation/ARCHITECTURE.md`; VoxelWorlds'

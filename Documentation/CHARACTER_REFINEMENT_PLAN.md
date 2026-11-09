@@ -1,13 +1,18 @@
 # Character Refinement Plan: holding, the upper body, aiming, handling
 
-> **Agreed 2026-11-08** as drafted, every decision as recommended (D70-D75, §6; the FINDINGS register has the row).
-> Scope: what the character animation plan (D43-D51) and the ranged combat plan
-> (D52-D57) left rough once they met in play: held items off the hand and turned wrong (the bow first), the torso
-> frozen while anything is held, no aim state (camera, reticle), and a capsule that slides into and out of strafing.
-> Plus a level to test and tune all of it by hand and by script. Owner: VoxelCharacterPlugin; one fix each in
-> EquipmentPlugin and the appearance data; the level, its kit and the QA rows in the parent. Terms:
-> `Documentation/GLOSSARY.md` at the project root. The findings the survey turned up are G153-G158 in
-> `Documentation/FINDINGS.md` (recorded with C0). Phases: C0 done 2026-11-08 (§5); C1-C5 to come.
+> **Frozen 2026-11-08.** This plan is history: agreed 2026-11-08 as drafted, every decision as recommended (D70-D75,
+> §6), C0-C5 built and merged the same day (C4 in its own session). Built: the `CharacterTest` level, its kit and the
+> lane measures (`vox.Lane`, `vox.Stop`, `vox.FootSlide`); the bow's two grips and per-body attach corrections, the
+> client's swap (G153), first-person hiding; the moving stance over the upper body; the aim state with its camera,
+> reticle and the shot from the camera (G155, G156); GASP's gait table and the eased face-aim flip (G154). As it is
+> now: `CHARACTER_SYSTEM.md` ("The bow", "Movement", "Animation", "Appearance", "Camera", "Input", "HUD and widgets",
+> "Tests"), `EQUIPMENT_SYSTEM.md` ("Visual Attachment", "Client-Side Visual Sync"); the QA rows F13; the console guide
+> §2 and §4. Scope as planned: what the character animation plan (D43-D51) and the ranged combat plan (D52-D57) left
+> rough once they met in play: held items off the hand and turned wrong (the bow first), the torso frozen while
+> anything is held, no aim state (camera, reticle), and a capsule that slides into and out of strafing; plus a level to
+> test and tune all of it by hand and by script. Owner: VoxelCharacterPlugin; one fix each in EquipmentPlugin and the
+> appearance data; the level, its kit and the QA rows in the parent. Terms: `Documentation/GLOSSARY.md`. The findings
+> the survey turned up are G153-G158 in `Documentation/FINDINGS.md`, all closed by the phases.
 
 ## 1. What exists, and what is wrong
 
@@ -439,6 +444,13 @@ content scripts the phase changed (never while another editor runs, G150).
 ### C5: Close (S)
 - This plan frozen; results paragraphs in `CHARACTER_SYSTEM.md`; the glossary (stance, gait table, aim state, the
   lane); FINDINGS rows moved to Closed; the QA tracker's F13 results; the main checkout synced and its scripts re-run.
+
+**C5 result (2026-11-08).** The plan frozen (the banner above); the reference documents carry each phase's result
+(written with the phase); the glossary gains the stance, the drawn grip, the gait table, the aim state and the lane;
+FINDINGS' D70-D75 row says complete and G153-G158 are closed; the QA tracker's F13 area says what each row tests now
+(the hand pass itself is the user's); this checkout is the main one and its scripts ran with each phase
+(`setup_character_layers.py` last with C2). Not done, and left for a later plan: the aiming and swap steps in
+`VoxelEngine.Replication.Framework`, whose pawn is not a character.
 
 **Order.** C0 first (everything is judged on it). C1 and C4 touch different files and can run in parallel sessions
 (C1: EquipmentPlugin, the item scripts, the appearance; C4: the movement component and the motion-matching instance),
