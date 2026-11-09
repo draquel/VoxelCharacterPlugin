@@ -20,6 +20,12 @@ class UVoxelChunkManager;
  * terrain cannot stop it: an arrow that goes below the generated surface there stops at that surface, as if it had hit
  * it (OnProjectileStop with a hit on no actor), instead of falling on through the ground. Arcs through open air beyond
  * the collision keep flying.
+ *
+ * The wind (D83, with WorldWeatherPlugin): the weather's wind where the arrow is, times its exposure (none under shelter).
+ * The arrow's motion across its launch heading, in the local horizontal, takes the cross wind's at WindResponse a second
+ * (so it never drifts faster than the wind); a head or tail wind and the vertical are left alone, so the bow's speed and
+ * the drop are the bow's and gravity's. Read every WindSampleInterval, the same on every machine (the weather is
+ * synchronised); the heading is the first velocity the arrow flies with.
  */
 UCLASS(ClassGroup = (VoxelCharacter), meta = (BlueprintSpawnableComponent))
 class VOXELCHARACTERPLUGIN_API UVCArrowMovementComponent : public UProjectileMovementComponent
@@ -63,6 +69,32 @@ public:
 	 */
 	static bool IsBelowSurface(const FVector& Location, const FVector& SurfacePoint, const FVector& Up);
 
+	/**
+	 * Pure: the wind's acceleration on an arrow. Across the arrow's heading in the local horizontal, the arrow's speed
+	 * relaxes toward the cross wind's at Response a second; along the heading and along Up nothing changes.
+	 * @param Velocity The arrow's velocity (uu/s)
+	 * @param Wind     The air's velocity (uu/s)
+	 * @param Heading  The arrow's launch direction (only its horizontal part counts)
+	 * @param Up       Local up (unit)
+	 * @param Response How fast the arrow's cross motion takes the wind's (1/s)
+	 * @return The acceleration (uu/s^2), horizontal and across the heading (zero without a horizontal heading or a response)
+	 */
+	static FVector ComputeWindAcceleration(const FVector& Velocity, const FVector& Wind, const FVector& Heading, const FVector& Up, float Response);
+
+	/** @return The wind on the arrow last read (the weather's wind times the exposure; zero without the weather) */
+	const FVector& GetWind() const { return CachedWind; }
+
+	/**
+	 * How fast the arrow's motion across its heading takes the cross wind's (1/s): 0.4 drifts a full draw (6000 uu/s) about
+	 * 28 uu at 30 m and 105 at 60 m in a 600 uu/s cross wind (the weather's strong wind); 0 ignores the wind.
+	 */
+	UPROPERTY(EditAnywhere, Category = "VoxelCharacter|Arrow", meta = (ClampMin = "0"))
+	float WindResponse = 0.4f;
+
+	/** How often the wind at the arrow is read (s). */
+	UPROPERTY(EditAnywhere, Category = "VoxelCharacter|Arrow", meta = (ClampMin = "0.01"))
+	float WindSampleInterval = 0.1f;
+
 	virtual void InitializeComponent() override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
@@ -80,6 +112,18 @@ private:
 	 */
 	bool StopInUncookedGround(const UVoxelChunkManager& ChunkManager);
 
+	/** Reads the weather's wind at the arrow every WindSampleInterval (WITH_WORLD_WEATHER; zero otherwise). */
+	void RefreshWind(float DeltaTime);
+
 	FVoxelWorldBounds CachedWorldBounds;
 	bool bHasWorldBounds = false;
+
+	/** The wind on the arrow (uu/s), the weather's times the exposure. */
+	FVector CachedWind = FVector::ZeroVector;
+
+	/** Seconds until the wind is read again (read at the first tick). */
+	float WindSampleRemaining = 0.f;
+
+	/** The arrow's launch direction, the wind's reference across (zero until it first flies). */
+	FVector WindHeading = FVector::ZeroVector;
 };

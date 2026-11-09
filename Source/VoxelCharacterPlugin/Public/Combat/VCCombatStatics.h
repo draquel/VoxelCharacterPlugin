@@ -55,7 +55,7 @@ public:
 	 * The ray a viewer aims along, the same on the owner and the server (the character refinement plan's D74, G156): a
 	 * character aiming in third person (AVCCharacterBase::IsAiming) aims from its aim camera, whose place follows from the
 	 * pawn and the view alone (UVCAimCameraMode::ComputeDefaultCameraLocation), so a reticle at the screen's centre marks
-	 * where the shot lands; anything else aims from its eyes along its view, as before.
+	 * the line the shot leaves on (D83: the arrow flies along this ray); anything else aims from its eyes along its view.
 	 * @param Viewer       The aiming actor
 	 * @param OutOrigin    Where the ray starts
 	 * @param OutDirection Its direction (unit)

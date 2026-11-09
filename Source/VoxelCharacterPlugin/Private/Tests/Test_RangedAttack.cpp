@@ -26,6 +26,8 @@
 #include "Types/CGFEquipmentTypes.h"
 #include "Types/ItemInstanceFragments.h"
 #include "AbilitySystemComponent.h"
+#include "Components/BoxComponent.h"
+#include "Engine/CollisionProfile.h"
 #include "EngineUtils.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/WorldSettings.h"
@@ -390,30 +392,80 @@ bool FVCRanged_AimCameraLocation::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
-// The arrow's launch (G159): from where it leaves straight at what the reticle is on, so it starts on the reticle's line
-// and only gravity takes it off; an aim point at the bow, behind it or far off the view gives the view's direction.
+// The arrow's launch (D83, G164): along the aim ray from its point abreast of the nock, so what the ray meets never bends
+// the shot; the archer's motion adds to the bow's; a wall at the face starts the arrow at the wall.
 // ---------------------------------------------------------------------------
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCRanged_LaunchDirection, "VoxelCharacter.Combat.LaunchDirection", VC_RANGED_FLAGS)
-bool FVCRanged_LaunchDirection::RunTest(const FString& Parameters)
+namespace VCRangedTestHelpers
 {
-	const FVector Bow(-1424.0, -1046.0, 147.0);
-	const FVector View = FVector(1.0, -0.06, -0.01).GetSafeNormal();
-	const float MinDistance = 150.f;
+	/** A static box that blocks everything. */
+	AActor* SpawnBlockingBox(UWorld* World, const FVector& Location, const FVector& Extent)
+	{
+		AActor* Box = World->SpawnActor<AActor>(AActor::StaticClass(), FTransform(Location));
+		if (!Box)
+		{
+			return nullptr;
+		}
+		UBoxComponent* Shape = NewObject<UBoxComponent>(Box, TEXT("Box"));
+		Shape->SetMobility(EComponentMobility::Static);
+		Shape->SetBoxExtent(Extent);
+		Shape->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+		Box->SetRootComponent(Shape);
+		Shape->SetWorldLocation(Location);
+		Shape->RegisterComponent();
+		return Box;
+	}
+}
 
-	// The 20 m post's face: the direction is the line from the bow to it, whatever the view's own line.
-	const FVector Post(485.0, -1200.0, 120.0);
-	const FVector ToPost = UVCRangedAttackAbility::ComputeLaunchDirection(Bow, Post, View, MinDistance);
-	TestTrue(TEXT("At the aim point"), ToPost.Equals((Post - Bow).GetSafeNormal(), 1.0e-6));
-	TestTrue(TEXT("Unit"), FMath::IsNearlyEqual(ToPost.Size(), 1.0, 1.0e-6));
-	// No lift for the drop: the line passes through the point exactly.
-	const double Along = FVector::DotProduct(Post - Bow, ToPost);
-	TestTrue(TEXT("The line passes through the aim point"), (Bow + ToPost * Along).Equals(Post, 1.0e-3));
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCRanged_LaunchAlongAimRay, "VoxelCharacter.Combat.LaunchAlongAimRay", VC_RANGED_FLAGS)
+bool FVCRanged_LaunchAlongAimRay::RunTest(const FString& Parameters)
+{
+	// Pure, with CharacterTest's numbers: the aim camera 56 uu right of the nock and some 225 uu behind it.
+	const FVector Origin(-1649.0, -938.0, 137.0);
+	const FVector Ray = FVector(1.0, -0.013, 0.052).GetSafeNormal();
+	const FVector Nock(-1424.0, -996.0, 147.0);
+	const FVector Start = UVCRangedAttackAbility::ComputeLaunchStart(Origin, Ray, Nock);
+	TestTrue(TEXT("The start is on the ray"), FMath::PointDistToLine(Start, Ray, Origin) < 1.0e-3);
+	TestTrue(TEXT("Abreast of the nock"), FMath::Abs(FVector::DotProduct(Nock - Start, Ray)) < 1.0e-3);
+	TestTrue(TEXT("A nock behind the origin: the origin"),
+		UVCRangedAttackAbility::ComputeLaunchStart(Origin, Ray, Origin - Ray * 100.0 + FVector(0.0, 50.0, 0.0)).Equals(Origin, 1.0e-6));
+	const FVector Strafe(0.0, 350.0, 0.0);
+	TestTrue(TEXT("The archer's motion adds to the bow's"),
+		UVCRangedAttackAbility::ComputeLaunchVelocity(Ray, 6000.f, Strafe).Equals(Ray * 6000.0 + Strafe, 1.0e-6));
 
-	// A wall at the face, the point behind the bow, or far off the view: along the view.
-	TestTrue(TEXT("Too near: the view"), UVCRangedAttackAbility::ComputeLaunchDirection(Bow, Bow + View * 100.0, View, MinDistance).Equals(View, 1.0e-6));
-	TestTrue(TEXT("Behind: the view"), UVCRangedAttackAbility::ComputeLaunchDirection(Bow, Bow - View * 2000.0, View, MinDistance).Equals(View, 1.0e-6));
-	TestTrue(TEXT("Off the view: the view"),
-		UVCRangedAttackAbility::ComputeLaunchDirection(Bow, Bow + FVector(0.0, 2000.0, 0.0), View, MinDistance).Equals(View, 1.0e-6));
+	// In a world: the shot from the eyes' ray (an NPC does not aim from a camera).
+	FRangedWorld W;
+	FShooter Shooter = SpawnShooter(W.World, FVector(0.0, 0.0, 1000.0));
+	if (!TestNotNull(TEXT("The shooter spawns"), Shooter.NPC))
+	{
+		return false;
+	}
+	const UVCRangedAttackAbility* Ability = GetDefault<UVCRangedAttackAbility>();
+	FVector Eyes;
+	FRotator View;
+	Shooter.NPC->GetActorEyesViewPoint(Eyes, View);
+	FVector OpenStart, OpenDirection;
+	TestTrue(TEXT("A shot in the open"), Ability->ComputeShot(Shooter.NPC, OpenStart, OpenDirection));
+	TestTrue(TEXT("Along the view"), OpenDirection.Equals(View.Vector(), 1.0e-6));
+	TestTrue(*FString::Printf(TEXT("Abreast of the nock on the view (%s)"), *OpenStart.ToString()),
+		OpenStart.Equals(Eyes + View.Vector() * Ability->ArrowStartOffset.X, 1.0e-3));
+
+	// What the ray meets changes nothing (G164): a wall across it at 10 m.
+	AActor* Far = SpawnBlockingBox(W.World, Eyes + View.Vector() * 1000.0, FVector(20.0, 300.0, 300.0));
+	FVector WallStart, WallDirection;
+	Ability->ComputeShot(Shooter.NPC, WallStart, WallDirection);
+	TestTrue(TEXT("A wall at 10 m: the same start"), WallStart.Equals(OpenStart, 1.0e-6));
+	TestTrue(TEXT("A wall at 10 m: the same direction"), WallDirection.Equals(OpenDirection, 1.0e-9));
+	if (Far)
+	{
+		Far->Destroy();
+	}
+
+	// A wall at the face (40 uu out, nearer than the nock): the arrow starts at the wall, not through it.
+	SpawnBlockingBox(W.World, Eyes + View.Vector() * 45.0, FVector(5.0, 100.0, 100.0));
+	FVector FaceStart, FaceDirection;
+	Ability->ComputeShot(Shooter.NPC, FaceStart, FaceDirection);
+	const double Along = FVector::DotProduct(FaceStart - Eyes, View.Vector());
+	TestTrue(*FString::Printf(TEXT("A wall at the face: starts before it (%.1f uu out)"), Along), Along > 0.0 && Along <= 40.0 + 1.0e-3);
 	return true;
 }
 
