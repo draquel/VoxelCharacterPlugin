@@ -8,6 +8,9 @@
 #include "Components/SceneComponent.h"
 #include "Engine/HitResult.h"
 #include "Engine/World.h"
+#if WITH_WORLD_WEATHER
+#include "WorldWeatherSubsystem.h"
+#endif
 
 UVCArrowMovementComponent::UVCArrowMovementComponent()
 {
@@ -74,6 +77,11 @@ FVector UVCArrowMovementComponent::ComputeAcceleration(const FVector& InVelocity
 		Acceleration.Z -= GetGravityZ();
 		Acceleration += GetGravityAcceleration(UpdatedComponent->GetComponentLocation());
 	}
+	if (!CachedWind.IsZero() && UpdatedComponent)
+	{
+		const FVector Up = -GetGravityAcceleration(UpdatedComponent->GetComponentLocation()).GetSafeNormal();
+		Acceleration += ComputeWindAcceleration(InVelocity, CachedWind, WindHeading, Up.IsZero() ? FVector::UpVector : Up, WindResponse);
+	}
 	return Acceleration;
 }
 
@@ -82,9 +90,48 @@ bool UVCArrowMovementComponent::IsBelowSurface(const FVector& Location, const FV
 	return FVector::DotProduct(Location - SurfacePoint, Up) < 0.0;
 }
 
+FVector UVCArrowMovementComponent::ComputeWindAcceleration(const FVector& Velocity, const FVector& Wind, const FVector& Heading,
+	const FVector& Up, float Response)
+{
+	// Across the heading in the local horizontal: the one direction the wind pushes an arrow aside (its speed along the
+	// heading is the bow's, along up the drop is gravity's). Measured against the launch heading, not the arrow's own line,
+	// across which it never moves.
+	const FVector Across = FVector::CrossProduct(Up, Heading).GetSafeNormal();
+	if (Response <= 0.f || Across.IsZero())
+	{
+		return FVector::ZeroVector;
+	}
+	return Across * (FVector::DotProduct(Wind - Velocity, Across) * Response);
+}
+
+void UVCArrowMovementComponent::RefreshWind(float DeltaTime)
+{
+	WindSampleRemaining -= DeltaTime;
+	if (WindSampleRemaining > 0.f || !UpdatedComponent)
+	{
+		return;
+	}
+	WindSampleRemaining = WindSampleInterval;
+#if WITH_WORLD_WEATHER
+	if (const UWorldWeatherSubsystem* Weather = WindResponse > 0.f ? UWorldWeatherSubsystem::Get(this) : nullptr)
+	{
+		// The owner asks, so its exposure is cached between the weather's shelter reads and the trace ignores the arrow.
+		const FWorldWeatherConditions Conditions = Weather->GetConditionsAt(UpdatedComponent->GetComponentLocation(), GetOwner());
+		CachedWind = Conditions.WindVector * Conditions.Exposure;
+		return;
+	}
+#endif
+	CachedWind = FVector::ZeroVector;
+}
+
 void UVCArrowMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	RefreshWorldBounds();
+	if (WindHeading.IsZero() && !Velocity.IsNearlyZero())
+	{
+		WindHeading = Velocity.GetSafeNormal();
+	}
+	RefreshWind(DeltaTime);
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	// A stop (a hit, the arrow sticking) clears UpdatedComponent.
 	if (UpdatedComponent)

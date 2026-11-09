@@ -13,9 +13,7 @@
 #include "CollisionShape.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
-#include "GameFramework/Character.h"
 #include "GameFramework/Pawn.h"
-#include "Components/SkeletalMeshComponent.h"
 
 #if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
 #include "Components/EquipmentManagerComponent.h"
@@ -179,34 +177,17 @@ bool UVCRangedAttackAbility::ReleaseDraw(UAbilitySystemComponent* ASC)
 	return false;
 }
 
-FVector UVCRangedAttackAbility::ComputeArrowStart(const AActor* Avatar) const
+FVector UVCRangedAttackAbility::ComputeLaunchStart(const FVector& RayOrigin, const FVector& RayDirection, const FVector& Nock)
 {
-	if (!Avatar)
-	{
-		return FVector::ZeroVector;
-	}
-	FVector Eyes;
-	FRotator View;
-	Avatar->GetActorEyesViewPoint(Eyes, View);
-	// The drawn bow's grip where this machine poses the body: a dedicated server never does (its bones stand still), nor
-	// does a body hidden in first person or out of every view, whose bones are not refreshed.
-	const ACharacter* Character = Cast<ACharacter>(Avatar);
-	const USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : nullptr;
-	if (Mesh && Avatar->GetNetMode() != NM_DedicatedServer && Mesh->WasRecentlyRendered(0.2f) && Mesh->GetBoneIndex(BowHandBone) != INDEX_NONE)
-	{
-		return Mesh->GetBoneLocation(BowHandBone) + View.RotateVector(BowGripOffset);
-	}
-	return Eyes + View.RotateVector(ArrowStartOffset);
+	return RayOrigin + RayDirection * FMath::Max(FVector::DotProduct(Nock - RayOrigin, RayDirection), 0.0);
 }
 
-FVector UVCRangedAttackAbility::ComputeLaunchDirection(const FVector& Start, const FVector& AimPoint, const FVector& ViewDirection, float MinDistance)
+FVector UVCRangedAttackAbility::ComputeLaunchVelocity(const FVector& Direction, float Speed, const FVector& ShooterVelocity)
 {
-	const FVector ToAim = AimPoint - Start;
-	const FVector Direction = ToAim.GetSafeNormal();
-	return ToAim.Size() > MinDistance && FVector::DotProduct(Direction, ViewDirection) > 0.5 ? Direction : ViewDirection;
+	return Direction * Speed + ShooterVelocity;
 }
 
-bool UVCRangedAttackAbility::ComputeShot(const AActor* Avatar, FVector& OutStart, FVector& OutDirection, FVector* OutAimPoint) const
+bool UVCRangedAttackAbility::ComputeShot(const AActor* Avatar, FVector& OutStart, FVector& OutDirection) const
 {
 	UWorld* World = Avatar ? Avatar->GetWorld() : nullptr;
 	if (!World)
@@ -216,27 +197,26 @@ bool UVCRangedAttackAbility::ComputeShot(const AActor* Avatar, FVector& OutStart
 	FVector Eyes;
 	FRotator View;
 	Avatar->GetActorEyesViewPoint(Eyes, View);
-	const FVector ViewDirection = View.Vector();
-	OutStart = ComputeArrowStart(Avatar);
 
-	// What the reticle is on (D74, G156): the aim ray starts at the aim camera while the character aims in third person
-	// (the same origin the owner's screen centre has, computed alike here), at the eyes otherwise. Terrain and props
-	// block the Pawn channel, and so do the capsules a visibility trace passes.
+	// Along the reticle's line (D83): the aim ray starts at the aim camera while the character aims in third person (the
+	// same origin the owner's screen centre has, computed alike here, D74), at the eyes otherwise. The arrow leaves on that
+	// line abreast of where it is nocked, whatever the ray meets, so holding over a target or off it for wind moves the
+	// shot exactly as much as the reticle moves (G164: aiming at what the ray met from the bow's grip, 56 uu left of the
+	// aim camera, bent the line by what lay behind the reticle).
 	FVector RayOrigin, RayDirection;
 	UVCCombatStatics::ComputeAimRay(Avatar, RayOrigin, RayDirection);
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCRangedAim), /*bTraceComplex*/ false, Avatar);
-	FHitResult Hit;
-	const FVector Far = RayOrigin + RayDirection * AimRange;
-	const FVector AimPoint = World->SweepSingleByChannel(Hit, RayOrigin, Far, FQuat::Identity, ECC_Pawn, FCollisionShape::MakeSphere(4.f), Params)
-		? Hit.ImpactPoint : Far;
-	if (OutAimPoint)
-	{
-		*OutAimPoint = AimPoint;
-	}
+	const FVector Nock = Eyes + View.RotateVector(ArrowStartOffset);
+	OutStart = ComputeLaunchStart(RayOrigin, RayDirection, Nock);
+	OutDirection = RayDirection;
 
-	// From the bow straight at what the reticle is on (G159): the arrow leaves on the reticle's line and gravity drops it
-	// with distance, so the player aims over a far target; an aim point at the bow or behind it flies along the view.
-	OutDirection = ComputeLaunchDirection(OutStart, AimPoint, ViewDirection, 2.f * ArrowStartOffset.Size());
+	// The start is beside the body (under the aim camera's shoulder): an arrow never starts through a wall the archer
+	// stands against. A wall between the eyes and the start starts it at the wall, where it hits.
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCRangedStart), /*bTraceComplex*/ false, Avatar);
+	FHitResult Hit;
+	if (World->SweepSingleByChannel(Hit, Eyes, OutStart, FQuat::Identity, ECC_Pawn, FCollisionShape::MakeSphere(4.f), Params))
+	{
+		OutStart = Hit.Location;
+	}
 	return true;
 }
 
@@ -419,7 +399,10 @@ bool UVCRangedAttackAbility::Shoot(AActor* Avatar, float DrawSeconds)
 		UE_LOG(LogVoxelCharacter, Warning, TEXT("%s's release: the inventory kept its arrow, refused"), *GetNameSafe(Avatar));
 		return false;
 	}
-	AVCArrowProjectile* Arrow = AVCArrowProjectile::SpawnArrow(Shooter, ArrowClass, Start, Direction * Ranged->LaunchSpeed * Power, Shot, Mesh);
+	// The bow's speed along the aim plus the archer's own motion (D83).
+	const FVector ShooterVelocity = Shooter->GetVelocity();
+	const FVector Velocity = ComputeLaunchVelocity(Direction, Ranged->LaunchSpeed * Power, ShooterVelocity);
+	AVCArrowProjectile* Arrow = AVCArrowProjectile::SpawnArrow(Shooter, ArrowClass, Start, Velocity, Shot, Mesh);
 	LastArrow = Arrow;
 
 	// Every shot wears the bow by its DegradeRate.
@@ -427,9 +410,9 @@ bool UVCRangedAttackAbility::Shoot(AActor* Avatar, float DrawSeconds)
 	{
 		Weapon.Equipment->ApplyDurabilityLoss(Weapon.Equipment->GetHeldSlotTag(CGFGameplayTags::Equipment_Slot_MainHand), Durability->DegradeRate);
 	}
-	UE_LOG(LogVoxelCharacter, Log, TEXT("%s shoots after %.2f s: power %.2f, %.0f uu/s, %s from (%.0f, %.0f, %.0f) along (%.3f, %.3f, %.3f)"),
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s shoots after %.2f s: power %.2f, %.0f uu/s, %s from (%.0f, %.0f, %.0f) along (%.3f, %.3f, %.3f), the shooter's velocity (%.0f, %.0f, %.0f)"),
 		*GetNameSafe(Avatar), DrawSeconds, Power, Ranged->LaunchSpeed * Power, *GetNameSafe(Arrow), Start.X, Start.Y, Start.Z,
-		Direction.X, Direction.Y, Direction.Z);
+		Direction.X, Direction.Y, Direction.Z, ShooterVelocity.X, ShooterVelocity.Y, ShooterVelocity.Z);
 	return Arrow != nullptr;
 #else
 	return false;

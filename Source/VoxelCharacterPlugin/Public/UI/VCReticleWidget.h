@@ -15,8 +15,9 @@ class AVCCharacterBase;
  * while the owning player's character aims a ranged weapon (AVCCharacterBase::IsAiming), in both views. The ticks close
  * on the dot as the owner's draw gains power (GetOwnDrawPower: nothing below the shortest draw, full at the full one);
  * the reticle reddens over a hostile (IsAimOnHostile). Built in code like the other HUD widgets; owned and placed by
- * AVCPlayerController (centre-anchored). It marks where the shot lands: the shot's ray and the aim camera are one
- * computation (UVCCombatStatics::ComputeAimRay, D74).
+ * AVCPlayerController (centre-anchored). It marks the line the arrow leaves on: the arrow flies along the aim ray, and
+ * the ray and the aim camera are one computation (UVCCombatStatics::ComputeAimRay, D74, D83); the drop and the wind are
+ * the player's to allow for.
  */
 UCLASS()
 class VOXELCHARACTERPLUGIN_API UVCReticleWidget : public UUserWidget

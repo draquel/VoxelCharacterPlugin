@@ -140,8 +140,8 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
   attack (`AVCPlayerState::RangedAttackAbilityClass`), tag `Ability.Attack.Ranged`. Its activation starts the draw on
   the server's clock. The release reaches it as the ability system component's input release (`ReleaseDraw`:
   `ServerSetInputReleased` from a client, on the activation's channel so it cannot overtake it). At the release a draw
-  under the shortest is no shot; otherwise one arrow leaves the bag and `SpawnArrow` launches it from the drawn bow toward
-  what the reticle meets within `AimRange` (Aiming, below), at the bow's speed times the draw's power, and the bow wears by its
+  under the shortest is no shot; otherwise one arrow leaves the bag and `SpawnArrow` launches it along the reticle's line
+  (Aiming, below) at the bow's speed times the draw's power plus the archer's own velocity, and the bow wears by its
   `DegradeRate`. No ranged weapon, a dead or downed shooter or no arrow at the release: no shot, nothing used. The
   owner's check and the server's are one predicate, `CanStartDraw` (D-CR16).
 - **The arrow (D54).** `AVCArrowProjectile` (`Combat/VCArrowProjectile.h`), replicated and spawned by the server only
@@ -152,7 +152,13 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
   prop; unhit it goes after `FlightLifetime` (10 s). A shooter gone before the hit: the faction it had at the launch
   decides. `UVCArrowMovementComponent` is the engine's projectile movement with gravity replaced on a planet by the pull
   toward the centre from where the arrow is, read every forced 1/60 s substep; below the generated surface in a chunk with
-  no cooked collision it stops at that surface.
+  no cooked collision it stops at that surface. **The wind** (D83, with WorldWeatherPlugin, `WITH_WORLD_WEATHER`): every
+  `WindSampleInterval` (0.1 s) the arrow reads the weather's wind where it is times the exposure there (none under
+  shelter); across its launch heading in the local horizontal its speed takes the cross wind's at `WindResponse` (0.4)
+  a second, so it drifts downwind and never faster than the wind, while a head or tail wind and the vertical are left
+  alone (the bow's speed and the drop stay the bow's and gravity's; `ComputeWindAcceleration`, pure). A full draw drifts
+  about 28 uu at 30 m and 63 at 45 m in the weather's strong wind (600 uu/s); measured on the range, 2.8 uu at 10 m, 35 at
+  33 m and 62.5 at 44 m in a 637 uu/s cross wind. Test `VoxelCharacter.Combat.Arrow.WindRule`.
 - **The look.** The Bow action set and `ABP_VCLayer_Bow` (Animation, below): aiming raises the bow (Aiming, below), the
   draw and the release play over the
   upper body only, the drawn bow follows the view's pitch, and in third person the body turns toward the view while the
@@ -169,9 +175,8 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
   widgets") shows while aiming in both views, its ticks closing with the owner's draw (`GetOwnDrawPower`), red over a
   hostile (`IsAimOnHostile`). **The shot's ray** (G156): `UVCCombatStatics::ComputeAimRay` is one predicate on the owner
   and the server: a character aiming in third person aims from its aim camera, whose place follows from the pawn and
-  the view alone (`UVCAimCameraMode::ComputeDefaultCameraLocation`, no lag), so the arrow converges on the reticle;
-  anyone else aims from the eyes along the view as before. The arrow still leaves the bow (`ArrowStartOffset`) toward
-  the ray's hit. Edit mode keeps the secondary action for placing (a held bow is no placing tool). Tests
+  the view alone (`UVCAimCameraMode::ComputeDefaultCameraLocation`, no lag), so the screen's centre is the ray;
+  anyone else aims from the eyes along the view as before. The arrow flies along that ray (D83, below). Edit mode keeps the secondary action for placing (a held bow is no placing tool). Tests
   `VoxelCharacter.Combat.AimCameraLocation`.
   **Raise, draw, release** (D76, 2026-11-08, the user's flow after the character refinement plan): holding the
   secondary action raises the bow, the arm up and the string undrawn (the pack's `Aim_A_Loop`, faded in by
@@ -192,19 +197,29 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
   slot's montage, the larger), so the upper body keeps the clips' turn wherever the hips face; the idle's stance stays in
   local space as C2 made it. After: the bow arm 10 degrees right of the view drawn (the clip's own), 17 raised, 4 to 8
   in the strafe; from behind and above, the drawn bow points down the range at the reticle on both bodies.
-  **The shot from the bow, on the reticle's line** (G159): the arrow leaves the drawn bow (`ComputeArrowStart`:
-  `hand_l` plus `BowGripOffset` where this machine poses the body, else the eyes plus `ArrowStartOffset`, now
-  (75, 4, -8), the grip as measured from the eyes on both bodies, (76, 4, -6) and (80, 4, -12); before, (50, -10, -20)
-  put it beside the face) straight at what the reticle is on (`ComputeLaunchDirection`, pure), at the bow's speed times
-  the draw's power: the power builds from 0.3 at the shortest draw (0.25 s) to full at one second
-  (`UItemFragment_RangedWeapon::GetDrawPower`), and gravity drops the arrow with distance, more for a weak draw. There is
-  no aim assist (the user, 2026-11-08: the player aims over a far target; what matters is that the aim is true from the
-  player's view); the server logs each shot's start and direction. On the range, 1.5 m beside the posts' line, the
-  reticle on each post's face, a full draw (6000 uu/s) stuck 11.5 uu under the reticle at 10 m and 49.7 at 20 m (the
-  drop from the bow, 11.2 and 49.6), within 1.4 uu aside; seen from the aim camera the 20 m hit is 0.003 degrees aside of
-  the reticle and 1.3 below it, straight under. At 40 m a full draw drops 2.1 m (it met the floor at 33 m aiming at the
-  post's face 1.5 m up); a half draw (0.5 s, 3200 uu/s) drops 40 uu at 10 m. Test
-  `VoxelCharacter.Combat.LaunchDirection`.
+  **The shot along the reticle's line** (D83, 2026-11-09, the user: a physical shot, no aim assist, an honest view so
+  the player learns to hold over for range and off for wind): the arrow starts on the aim ray abreast of where it is
+  nocked (`ArrowStartOffset` (75, 4, -8) from the eyes, the drawn bow's grip as measured on both bodies; the start is
+  that point's projection onto the ray, `ComputeLaunchStart`) and flies along the ray (`ComputeShot`), at the bow's
+  speed times the draw's power plus the archer's own velocity (`ComputeLaunchVelocity`: strafing carries the arrow).
+  Nothing the ray meets changes the shot, so the reticle is the launch line at every range: gravity drops the arrow
+  below it with distance (more for a weak draw: the power builds from 0.3 at the shortest draw, 0.25 s, to full at one
+  second, `UItemFragment_RangedWeapon::GetDrawPower`), the wind pushes it downwind (the arrow, above), and the player
+  allows for both. The start is beside the body under the aim camera's shoulder, so a wall between the eyes and it
+  starts the arrow at the wall, never through it. The owner and the server compute the same ray (D74) and so the same
+  shot; the server logs each one's start, direction and the shooter's velocity. The red reticle over a hostile stays: it
+  names what the ray is on, it does not move the shot. In first person the ray is the eyes' and the arrow starts 75 uu
+  ahead on it. The visible cost: in third person the arrow appears on the screen's centre line, some 56 uu right of the
+  drawn bow, for its first frame (100 uu at 60 fps).
+  **G164** (fixed by D83): G159 had the arrow leave the drawn bow's grip straight at what the ray met within 20,000 uu
+  (G159's launch direction, now gone), from a grip 56 uu left of the aim camera, so the line bent by what lay behind the reticle.
+  On the range, a full draw at the 45 m wall: the reticle on the wall 3.8 m up struck 0.0 uu aside of the reticle's line;
+  raised 1 m, past the wall's top into open sky, it struck 43 uu left (the ray met nothing, so the arrow aimed at a point
+  200 m out). That was the player's "held over, it lands left; on the deer, it hits the legs" (the legs: the drop).
+  Now, in calm air: 0.0 uu aside in all four shots (the reticle on the 10 m post, on the wall at 1.5 and 3.8 m, and
+  over its top), 11 uu under the line at 10 m and 264 at 45 m (gravity's 263). Strafing at 360 uu/s the arrow struck
+  where the archer's motion carries it (903.8 against 897 predicted, -83 without it). Test
+  `VoxelCharacter.Combat.LaunchAlongAimRay`.
 
 ### Death and respawn
 
@@ -964,7 +979,7 @@ Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, World
 `Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
-and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchDirection` (G159) and `Anim.AimRaise` (D76); the sheaths'
+and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83) and `Anim.AimRaise` (D76); the sheaths'
 `EquipmentLoop.SheathSlots`, `SheathActionSet` (the set follows the drawn weapon, R and X, the snapshot's drawn state),
 `SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip` (the equipment sheathing plan's S2-S4). The feel is judged by hand on `/Game/PluginTesting/Tests/Character/CharacterTest`
 (the plan's C0; `Scripts/setup_character_test.py` builds it: a flat floor with a measured lane, block steps and a ramp,
