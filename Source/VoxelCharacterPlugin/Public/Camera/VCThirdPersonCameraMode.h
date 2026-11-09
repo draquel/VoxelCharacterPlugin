@@ -32,9 +32,17 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Camera")
 	FVector TargetOffset = FVector(0.f, 50.f, 60.f);
 
-	/** Interpolation speed for camera lag (higher = snappier). */
+	/** Interpolation speed for camera lag (higher = snappier). 10 until the character refinement plan's C4: the pivot then trailed 50-70 uu at a run. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Camera", meta = (ClampMin = "0.0"))
-	float LagSpeed = 10.f;
+	float LagSpeed = 15.f;
+
+	/**
+	 * The farthest the lagged pivot may trail the ideal one (uu); 0 = no cap. At LagSpeed the pivot settles speed / LagSpeed
+	 * behind a pawn at a steady speed and swings past on a direction change, which read as the body sliding (the character
+	 * refinement plan's C4); the cap bounds both.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Camera", meta = (ClampMin = "0.0"))
+	float MaxLagDistance = 40.f;
 
 	/**
 	 * A pivot that jumps farther than this in one frame snaps to the character instead of lagging after it: a teleport, a
@@ -57,10 +65,11 @@ public:
 	 * @param InLagSpeed Lag speed (0 = no lag)
 	 * @param SnapDistance Teleport threshold (0 = never snap)
 	 * @param bOutSnapped Whether it snapped for a teleport
+	 * @param InMaxLagDistance The farthest the result may lie from the ideal pivot (0 = no cap)
 	 * @return The new lagged pivot
 	 */
 	static FVector ComputeLaggedPivot(const FVector& LaggedPivot, const FVector& IdealPivot, const FVector& LastIdealPivot, float DeltaTime,
-		float InLagSpeed, float SnapDistance, bool& bOutSnapped);
+		float InLagSpeed, float SnapDistance, bool& bOutSnapped, float InMaxLagDistance = 0.f);
 
 private:
 	/** Lagged pivot position (persisted across frames for smooth follow). */

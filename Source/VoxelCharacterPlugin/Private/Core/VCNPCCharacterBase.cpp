@@ -94,11 +94,13 @@ AVCNPCCharacterBase::AVCNPCCharacterBase(const FObjectInitializer& ObjectInitial
 	AIControllerClass = AVCNPCAIController::StaticClass();
 	AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
 	bUseControllerRotationYaw = false;
-	if (UCharacterMovementComponent* Move = GetCharacterMovement())
+	if (UVCMovementComponent* Move = Cast<UVCMovementComponent>(GetCharacterMovement()))
 	{
 		Move->bOrientRotationToMovement = true;
 		Move->RotationRate = FRotator(0.f, 360.f, 0.f);
 		Move->MaxWalkSpeed = 300.f;
+		// The gait table is the player's (D75): NPCs keep these numbers and the engine's acceleration and braking.
+		Move->bUseGaitTable = false;
 	}
 }
 

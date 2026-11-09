@@ -349,6 +349,56 @@ content scripts the phase changed (never while another editor runs, G150).
   `vc.Move.*`, then the pass on the lane: Legacy → GASP → Tuned, the numbers in this plan's results, the camera lag last.
   `npc_bench.py` before and after. Docs: "Movement", §4 of the console guide.
 
+**C4 result (2026-11-08; VoxelCharacterPlugin, and the parent's `lane_pass.py`, console guide and FINDINGS).**
+- `FVCMovementTable GaitTable` on `UVCMovementComponent` (`CHARACTER_SYSTEM.md` "Movement"): a `FVCGaitSettings` row per
+  gait, the rotation rates by mode, the sprint's ramps, applied at the start of every `PerformMovement` from saved-move
+  state (the sprint, a new walk flag, the crouch) and the rotation mode; `ComputeGaitValues` is the pure form. GASP's
+  numbers were read from `SandboxCharacter_CMC`'s class defaults and `Curve_StrafeSpeedMap` rather than §1.4's table:
+  the speeds as §1.4 has them; `BrakingFrictionFactor` 0 (a stop is the deceleration alone); the strafe map holds the
+  forward cap to 45 degrees and the backward cap from 135, linear between. `bUseGaitTable` off on `AVCNPCCharacterBase`
+  (the NPC's numbers asserted by `VoxelCharacter.Movement.GaitTableApplied`; `npc_bench.py` was not re-run: the NPC
+  path gained one flag check per move). G154 closed: `OnMovementModeChanged` restores the ground acceleration on any
+  way out of the water.
+- Turning: instant capsule yaw on the ground in both modes, 200 in the air, the swim's 500 kept. The face-aim flip is a
+  turn (`UVCMovementComponent::SetFacesAim`, `AdvanceAimTurn` in `PhysicsRotation`): the capsule turns toward the view
+  (or back toward where it moves) at `AimTurnRate` 540 degrees a second and the flags change within `AimTurnTolerance`
+  15 degrees or after `AimTurnMaxTime` 0.5 s. The planet A/B on `PlanetTest` (the probe at the equator and at 75 degrees
+  south, running north then a 90 degree pivot, running then a 180): the body's up along the radius to 1.000 throughout,
+  the forward on the velocity within 0.5 s of each pivot, the table's values in force (the friction 10: the row's 5
+  times the surface's scale; the cap 425 at the south: the cold's 0.85).
+- The graph: `CurrentMaxDeceleration` from `GetMaxBrakingDeceleration`; `RotateTowardsMovementSpeed` and
+  `MaxControllerYawRate` on `UVCMotionMatchingAnimInstance` and the cvars `vc.Anim.TrajectoryRotateSpeed` /
+  `vc.Anim.TrajectoryYawRate` (not changed by the pass).
+- `vc.Move.Preset Legacy|GASP|Tuned`, `vc.Move.Set` (a row's field, a rate or ramp, or the flip's three), `vc.Move.Print`;
+  `ToggleVoxelDebug` adds the gait, the mode and the row (the console guide §4, and a recipe in §12).
+  `Scripts/qa/lane_pass.py` runs the lane per body and preset and tables the legs; it resets the slide measure before
+  each lane (left running, the teleport back to the start counted as a 2,700 uu/s slide on the run-up leg).
+- **The pass** (both bodies, the bow in hand, the wind off, the slide in uu/s with the planted seconds in brackets; the
+  runs' spread from five GASP runs: the release leg 99-230 on LowPoly, Kellan's second 180 pivot 106-419, the rest within
+  about 30):
+
+  | Leg | LowPoly C0 | Legacy | GASP | Kellan C0 | Legacy | GASP |
+  |---|---|---|---|---|---|---|
+  | run-up +X 15 m | 251.7 (1.8) | 271.4 (1.8) | 110.1 (2.0) | 302.8 (1.6) | 296.5 (1.6) | 190.0 (1.9) |
+  | pivot 90 to +Y / back | 214.2 / 200.1 | 199.9 / 200.5 | 139.2 / 128.5 | 242.7 / 296.5 | 245.1 / 311.0 | 150.3 / 147.7 |
+  | pivot 180 to -X / back | 324.3 / 259.2 | 260.6 / 248.1 | 161.6 / 73.5 | 229.3 / 208.8 | 249.5 / 280.2 | 182.7 / 106.0 |
+  | strafe +Y drawn / released -Y | 344.5 / 464.8 | 351.4 / 161.1 | 82.8 / 230.1 | 566.7 / 512.0 | 517.3 / 143.1 | 126.7 / 166.9 |
+  | straight +X | 180.0 (0.4) | 211.0 (0.6) | 131.2 (0.6) | 318.5 (0.5) | 574.8 (0.3) | 99.5 (0.3) |
+  | stop from the run | 0.13 s, 38 uu | 0.13 s, 38 uu | 0.27 s, 67 uu | 0.13 s, 38 uu | 0.14 s, 40 uu | 0.27 s, 66 uu |
+  | whole lane: walk / run | 137.7 / 313.8 | 132.1 / 261.6 | 83.0 / 149.5 | 228.9 / 343.8 | 264.1 / 338.6 | 153.6 / 159.7 |
+
+  The legs take longer on GASP's table (a 500 uu pivot leg 1.48 s against 1.08: the 800 acceleration and the 500 cap).
+  Legacy against C0's baseline is the same lane on the same code with the flip eased (the released leg 465 to 161 on
+  LowPoly, 512 to 143 on Kellan: the eased flip alone); GASP's rows then halve the run's slide over the whole lane and
+  cut the drawn strafe's four to five times. The one leg GASP leaves worse on LowPoly, the release, is within the runs'
+  spread, and so were the flip's variants (`AimTurnRate` 5000, `AimTurnMaxTime` 0.25) and GASP repeated: **`Tuned` is
+  GASP's table verbatim** and the default; the preset is where C2's and C3's passes put their changes. The camera's
+  `LagSpeed` 10 to 15 and a `MaxLagDistance` of 40 uu (the pivot settled 50 uu behind a run and swung past on a pivot).
+- Gates: the editor build; the headless suite (866 tests: the two new tests' own expectations fixed, then
+  `VoxelCharacter.Movement`, `.Combat.Ranged`, `.Camera`, `.Planet` 25 of 25); `editor_gate.py` 27 of 27 with
+  `VoxelEngine.Replication.Framework` (the dedicated server and client) and the parity lines identical; `-NonUnity
+  -Changed` on the two modules.
+
 ### C5: Close (S)
 - This plan frozen; results paragraphs in `CHARACTER_SYSTEM.md`; the glossary (stance, gait table, aim state, the
   lane); FINDINGS rows moved to Closed; the QA tracker's F13 results; the main checkout synced and its scripts re-run.
