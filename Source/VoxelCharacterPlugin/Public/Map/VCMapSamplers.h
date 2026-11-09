@@ -112,10 +112,11 @@ struct VOXELCHARACTERPLUGIN_API FVCGlobeProjection
 };
 
 /**
- * Fills a BGRA texture from a planet map's tile images: each texel shows the tile pixel its direction falls in, through
- * a grid of control points every Step texels (texels of a cell whose corners lie on one face interpolate the face's UV;
- * cells across a face edge or the globe's rim go texel by texel). Explored tiles without the image asked for are
- * requested (UVoxelMapSubsystem::RequestTileImage). Game thread.
+ * Fills a BGRA texture from a planet map's tile pyramid (MAP_PYRAMID_PLAN.md P1): each texel shows the pixel its direction
+ * falls in at the view's Level, or, while that tile draws, the pixel of the nearest coarser level stored over it, through a
+ * grid of control points every Step texels (texels of a cell whose corners lie on one face interpolate the face's UV;
+ * cells across a face edge or the globe's rim go texel by texel). It asks for nothing: it reports the tiles at Level it
+ * shows (ViewTiles), and the caller requests them (UVoxelMapSubsystem::RequestView). Game thread.
  */
 struct VOXELCHARACTERPLUGIN_API FVCPlanetMapSampler
 {
@@ -129,19 +130,25 @@ struct VOXELCHARACTERPLUGIN_API FVCPlanetMapSampler
 	/** Draw tiles whether explored or not (the minimap's area is explored as it draws). */
 	bool bRequireExplored = true;
 
-	/** Ask for the tiles' detail images, not just an image (a zoomed-in view). */
-	bool bWantDetail = false;
+	/** The pyramid level the view is composed from (UVoxelMapSubsystem::LevelForTexel: its pixels match the texels). */
+	int32 Level = 0;
+
+	/** A tile not drawn yet at Level falls back on the stored tiles up to this many levels coarser (beyond: Undrawn). */
+	int32 MaxFallbackLevels = 8;
 
 	/**
 	 * Draw from the planet's globe albedo instead of tile images (spherical Phase 6, WM-BP11): a view zoomed out so far
 	 * that a texel spans many tiles. Each texel shows its albedo cell's colour where an explored tile lies in the cell
-	 * (UVoxelMapSubsystem::IsGlobeCellExplored), else Unexplored (bRequireExplored); no tile images are asked for. Without
-	 * an albedo yet (it builds on first use) the tiles are drawn.
+	 * (UVoxelMapSubsystem::IsGlobeCellExplored), else Unexplored (bRequireExplored); no tile is reported. Without an
+	 * albedo yet (it builds on first use) the tiles are drawn.
 	 */
 	bool bUseGlobeAlbedo = false;
 
-	/** If set, receives every tile the fill read (G64: the minimap fills again when one of their images changes). */
-	TSet<FIntPoint>* VisitedTiles = nullptr;
+	/**
+	 * If set, receives the coordinates at Level of the tiles the fill shows (those holding an explored texel with
+	 * bRequireExplored), nearest the texture's centre first: the view's request (UVoxelMapSubsystem::RequestView).
+	 */
+	TArray<FIntPoint>* ViewTiles = nullptr;
 
 	/**
 	 * Fill the texture.
@@ -151,7 +158,7 @@ struct VOXELCHARACTERPLUGIN_API FVCPlanetMapSampler
 	 * @param Step Control point spacing (texels)
 	 * @param TexelDirection The direction at a texel position (continuous: texel (X, Y)'s centre is (X + 0.5, Y + 0.5));
 	 *        false where the view shows no ground
-	 * @return Number of texels drawn from a tile image
+	 * @return Number of texels drawn from a tile image (at Level or coarser) or the albedo
 	 */
 	int32 Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 TexSize, int32 Step,
 		TFunctionRef<bool(double X, double Y, FVector& OutDirection)> TexelDirection) const;
@@ -160,12 +167,12 @@ struct VOXELCHARACTERPLUGIN_API FVCPlanetMapSampler
 /**
  * A map texture on a plane (heightmap worlds; world modes review G64): the texture centred on a position, WorldPerPixel
  * units a texel, texel (X, Y) at world (X, Y) from the texture's corner, or with bNorthUp (the world map) texel X along
- * world +Y (east right) and texel Y along world -X (north up). Each texel shows the tile pixel just inside its far corner
- * (in +X, +Y), the pixel a blit of every tile pixel at its near corner wrote last, so the image is the same where tiles are
- * finer than texels and every texel is drawn where they are coarser (an overview image). Columns and rows are worked out
- * once, so a fill costs a few operations a texel. With bRequireExplored (the world map) only explored tiles draw, the fog
- * colours cover the rest, and the explored tiles in view without the image asked for are requested
- * (UVoxelMapSubsystem::RequestTileImage). The minimap and the world map share it (code review CR2, VCP-15).
+ * world +Y (east right) and texel Y along world -X (north up). Each texel shows the pixel just inside its far corner (in
+ * +X, +Y) at the view's Level of the tile pyramid (MAP_PYRAMID_PLAN.md P1), or, while that tile draws, the nearest
+ * coarser level's stored over it. Columns and rows are worked out once, so a fill costs a few operations a texel. With
+ * bRequireExplored (the world map) only explored ground draws and the fog colours cover the rest. It asks for nothing: it
+ * reports the tiles at Level it shows (ViewTiles), and the caller requests them (UVoxelMapSubsystem::RequestView). The
+ * minimap and the world map share it (code review CR2, VCP-15).
  */
 struct VOXELCHARACTERPLUGIN_API FVCPlaneMapSampler
 {
@@ -177,20 +184,25 @@ struct VOXELCHARACTERPLUGIN_API FVCPlaneMapSampler
 	FColor Undrawn = FColor(25, 25, 25, 255);
 
 	/**
-	 * Draw only explored tiles, Unexplored elsewhere and Undrawn where an explored tile has no image yet, and ask for the
-	 * images explored tiles lack (the world map); false: every tile with an image, Background elsewhere, nothing asked for
-	 * (the minimap, whose area is explored as it draws).
+	 * Draw only explored ground, Unexplored elsewhere and Undrawn where no level has an image yet (the world map); false:
+	 * every tile with an image, Background elsewhere (the minimap, whose area is explored as it draws).
 	 */
 	bool bRequireExplored = false;
 
-	/** Ask for the tiles' detail images, not just an image (a view zoomed in far enough that the overview would show blurred). */
-	bool bWantDetail = false;
+	/** The pyramid level the view is composed from (UVoxelMapSubsystem::LevelForTexel: its pixels match the texels). */
+	int32 Level = 0;
+
+	/** A tile not drawn yet at Level falls back on the stored tiles up to this many levels coarser (beyond: Undrawn). */
+	int32 MaxFallbackLevels = 8;
 
 	/** Texel X along world +Y and texel Y along world -X (the world map's north-up image); false: texel (X, Y) is world (X, Y). */
 	bool bNorthUp = false;
 
-	/** If set, receives every tile the fill read. */
-	TSet<FIntPoint>* VisitedTiles = nullptr;
+	/**
+	 * If set, receives the coordinates at Level of the tiles the fill shows (those holding an explored texel with
+	 * bRequireExplored), nearest the texture's centre first: the view's request (UVoxelMapSubsystem::RequestView).
+	 */
+	TArray<FIntPoint>* ViewTiles = nullptr;
 
 	/**
 	 * Fill the texture.
@@ -199,7 +211,7 @@ struct VOXELCHARACTERPLUGIN_API FVCPlaneMapSampler
 	 * @param TexSize Texture size (square)
 	 * @param Center World position the texture is centred on
 	 * @param WorldPerPixel World units per texel
-	 * @return Texels drawn from a tile image (the blit: tile pixels written)
+	 * @return Texels drawn from a tile image (at Level or coarser)
 	 */
 	int32 Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 TexSize, const FVector& Center, double WorldPerPixel) const;
 };

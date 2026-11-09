@@ -1,6 +1,6 @@
 # Map UI Widgets
 
-> State as of 2026-11-02 (code review CR5).
+> State as of 2026-11-09 (MAP_PYRAMID_PLAN.md P1: both maps on the tile pyramid).
 
 **Module**: VoxelCharacterPlugin
 **Dependencies**: VoxelWorlds' `VoxelMap` module (`UVoxelMapSubsystem`, the tile data), UMG (rendering)
@@ -86,11 +86,16 @@ A fill (`RefreshMapTexture(Center)`):
 
 1. Lock the transient `UTexture2D` mip 0 bulk data
 2. A planet: `FVCPlanetMapSampler::Fill` over the tangent plane at `Center`. A plane: `FVCPlaneMapSampler::Fill`, texel
-   by texel (each texel the tile pixel just inside its far corner, the pixel the old per-tile-pixel blit wrote last; the
+   by texel (each texel the pixel just inside its far corner, the pixel the old per-tile-pixel blit wrote last; the
    columns' and rows' tiles and positions worked out once; the per-tile-pixel blit before G64 left gaps where tile
-   pixels are coarser than texels). Both report the tiles they read (`VisitedTiles`).
+   pixels are coarser than texels). Both compose from the tile pyramid at the level matching the texels
+   (`UVoxelMapSubsystem::LevelForTexel`: level 1 at the defaults, 160 uu texels over 75 uu voxels), the nearest coarser
+   level stored over a texel while its tile draws, and report the tiles they showed at that level (`ViewTiles`, nearest
+   the centre first).
 3. Unlock and `UpdateResource()`
 4. Apply via `SetBrushFromTexture()` + `SetDesiredSizeOverride()`
+5. Ask the map for the tiles shown (`RequestView(EVoxelMapRequester::Minimap, ...)`, served before the world map's); the
+   arrivals change the tiles' signature, so the next refresh fills again. The request goes when the widget does
 
 `vc.Minimap.Stats [reset]` logs refreshes, fills, those skipped, refreshes over 2 ms and each phase's mean and maximum
 (tile requests, texture fill, texture upload, markers, the refresh).
@@ -150,32 +155,36 @@ The world map only renders explored tiles. Unexplored areas within the view appe
 |-------|-----------|
 | Unexplored | Dark background (RGB: 10, 10, 10) |
 | Explored, tile not yet generated (or its image evicted) | Slightly lighter fog (RGB: 25, 25, 25) |
-| Explored, tile generated | Full terrain colors from tile pixel data, its detail image or its overview |
+| Explored, tile generated | Full terrain colors from the tile pyramid at the view's level, or the nearest coarser level stored while that draws |
 
 Exploration state is queried from `UVoxelMapSubsystem::IsTileExplored()`.
 
-### Tile Images on Demand
+### Tile Images on Demand (the pyramid)
 
-The map keeps tile images under a fixed budget (world modes review WM-E2): a tile may have only its overview (a quarter
-of the resolution a side) or no image at all until asked for (`Plugins/VoxelWorlds/Documentation/Features/MAP_SYSTEM.md`). While
-`RebuildMapTexture()` blits the view, every explored tile in it without an image asks for one
-(`UVoxelMapSubsystem::RequestTileImage`), and when the view shows more than one and a half times an overview's resolution
-per tile (zoom above 1.5 at the default texture size) tiles that have only the overview ask for detail. The drawings
-arrive through `OnMapTileReady` and redraw the map. At zoom 1 the texture shows 16 texels per tile: exactly an overview,
-so a fully explored island draws without asking for anything.
+The map draws images for the views, at the level of its tile pyramid matching their texels
+(`Plugins/VoxelWorlds/Documentation/Features/MAP_SYSTEM.md` "The Tile Pyramid"). `RebuildMapTexture()` composes the view
+from that level (`LevelForTexel` of a texel's size: level 2 at zoom 1, where a texel is 4 voxels; level 0 zoomed in four
+times; level 6 at a tile a texel), each texel the nearest coarser level stored over it while its tile draws, and then
+asks for the tiles it showed, nearest the centre first (`RequestView(EVoxelMapRequester::WorldMap, ...)`): about 300 at
+any zoom and on any world, replacing its last request, so what a pan or a zoom left stops waiting. Closing the map drops
+the request. Before the pyramid (MAP_PYRAMID_PLAN.md P1) every explored tile in view asked for an image of its own: half a
+million at a tile a texel on the 50 km planet (G167).
 
 ### Texture Rendering
 
 `RebuildMapTexture()` is triggered by the `bMapDirty` flag, set when:
 - The widget opens (`NativeConstruct`)
-- A new tile finishes generating (`OnMapTileReady` delegate)
-- The user zooms or pans
+- Tiles of the view arrive (`OnMapTileReady`), coalesced: `FVCMapArrivalCoalescer` counts only the tiles of the view's
+  last request at its level and redraws for them at most every quarter second (G166: a redraw per arrival held the 50 km
+  globe at 94 ms frames; `VoxelCharacter.Map.ArrivalsInViewCoalesce`). Arrivals elsewhere (another view's, another level's)
+  ask for nothing
+- The exploration grew (`GetExplorationRevision`; the fog of war), at most once a second
+- The globe albedo lands (`OnGlobeAlbedoReady`)
+- The user zooms or pans (a dragged globe at most 30 times a second)
 
-The rendering blits the tiles in view into a larger fixed texture (`MapTextureFixedSize`, default 1024) with the fog of
-war above. A view of more than `TileRedrawThrottleTiles` (256) tiles redraws for tile arrivals at most every 2 s
-(`DefersTileRedraw`; WM-MP9): the most zoomed-out view of a plane holds about 66,000 tiles, and `voxel.Map.ExploreAll`
-streams an image for each. A view zoomed in to about 16 tiles across still redraws at each arrival
-(`VoxelCharacter.Map.TileRedrawThrottle`).
+The rendering composes the view into a larger fixed texture (`MapTextureFixedSize`, default 1024) with the fog of war
+above. It replaces the 2 s throttle of world modes review WM-MP9 (`DefersTileRedraw`, `TileRedrawThrottleTiles`), which a
+planet's globe never applied.
 
 `vc.WorldMap.Stats [reset]` logs the rebuilds since the last reset (per second, those over 2 ms, the tile arrivals and
 those deferred) and each phase's count, mean and maximum: texture fill, upload, markers, the rebuild. Insights shows the
@@ -214,8 +223,8 @@ The marker's canvas slot position is set relative to the center anchor (0.5, 0.5
 | Event | Action |
 |-------|--------|
 | `NativeOnInitialized` | Build widget tree |
-| `NativeConstruct` | Resolve subsystem, bind `OnMapTileReady`, center on player |
-| `NativeDestruct` | Unbind `OnMapTileReady` delegate |
+| `NativeConstruct` | Resolve subsystem, bind `OnMapTileReady` and `OnGlobeAlbedoReady`, center on player |
+| `NativeDestruct` | Unbind the delegates, drop the world map's request (`RequestView(WorldMap, {})`) |
 | `NativeTick` | Rebuild texture if dirty, update player marker |
 
 ## Planets (VoxelWorlds spherical Phase 4, SP-G3)
@@ -234,7 +243,8 @@ On a planet (`UVoxelMapSubsystem::IsPlanetMap`) both widgets read the cube-spher
   tiles from the centre at zoom 1). The zoom range comes from the planet's radius (`GetPlanetZoomRange`): the most
   zoomed-out view shows the whole globe at any radius, and where a texel covers more than two tiles
   (`GlobeAlbedoTexelsPerTile` 0.5) the globe is drawn from the map's coarse albedo (`UVoxelMapSubsystem::GetGlobeAlbedo`)
-  rather than from every tile image (spherical Phase 6, G51). Redrawn at most 30 times a second while tiles stream in.
+  rather than from the pyramid (spherical Phase 6, G51; MAP_PYRAMID_PLAN.md P2 retires the albedo for the pyramid's top
+  levels). Closer, the pyramid at the level of a texel at the globe's centre; arrivals redraw it coalesced, as on a plane.
   `SetZoom` (the game module's `vox.Map`) sets the zoom within the range. The footer shows the player's latitude and
   longitude.
 - **Markers** carry one 3D position (`FVCMapMarker::WorldLocation`; a plane's maps draw its X and Y, a planet's its
@@ -289,7 +299,7 @@ Texture->UpdateResource();
 |------|-------------|
 | `Public/Map/VCMinimapWidget.h` | Minimap widget declaration |
 | `Private/Map/VCMinimapWidget.cpp` | Minimap implementation |
-| `Public/Map/VCWorldMapWidget.h` | World map widget declaration |
+| `Public/Map/VCWorldMapWidget.h` | World map widget declaration; `FVCMapArrivalCoalescer` (arrivals in view, coalesced) |
 | `Private/Map/VCWorldMapWidget.cpp` | World map implementation |
 | `Public/Map/VCMapSamplers.h`, `Private/Map/VCMapSamplers.cpp` | `FVCPlanetMapFrame`, `FVCGlobeProjection`, `FVCPlanetMapSampler`, `FVCPlaneMapSampler` |
 | `Public/Map/VCMapMarkerRegistry.h` | `FVCMapMarker`, `UVCMapMarkerRegistry` (the marker gather) |

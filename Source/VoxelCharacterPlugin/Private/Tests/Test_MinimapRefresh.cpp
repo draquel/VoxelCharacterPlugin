@@ -16,7 +16,8 @@
 // shows changed, and shifted by the player's movement in between; a plane's texture is filled texel by texel.
 // - PlaneMapSampler: on a small plane's tiles the texel fill draws every texel from a tile image, where tiles are finer
 //   than texels and where they are coarser (the per-tile-pixel blit it replaced left gaps there; WorldMapFill keeps that
-//   blit as its reference).
+//   blit as its reference), at the pyramid level matching the texels (MAP_PYRAMID_PLAN.md P1), reporting the tiles it shows
+//   nearest the centre first, and from a coarser level while its own draws.
 // - MinimapShift: on a planet, a texture filled two texels away and shifted, with the heading taken on the plane it was
 //   drawn in, shows the terrain where a fresh fill would, to a fraction of a texel, at every latitude short of the pole
 //   (the heading taken on the player's own plane would be off by over a texel at the rim near a pole).
@@ -29,23 +30,66 @@
 #define VC_MINIMAP_FLAGS (EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
 /**
- * World modes review WM-MP9 (§23): the world map's redraw for tile arrivals waits (at most every 2 s) when a redraw per
- * arrival would be waste: the globe drawn from its albedo (the planet's G51 rule) and, in every mode, a view of more than
- * TileRedrawThrottleTiles tiles (a plane's most zoomed-out view holds about 66,000, and voxel.Map.ExploreAll streams an
- * image for each); a view zoomed in to a few tiles redraws at once, as the albedo's own arrival does.
+ * MAP_PYRAMID_PLAN.md P1, G166: the world map redraws for tile arrivals only when the tile shows in its view (its last
+ * request, at its level), and those arrivals coalesce into at most one redraw every Interval (a redraw per arrival held the
+ * 50 km globe at 94 ms frames). An arrival elsewhere (another level, a tile the view does not show) asks for nothing.
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCMap_TileRedrawThrottle, "VoxelCharacter.Map.TileRedrawThrottle", VC_MINIMAP_FLAGS)
-bool FVCMap_TileRedrawThrottle::RunTest(const FString& Parameters)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCMap_ArrivalCoalescer, "VoxelCharacter.Map.ArrivalsInViewCoalesce", VC_MINIMAP_FLAGS)
+bool FVCMap_ArrivalCoalescer::RunTest(const FString& Parameters)
 {
-	const int32 Threshold = UVCWorldMapWidget::TileRedrawThrottleTiles;
-	TestFalse(TEXT("A narrow view redraws at once"), UVCWorldMapWidget::DefersTileRedraw(false, 1));
-	TestFalse(TEXT("A view at the threshold redraws at once"), UVCWorldMapWidget::DefersTileRedraw(false, Threshold));
-	TestTrue(TEXT("A view past the threshold waits"), UVCWorldMapWidget::DefersTileRedraw(false, Threshold + 1));
-	TestTrue(TEXT("The plane's most zoomed-out view (257 x 257 tiles) waits"), UVCWorldMapWidget::DefersTileRedraw(false, 257 * 257));
-	TestTrue(TEXT("The globe on its albedo waits for a tile"), UVCWorldMapWidget::DefersTileRedraw(true, 0));
-	TestFalse(TEXT("The globe on its albedo redraws for the albedo itself"), UVCWorldMapWidget::DefersTileRedraw(false, 0));
-	TestFalse(TEXT("A custom threshold"), UVCWorldMapWidget::DefersTileRedraw(false, 1000, 1000));
-	TestTrue(TEXT("... exceeded"), UVCWorldMapWidget::DefersTileRedraw(false, 1001, 1000));
+	FVCMapArrivalCoalescer Arrivals;
+	Arrivals.Interval = 0.25;
+	TArray<FIntPoint> View;
+	for (int32 X = 0; X < 16; ++X)
+	{
+		for (int32 Y = 0; Y < 16; ++Y)
+		{
+			View.Add(FIntPoint(X, Y));
+		}
+	}
+	Arrivals.SetView(2, View);
+	TestFalse(TEXT("A tile out of view asks for nothing"), Arrivals.OnArrival(2, FIntPoint(40, 3)));
+	TestFalse(TEXT("A tile at another level asks for nothing"), Arrivals.OnArrival(3, FIntPoint(1, 1)));
+	TestFalse(TEXT("... so nothing is pending"), Arrivals.IsPending());
+
+	// The view's 256 tiles arriving over a second, one every 4 ms, with a frame every 16 ms: four redraws, not 256.
+	double Now = 0.0;
+	Arrivals.OnRedrawn(Now);
+	int32 Redraws = 0;
+	for (int32 I = 0; I < 256; ++I)
+	{
+		Now = I * 0.004;
+		TestTrue(TEXT("A tile in view counts"), Arrivals.OnArrival(2, View[I]));
+		if (I % 4 == 3 && Arrivals.IsDue(Now))
+		{
+			Arrivals.OnRedrawn(Now);
+			++Redraws;
+		}
+	}
+	Now += 0.3;
+	if (Arrivals.IsDue(Now))
+	{
+		Arrivals.OnRedrawn(Now);
+		++Redraws;
+	}
+	AddInfo(FString::Printf(TEXT("256 arrivals in view over %.2f s: %d redraws"), Now, Redraws));
+	TestTrue(TEXT("Arrivals coalesce: at most one redraw a quarter second"), Redraws >= 4 && Redraws <= 6);
+	TestFalse(TEXT("The last arrivals show: nothing left pending"), Arrivals.IsPending());
+
+	// A costly redraw holds the next back: a 0.8 s fill waits 3.2 s from its start.
+	Arrivals.OnRedrawn(Now, 0.8);
+	TestTrue(TEXT("Another arrival in view"), Arrivals.OnArrival(2, View[0]));
+	TestFalse(TEXT("... not due a quarter second after a 0.8 s redraw"), Arrivals.IsDue(Now + 0.3));
+	TestFalse(TEXT("... nor 3 s after"), Arrivals.IsDue(Now + 3.0));
+	TestTrue(TEXT("... due at four times its cost"), Arrivals.IsDue(Now + 3.25));
+
+	// A new view replaces the old (and the map redraws for it).
+	Arrivals.SetView(4, { FIntPoint(9, 9) });
+	Arrivals.OnRedrawn(Now);
+	TestFalse(TEXT("The old view's tiles no longer count"), Arrivals.OnArrival(2, FIntPoint(1, 1)));
+	TestTrue(TEXT("The new view's do"), Arrivals.OnArrival(4, FIntPoint(9, 9)));
+	TestFalse(TEXT("... after the interval since the last redraw"), Arrivals.IsDue(Now + 0.1));
+	TestTrue(TEXT("... due then"), Arrivals.IsDue(Now + 0.3));
 	return true;
 }
 
@@ -59,6 +103,7 @@ bool FVCMap_PlaneMapSampler::RunTest(const FString& Parameters)
 	UVoxelMapSubsystem* Map = W.World->GetSubsystem<UVoxelMapSubsystem>();
 	if (TestNotNull(TEXT("The game world has a map"), Map))
 	{
+		Map->RequestTilesInRadius(W.Config->WorldOrigin, 1.0f); // resolves the world: the tile size is the configuration's
 		const double TileSize = Map->GetTileWorldSize();
 		// Off the tile grid on purpose.
 		const FVector Center = W.Config->WorldOrigin + FVector(TileSize * 0.37, -TileSize * 0.61, 0.0);
@@ -66,6 +111,7 @@ bool FVCMap_PlaneMapSampler::RunTest(const FString& Parameters)
 
 		// The tile images' own resolution (the image under the centre, drawn first).
 		Map->RequestTilesInRadius(Center, static_cast<float>(TileSize * 2.0));
+		Map->RequestView(EVoxelMapRequester::Minimap, { FVoxelMapTileId(Map->WorldToTileCoord(Center)) });
 		const double FirstDeadline = FPlatformTime::Seconds() + 60.0;
 		while (!Map->GetTile(Map->WorldToTileCoord(Center)) && FPlatformTime::Seconds() < FirstDeadline)
 		{
@@ -82,25 +128,46 @@ bool FVCMap_PlaneMapSampler::RunTest(const FString& Parameters)
 		AddInfo(FString::Printf(TEXT("Tile %.0f uu, %d pixels a side (the map's tile resolution %d)"), TileSize, CenterTile->Resolution,
 			Map->GetTileResolution()));
 
-		// Texels coarser than tile pixels (the minimap's case), then finer.
-		for (const double SourcePixelsPerTexel : { 1.6, 0.4 })
+		auto Drain = [Map]()
 		{
-			const double WorldPerPixel = SourcePixel * SourcePixelsPerTexel;
-			const double Extent = 0.5 * TexSize * WorldPerPixel;
-			Map->RequestTilesInRadius(Center, static_cast<float>(Extent * 1.5 + TileSize));
 			const double Deadline = FPlatformTime::Seconds() + 60.0;
 			while (!Map->GetDebugStats().Contains(TEXT("waiting=0 drawing=0")) && FPlatformTime::Seconds() < Deadline)
 			{
 				FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
 				FPlatformProcess::Sleep(0.005f);
 			}
-			TestTrue(TEXT("The tiles drew"), Map->GetDebugStats().Contains(TEXT("waiting=0 drawing=0")));
+			return Map->GetDebugStats().Contains(TEXT("waiting=0 drawing=0"));
+		};
+		auto Request = [Map](int32 Level, const TArray<FIntPoint>& Tiles)
+		{
+			TArray<FVoxelMapTileId> Ids;
+			for (const FIntPoint& Tile : Tiles)
+			{
+				Ids.Emplace(Tile, Level);
+			}
+			return Map->RequestView(EVoxelMapRequester::Minimap, Ids);
+		};
 
+		// Texels coarser than tile pixels (the minimap's case), then finer, then over four pixels (a coarser level).
+		for (const double SourcePixelsPerTexel : { 1.6, 0.4, 4.5 })
+		{
+			const double WorldPerPixel = SourcePixel * SourcePixelsPerTexel;
+			const double Extent = 0.5 * TexSize * WorldPerPixel;
+			Map->RequestTilesInRadius(Center, static_cast<float>(Extent * 1.5 + TileSize));
+
+			// The fill reports the tiles it shows at its level, nearest the centre first; they are asked for and drawn.
 			TArray<uint8> Texels;
 			Texels.SetNumZeroed(TexSize * TexSize * 4);
 			FVCPlaneMapSampler New;
-			TSet<FIntPoint> Visited;
-			New.VisitedTiles = &Visited;
+			New.Level = Map->LevelForTexel(WorldPerPixel);
+			TArray<FIntPoint> Visited;
+			New.ViewTiles = &Visited;
+			New.Fill(*Map, Texels.GetData(), TexSize, Center, WorldPerPixel);
+			Request(New.Level, Visited);
+			TestTrue(TEXT("The tiles drew"), Drain());
+			// Nearest the centre first: the tile under the centre among the first (a neighbour's texels may lie as near).
+			const int32 CentreIndex = Visited.Find(Map->GetTileFrame().LevelTileOf(Map->WorldToTileCoord(Center), New.Level).Coord);
+			TestTrue(TEXT("The tile under the centre is among the first asked for"), CentreIndex != INDEX_NONE && CentreIndex < 4);
 			const int32 Drawn = New.Fill(*Map, Texels.GetData(), TexSize, Center, WorldPerPixel);
 
 			const FColor Background = New.Background;
@@ -111,11 +178,34 @@ bool FVCMap_PlaneMapSampler::RunTest(const FString& Parameters)
 				NewGaps += IsBackground(Texels.GetData() + I * 4) ? 1 : 0;
 			}
 			const int32 Total = TexSize * TexSize;
-			AddInfo(FString::Printf(TEXT("%.2f tile pixels a texel: %d of %d texels drawn; background %d; %d tiles read"),
-				SourcePixelsPerTexel, Drawn, Total, NewGaps, Visited.Num()));
+			AddInfo(FString::Printf(TEXT("%.2f tile pixels a texel (level %d): %d of %d texels drawn; background %d; %d tiles shown"),
+				SourcePixelsPerTexel, New.Level, Drawn, Total, NewGaps, Visited.Num()));
+			TestEqual(TEXT("The level matches the texels"), New.Level, SourcePixelsPerTexel > 4.0 ? 2 : 0);
 			TestEqual(TEXT("Every texel is drawn from a tile image"), Drawn, Total);
 			TestEqual(TEXT("No texel is left as background"), NewGaps, 0);
-			TestTrue(TEXT("The tiles read are reported"), Visited.Num() > 0);
+			TestTrue(TEXT("The tiles shown are reported"), Visited.Num() > 0);
+		}
+
+		// While a level's tiles draw, the coarser level stored over them shows: the view at level 4 drawn, level 3 not.
+		{
+			const double WorldPerPixel = SourcePixel * 9.0;
+			TArray<uint8> Texels;
+			Texels.SetNumZeroed(TexSize * TexSize * 4);
+			FVCPlaneMapSampler Coarse;
+			Coarse.Level = 4;
+			TArray<FIntPoint> CoarseTiles;
+			Coarse.ViewTiles = &CoarseTiles;
+			Coarse.Fill(*Map, Texels.GetData(), TexSize, Center, WorldPerPixel);
+			Request(4, CoarseTiles);
+			TestTrue(TEXT("The level-4 view drew"), Drain());
+			Map->RequestView(EVoxelMapRequester::Minimap, {});
+			FVCPlaneMapSampler Fallback;
+			Fallback.Level = 3;
+			const FVoxelMapTileId Centre3 = Map->GetTileFrame().LevelTileOf(Map->WorldToTileCoord(Center), 3);
+			const int32 Drawn = Fallback.Fill(*Map, Texels.GetData(), TexSize, Center, WorldPerPixel);
+			AddInfo(FString::Printf(TEXT("Level 3 not drawn: %d of %d texels from level 4"), Drawn, TexSize * TexSize));
+			TestNull(TEXT("Level 3 is not drawn"), Map->FindTile(Centre3));
+			TestEqual(TEXT("Every texel drawn from the coarser level meanwhile"), Drawn, TexSize * TexSize);
 		}
 	}
 	W.Stop();
@@ -213,6 +303,13 @@ bool FVCMap_WorldMapFill::RunTest(const FString& Parameters)
 		const FVector2D Pan(Center.X, Center.Y);
 		constexpr int32 TexSize = 128;
 		Map->RequestTilesInRadius(Center, static_cast<float>(TileSize * 2.5));
+		// The level-0 images (the reference blit reads them): a view of the explored tiles (MAP_PYRAMID_PLAN.md P1).
+		TArray<FVoxelMapTileId> Explored;
+		for (const uint64 Key : Map->GetExploredTiles())
+		{
+			Explored.Emplace(FIntPoint(static_cast<int32>(static_cast<uint32>(Key >> 32)), static_cast<int32>(static_cast<uint32>(Key & 0xFFFFFFFF))));
+		}
+		Map->RequestView(EVoxelMapRequester::WorldMap, Explored);
 		const double Deadline = FPlatformTime::Seconds() + 60.0;
 		while (!Map->GetDebugStats().Contains(TEXT("waiting=0 drawing=0")) && FPlatformTime::Seconds() < Deadline)
 		{
@@ -233,6 +330,7 @@ bool FVCMap_WorldMapFill::RunTest(const FString& Parameters)
 			FVCPlaneMapSampler Sampler;
 			Sampler.bNorthUp = true;
 			Sampler.bRequireExplored = true;
+			Sampler.Level = 0; // the reference's level, whatever the texels match
 			Sampler.Unexplored = FColor(10, 10, 10, 255);
 			Sampler.Undrawn = FColor(25, 25, 25, 255);
 			Sampler.Background = Sampler.Unexplored;
