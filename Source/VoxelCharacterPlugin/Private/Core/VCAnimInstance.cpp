@@ -41,6 +41,11 @@ namespace
 		TEXT("The off hand's IK onto a two-handed item's grip: 1 on, 0 off (A/B; character animation P4)."),
 		ECVF_Default);
 
+	TAutoConsoleVariable<int32> CVarAnimStance(
+		TEXT("vc.Anim.Stance"), 2,
+		TEXT("A held item's stance over the upper body (character refinement plan C2): 0 off (the locomotion alone), 1 the static idle as before C2, 2 the moving stance (the set's idle, walk and jog by speed on a blend ramp from spine_01; A/B)."),
+		ECVF_Default);
+
 	/** Mirrors vc.Anim.Debug into the engine's foot placement debug draw. */
 	void OnAnimDebugChanged(IConsoleVariable* Variable)
 	{
@@ -210,6 +215,7 @@ bool UVCAnimInstance::GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) co
 	}
 	OutInput.bFootBonesOnly = CachedAppearance.IsValid() && !CachedAppearance->HasIKFootBones();
 
+	OutInput.StanceMode = CVarAnimStance.GetValueOnGameThread();
 	OutInput.bFootIKEnabled = CVarAnimFootIK.GetValueOnGameThread() != 0;
 	OutInput.bSprintPaceEnabled = CVarAnimSprintPace.GetValueOnGameThread() != 0;
 	OutInput.bLookAtEnabled = CVarAnimLookAt.GetValueOnGameThread() != 0;
@@ -387,6 +393,13 @@ void UVCAnimInstance::ComputeValues(const FVCAnimInput& Input)
 	const bool bAble = !Input.bDead && !Input.bDowned;
 	FootIKAlpha = Ease(FootIKAlpha, Input.bFootIKEnabled && bAble && Input.bOnGround && !Input.bSwimming && !Input.bFlying);
 	FootBoneIKAlpha = Input.bFootBonesOnly ? FootIKAlpha : 0.f;
+
+	// The held stance over the upper body (C2): full on the ground, part of it at a sprint, none in the air or the water,
+	// dead or downed, or switched off; eased so a jump or a sprint never snaps the arms.
+	StanceMode = Input.StanceMode;
+	const bool bStanceOn = Input.StanceMode != 0 && bAble && Input.bOnGround && !Input.bSwimming && !Input.bFlying;
+	const float StanceTarget = !bStanceOn ? 0.f : (Input.bSprinting ? StanceSprintWeight : 1.f);
+	StanceWeight = FMath::FInterpConstantTo(StanceWeight, StanceTarget, DeltaSeconds, IKBlendSpeed);
 	const UVCLocomotionAnimSet* Locomotion = Input.LocomotionSet;
 	const float ReferenceSpeed = Locomotion && Locomotion->ReferenceSpeed > 0.f ? Locomotion->ReferenceSpeed : LocomotionReferenceSpeed;
 	LocomotionPlayRate = Input.bSprintPaceEnabled && Input.bOnGround ? ComputeLocomotionPlayRate(Speed, ReferenceSpeed) : 1.f;

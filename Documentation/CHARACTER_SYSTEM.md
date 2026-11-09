@@ -287,9 +287,21 @@ skeletons compatible). The animation content is built by scripts into content pa
   `ActionSet` property (`Unarmed` unset).
 - **Layers.** `ABP_VoxelCharacter` runs the layer `UpperBodyStance` of `ALI_VCCharacter` between its state machine and
   its slot, and implements it itself (the base pose through). An item's Equipment fragment links its stance layer on
-  equip (`AnimLayerClass`, EquipmentPlugin's `LinkAnimClassLayers`): `ABP_VCLayer_SwordShield`, `_TwoHand` and `_Tool`
-  lay the set's idle over `spine_01` and below it. Montages play in the slot above, over the stance. `ABP_VCLayer_Bow`
-  (ranged combat plan B4) also aims: its parent `UVCAnimLayerInstance` plays the body's montages in the layer's own
+  equip (`AnimLayerClass`, EquipmentPlugin's `LinkAnimClassLayers`): `ABP_VCLayer_SwordShield`, `_TwoHand`, `_Tool` and
+  `_Bow`. **The moving stance** (the character refinement plan's C2, D72, 2026-11-08; before it each layer laid the
+  set's one idle clip over `spine_01` at full weight in mesh space, so the torso, arms and head froze in the idle at every
+  gait while anything was held): each layer plays its set's stance blend space `BS_VCStance_<Set>` (the pack's own idle,
+  walk and jog for that weapon at 0, 200 and 500 uu/s, the jog carrying the sprint) at the body's speed, and lays it over
+  the base pose with a layered blend ramped over three bones from `spine_01` (a third there, two thirds at `spine_02`,
+  full from `spine_03`: the lower spine keeps most of the locomotion's bounce and twist, the clavicles, arms and head
+  take the stance), in local space, weighted by the body's `StanceWeight` (`UVCAnimInstance`: 1 on the ground,
+  `StanceSprintWeight` at a sprint so the sprint's arms show through, 0 in the air, the water, dead or downed, eased at
+  `IKBlendSpeed`). Every layer's parent is `UVCAnimLayerInstance`, which copies the body's `Speed` and `StanceWeight`
+  each update (and holds the speed at 0 under `vc.Anim.Stance 1`, the static stance as before). `vc.Anim.Stance 0|1|2`
+  is the A/B. `setup_character_layers.py` builds the blend spaces and versions the layers (`LAYER_VERSION` in the
+  Blueprint's description: a wiring change rewires every layer in place on the next run). Montages play in the slot
+  above, over the stance. `ABP_VCLayer_Bow`
+  (ranged combat plan B4) also aims: `UVCAnimLayerInstance` plays the body's montages in the layer's own
   slots (`bUseMainInstanceMontageEvaluationData`) and copies the body's `AimPitch` and `AimYaw` and its montage weight in
   the `UpperBody` slot each update; the bow idle follows the view through the stand aim offset, the draw and the release
   play in the `UpperBody` slot inside the layer (the upper body only, so the legs keep walking), and the drawn aim
