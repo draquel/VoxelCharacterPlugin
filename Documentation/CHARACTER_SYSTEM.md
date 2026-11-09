@@ -307,7 +307,10 @@ GASP's set plays on it unconverted through skeleton compatibility (D50; `Scripts
 skeletons compatible). The animation content is built by scripts into content packs (D46), in this order:
 `setup_character_layers.py`, `setup_character_ik.py`, `setup_character_locomotion.py`,
 `setup_character_appearances.py`, `setup_creature_animation.py` (`Scripts/README.md`). Open: G145
-(`Documentation/FINDINGS.md`); G147 (VanillaLoop's clips) and G148 (the correctives near the camera only) closed after it.
+(`Documentation/FINDINGS.md`); G147 (VanillaLoop's clips) and G148 (the correctives near the camera only) closed after it. The character refinement plan (2026-11-08, D70-D75; `CHARACTER_REFINEMENT_PLAN.md`, frozen) then took what the two
+plans left rough once they met in play: the bow's two grips and per-body attach corrections ("The bow", "Appearance"),
+the moving stance over the upper body ("Layers" below), the aim state with its camera and reticle ("The bow" › Aiming,
+"Camera", "HUD and widgets"), GASP's gait table ("Movement"), all judged on the `CharacterTest` level ("Tests").
 
 - **Two halves.** `NativeUpdateAnimation` gathers an `FVCAnimInput` on the game thread (the character's state in world
   space, and a line trace along gravity for the ground under a falling character, on the movement's channel, up to
@@ -876,4 +879,8 @@ and `ToggleVoxelDebug` are on the controller and the character. Every name, defa
 Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, WorldEdge; the weather's `Movement.WindPush`,
 `Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
-`Movement.AimTurnEase` (the character refinement plan's C4).
+`Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
+and `Combat.AimCameraLocation` (C3). The feel is judged by hand on `/Game/PluginTesting/Tests/Character/CharacterTest`
+(the plan's C0; `Scripts/setup_character_test.py` builds it: a flat floor with a measured lane, block steps and a ramp,
+a shooting range and a kit that hands out every held item): the game module's `vox.Lane` runs the lane hands-free with
+the foot slide per leg, `vox.Stop` measures a stop, `vox.FootSlide` the planted feet's drift; the QA rows are area F13.
