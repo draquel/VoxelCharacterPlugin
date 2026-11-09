@@ -63,22 +63,6 @@ public:
 	 */
 	static bool ComputeAimRay(const AActor* Viewer, FVector& OutOrigin, FVector& OutDirection);
 
-	/**
-	 * Pure: the direction to launch a projectile at a speed so that, falling under a constant gravity, it passes through a
-	 * target: the low arc of the closed-form ballistic solution in the plane of the start, the target and gravity (no
-	 * drag, as the arrow's projectile movement has none). One function for the server's shot and the owner's preview
-	 * (D-CR16). An arrow's gravity on a planet is the pull at the start (UVCArrowMovementComponent's rule), constant enough
-	 * over a bow's range.
-	 * @param Start        Where the projectile leaves
-	 * @param Target       Where it should pass
-	 * @param Speed        Its launch speed (uu/s)
-	 * @param Gravity      Gravity's acceleration (uu/s^2, pointing down; zero flies straight)
-	 * @param OutDirection The unit launch direction; the straight line to the target when out of reach
-	 * @return False when the target is beyond the speed's reach (OutDirection is then the straight line), or Start and
-	 *         Target coincide
-	 */
-	static bool SolveLaunchDirection(const FVector& Start, const FVector& Target, float Speed, const FVector& Gravity, FVector& OutDirection);
-
 	/** The combat component on an actor, or null. */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
 	static UVCCombatComponent* FindCombatComponent(AActor* Actor);

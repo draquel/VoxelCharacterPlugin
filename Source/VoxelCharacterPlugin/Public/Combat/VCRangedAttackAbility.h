@@ -90,19 +90,28 @@ public:
 	static bool ReleaseDraw(UAbilitySystemComponent* ASC);
 
 	/**
-	 * Where an avatar's arrow starts (ComputeArrowStart) and which way it flies: launched so that, at LaunchSpeed under
-	 * the arrow's gravity, it passes through the point the aim ray meets within AimRange (UVCCombatStatics::ComputeAimRay,
-	 * a thin sphere on the Pawn channel, the avatar ignored; UVCCombatStatics::SolveLaunchDirection), so it lands on what
-	 * the reticle shows. Beyond the speed's reach it flies straight at the point. The server's shot; the owner may call it
-	 * on the class default for a preview.
+	 * Where an avatar's arrow starts (ComputeArrowStart) and which way it flies: straight at the point the aim ray meets
+	 * within AimRange (UVCCombatStatics::ComputeAimRay, a thin sphere on the Pawn channel, the avatar ignored), so it
+	 * leaves on the reticle's line; gravity then drops it with distance, more for a weaker draw (no aim assist: the player
+	 * aims over a far target). ComputeLaunchDirection decides the direction.
 	 * @param Avatar       The shooter
-	 * @param LaunchSpeed  The arrow's speed at the release (uu/s; the weapon's speed times the draw's power)
 	 * @param OutStart     The arrow's start
 	 * @param OutDirection Its unit direction
 	 * @param OutAimPoint  Optional: the point aimed at
 	 * @return False without a world
 	 */
-	bool ComputeShot(const AActor* Avatar, float LaunchSpeed, FVector& OutStart, FVector& OutDirection, FVector* OutAimPoint = nullptr) const;
+	bool ComputeShot(const AActor* Avatar, FVector& OutStart, FVector& OutDirection, FVector* OutAimPoint = nullptr) const;
+
+	/**
+	 * Pure: the arrow's launch direction from its start toward the aim point, or along the view when the point is at the
+	 * bow or behind it (a wall at the face): nearer than MinDistance, or more than 60 degrees off the view.
+	 * @param Start          Where the arrow leaves
+	 * @param AimPoint       What the reticle is on
+	 * @param ViewDirection  The view's unit direction
+	 * @param MinDistance    The nearest aim point the arrow flies at (uu)
+	 * @return The unit direction
+	 */
+	static FVector ComputeLaunchDirection(const FVector& Start, const FVector& AimPoint, const FVector& ViewDirection, float MinDistance);
 
 	/**
 	 * Where an avatar's arrow leaves: the drawn bow's grip (BowHandBone plus BowGripOffset) when this machine poses the
@@ -111,15 +120,6 @@ public:
 	 * @return The start (the avatar's location without a view)
 	 */
 	FVector ComputeArrowStart(const AActor* Avatar) const;
-
-	/**
-	 * Gravity's acceleration on an arrow leaving a point: the world's gravity times the arrow's scale, toward a planet's
-	 * centre on a planet (UVCArrowMovementComponent::ComputeGravityAcceleration).
-	 * @param World    The world
-	 * @param Location Where the arrow leaves
-	 * @return The acceleration (uu/s^2)
-	 */
-	static FVector GetArrowGravity(const UWorld* World, const FVector& Location);
 
 	/** @return True between an activation and its release */
 	bool IsDrawing() const { return bDrawing; }

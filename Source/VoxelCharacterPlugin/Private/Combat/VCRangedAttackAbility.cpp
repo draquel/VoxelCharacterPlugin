@@ -3,7 +3,6 @@
 #include "Combat/VCRangedAttackAbility.h"
 #include "Combat/VCCombatStatics.h"
 #include "Combat/VCArrowProjectile.h"
-#include "Combat/VCArrowMovementComponent.h"
 #include "Animation/VCActionMontageComponent.h"
 #include "Core/VCCharacterBase.h"
 #include "Core/VCGameplayTags.h"
@@ -17,8 +16,6 @@
 #include "GameFramework/Character.h"
 #include "GameFramework/Pawn.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "VoxelChunkManager.h"
-#include "HAL/IConsoleManager.h"
 
 #if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
 #include "Components/EquipmentManagerComponent.h"
@@ -33,15 +30,6 @@
 #include "Types/ItemInstanceFragments.h"
 #include "Engine/GameInstance.h"
 #endif
-
-namespace
-{
-	TAutoConsoleVariable<int32> CVarCombatBallisticShot(
-		TEXT("vc.Combat.BallisticShot"), 1,
-		TEXT("The bow's shot (G159): 1 from the drawn bow's grip, launched over the arrow's drop so it lands on the reticle; ")
-		TEXT("0 from the eyes' offset straight at the aim point, as before (the arrow lands below it)."),
-		ECVF_Default);
-}
 
 #if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
 namespace
@@ -191,18 +179,6 @@ bool UVCRangedAttackAbility::ReleaseDraw(UAbilitySystemComponent* ASC)
 	return false;
 }
 
-FVector UVCRangedAttackAbility::GetArrowGravity(const UWorld* World, const FVector& Location)
-{
-	if (!World)
-	{
-		return FVector::ZeroVector;
-	}
-	const UVoxelChunkManager* ChunkManager = UVoxelChunkManager::Find(World);
-	const float GravityZ = World->GetGravityZ() * GetDefault<UVCArrowMovementComponent>()->ProjectileGravityScale;
-	return UVCArrowMovementComponent::ComputeGravityAcceleration(ChunkManager ? ChunkManager->GetWorldBounds() : FVoxelWorldBounds(),
-		Location, GravityZ);
-}
-
 FVector UVCRangedAttackAbility::ComputeArrowStart(const AActor* Avatar) const
 {
 	if (!Avatar)
@@ -212,19 +188,25 @@ FVector UVCRangedAttackAbility::ComputeArrowStart(const AActor* Avatar) const
 	FVector Eyes;
 	FRotator View;
 	Avatar->GetActorEyesViewPoint(Eyes, View);
-	const bool bBallistic = CVarCombatBallisticShot.GetValueOnGameThread() != 0;
 	// The drawn bow's grip where this machine poses the body: a dedicated server never does (its bones stand still), nor
 	// does a body hidden in first person or out of every view, whose bones are not refreshed.
 	const ACharacter* Character = Cast<ACharacter>(Avatar);
 	const USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : nullptr;
-	if (bBallistic && Mesh && Avatar->GetNetMode() != NM_DedicatedServer && Mesh->WasRecentlyRendered(0.2f) && Mesh->GetBoneIndex(BowHandBone) != INDEX_NONE)
+	if (Mesh && Avatar->GetNetMode() != NM_DedicatedServer && Mesh->WasRecentlyRendered(0.2f) && Mesh->GetBoneIndex(BowHandBone) != INDEX_NONE)
 	{
 		return Mesh->GetBoneLocation(BowHandBone) + View.RotateVector(BowGripOffset);
 	}
 	return Eyes + View.RotateVector(ArrowStartOffset);
 }
 
-bool UVCRangedAttackAbility::ComputeShot(const AActor* Avatar, float LaunchSpeed, FVector& OutStart, FVector& OutDirection, FVector* OutAimPoint) const
+FVector UVCRangedAttackAbility::ComputeLaunchDirection(const FVector& Start, const FVector& AimPoint, const FVector& ViewDirection, float MinDistance)
+{
+	const FVector ToAim = AimPoint - Start;
+	const FVector Direction = ToAim.GetSafeNormal();
+	return ToAim.Size() > MinDistance && FVector::DotProduct(Direction, ViewDirection) > 0.5 ? Direction : ViewDirection;
+}
+
+bool UVCRangedAttackAbility::ComputeShot(const AActor* Avatar, FVector& OutStart, FVector& OutDirection, FVector* OutAimPoint) const
 {
 	UWorld* World = Avatar ? Avatar->GetWorld() : nullptr;
 	if (!World)
@@ -252,21 +234,9 @@ bool UVCRangedAttackAbility::ComputeShot(const AActor* Avatar, float LaunchSpeed
 		*OutAimPoint = AimPoint;
 	}
 
-	// An aim point at the bow or behind it (a wall at the face) gives no direction: fly along the view.
-	const FVector ToAim = AimPoint - OutStart;
-	if (ToAim.Size() <= 2.0 * ArrowStartOffset.Size() || FVector::DotProduct(ToAim.GetSafeNormal(), ViewDirection) <= 0.5)
-	{
-		OutDirection = ViewDirection;
-		return true;
-	}
-	if (CVarCombatBallisticShot.GetValueOnGameThread() == 0)
-	{
-		OutDirection = ToAim.GetSafeNormal();
-		return true;
-	}
-	// Launched over the drop (G159): the arrow falls on its way, so it leaves above the line to land on the point; past
-	// the speed's reach it flies straight at it (and falls short).
-	UVCCombatStatics::SolveLaunchDirection(OutStart, AimPoint, LaunchSpeed, GetArrowGravity(World, OutStart), OutDirection);
+	// From the bow straight at what the reticle is on (G159): the arrow leaves on the reticle's line and gravity drops it
+	// with distance, so the player aims over a far target; an aim point at the bow or behind it flies along the view.
+	OutDirection = ComputeLaunchDirection(OutStart, AimPoint, ViewDirection, 2.f * ArrowStartOffset.Size());
 	return true;
 }
 
@@ -395,7 +365,7 @@ bool UVCRangedAttackAbility::Shoot(AActor* Avatar, float DrawSeconds)
 
 	APawn* Shooter = Cast<APawn>(Avatar);
 	FVector Start, Direction;
-	if (!Shooter || !ComputeShot(Avatar, Ranged->LaunchSpeed * Power, Start, Direction))
+	if (!Shooter || !ComputeShot(Avatar, Start, Direction))
 	{
 		return false;
 	}

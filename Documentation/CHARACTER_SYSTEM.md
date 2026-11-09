@@ -140,7 +140,7 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
   attack (`AVCPlayerState::RangedAttackAbilityClass`), tag `Ability.Attack.Ranged`. Its activation starts the draw on
   the server's clock. The release reaches it as the ability system component's input release (`ReleaseDraw`:
   `ServerSetInputReleased` from a client, on the activation's channel so it cannot overtake it). At the release a draw
-  under the shortest is no shot; otherwise one arrow leaves the bag and `SpawnArrow` launches it from the drawn bow onto
+  under the shortest is no shot; otherwise one arrow leaves the bag and `SpawnArrow` launches it from the drawn bow toward
   what the reticle meets within `AimRange` (Aiming, below), at the bow's speed times the draw's power, and the bow wears by its
   `DegradeRate`. No ranged weapon, a dead or downed shooter or no arrow at the release: no shot, nothing used. The
   owner's check and the server's are one predicate, `CanStartDraw` (D-CR16).
@@ -192,19 +192,19 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
   slot's montage, the larger), so the upper body keeps the clips' turn wherever the hips face; the idle's stance stays in
   local space as C2 made it. After: the bow arm 10 degrees right of the view drawn (the clip's own), 17 raised, 4 to 8
   in the strafe; from behind and above, the drawn bow points down the range at the reticle on both bodies.
-  **The shot over the drop** (G159): `ComputeShot` aimed the arrow straight at the aim point from the eyes plus
-  `ArrowStartOffset`, and the arrow fell on the way (6000 uu/s under 980: 13.6 uu at 10 m, 54 at 20, 218 at 40). The
-  launch is now the low arc of the closed-form ballistic solution for the aim point at the release's speed under the
-  arrow's gravity (`UVCCombatStatics::SolveLaunchDirection`, pure, one function for the server's shot and any owner's
-  preview, D-CR16; `UVCRangedAttackAbility::GetArrowGravity`: the world's pull, toward the centre on a planet, taken at
-  the bow), straight at the point beyond the speed's reach (a weak draw, 0.3 of the speed, reaches 33 m on the level).
-  The arrow leaves the drawn bow (`ComputeArrowStart`: `hand_l` plus `BowGripOffset` where this machine poses the body,
-  else the eyes plus `ArrowStartOffset`, now (75, 4, -8), the grip as measured from the eyes on both bodies, (76, 4, -6)
-  and (80, 4, -12)); the server logs where and which way. `vc.Combat.BallisticShot 0` gives the straight shot back for
-  an A/B. On the range, 1.5 m beside the posts' line, the reticle on each post's face 1.2 m up, a full draw: the
-  straight shot stuck 11.9 uu low at 10 m, 51.0 low at 20 m and fell to the floor at 30 m, short of the 40 m post (116
-  low); the ballistic one within 0.3 uu up and 1.4 aside at all three, on Kellan too, and within 1.1 uu with a half
-  draw (3200 uu/s). Test `VoxelCharacter.Combat.BallisticShot`.
+  **The shot from the bow, on the reticle's line** (G159): the arrow leaves the drawn bow (`ComputeArrowStart`:
+  `hand_l` plus `BowGripOffset` where this machine poses the body, else the eyes plus `ArrowStartOffset`, now
+  (75, 4, -8), the grip as measured from the eyes on both bodies, (76, 4, -6) and (80, 4, -12); before, (50, -10, -20)
+  put it beside the face) straight at what the reticle is on (`ComputeLaunchDirection`, pure), at the bow's speed times
+  the draw's power: the power builds from 0.3 at the shortest draw (0.25 s) to full at one second
+  (`UItemFragment_RangedWeapon::GetDrawPower`), and gravity drops the arrow with distance, more for a weak draw. There is
+  no aim assist (the user, 2026-11-08: the player aims over a far target; what matters is that the aim is true from the
+  player's view); the server logs each shot's start and direction. On the range, 1.5 m beside the posts' line, the
+  reticle on each post's face, a full draw (6000 uu/s) stuck 11.5 uu under the reticle at 10 m and 49.7 at 20 m (the
+  drop from the bow, 11.2 and 49.6), within 1.4 uu aside; seen from the aim camera the 20 m hit is 0.003 degrees aside of
+  the reticle and 1.3 below it, straight under. At 40 m a full draw drops 2.1 m (it met the floor at 33 m aiming at the
+  post's face 1.5 m up); a half draw (0.5 s, 3200 uu/s) drops 40 uu at 10 m. Test
+  `VoxelCharacter.Combat.LaunchDirection`.
 
 ### Death and respawn
 
@@ -919,7 +919,7 @@ Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, World
 `Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
-and `Combat.AimCameraLocation` (C3); the bow's `Combat.BallisticShot` (G159) and `Anim.AimRaise` (D76). The feel is judged by hand on `/Game/PluginTesting/Tests/Character/CharacterTest`
+and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchDirection` (G159) and `Anim.AimRaise` (D76). The feel is judged by hand on `/Game/PluginTesting/Tests/Character/CharacterTest`
 (the plan's C0; `Scripts/setup_character_test.py` builds it: a flat floor with a measured lane, block steps and a ramp,
 a shooting range and a kit that hands out every held item): the game module's `vox.Lane` runs the lane hands-free with
 the foot slide per leg, `vox.Stop` measures a stop, `vox.FootSlide` the planted feet's drift; the QA rows are area F13.
