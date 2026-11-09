@@ -43,7 +43,7 @@ namespace
 
 	TAutoConsoleVariable<int32> CVarAnimStance(
 		TEXT("vc.Anim.Stance"), 2,
-		TEXT("A held item's stance over the upper body (character refinement plan C2): 0 off (the locomotion alone), 1 the static idle as before C2, 2 the moving stance (the set's idle, walk and jog by speed on a blend ramp from spine_01; A/B)."),
+		TEXT("A held item's stance over the upper body (character refinement plan C2): 0 off (the locomotion alone), 1 the static idle as before C2, 2 the moving stance (the set's idle, walk and jog by speed on a blend ramp from spine_01), faded by speed where the layer asks (the bow's, D85), 3 the moving stance at every gait (C2, before D85; A/B)."),
 		ECVF_Default);
 
 	/** Mirrors vc.Anim.Debug into the engine's foot placement debug draw. */

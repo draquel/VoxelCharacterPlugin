@@ -726,6 +726,71 @@ bool FVCAnim_StanceWeight::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
+// The stance fades as the body moves where the layer asks (D85): the bow's layer (MovingStanceWeight 0) holds its stance
+// at a stand and gives the moving body to the locomotion; a layer at 1 (the swords') keeps it at every gait; mode 3 is C2's
+// moving stance without the fade; the body's crouch reaches the layer.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCAnim_StanceFade, "VoxelCharacter.Anim.StanceFade", VC_ANIM_FLAGS)
+bool FVCAnim_StanceFade::RunTest(const FString& Parameters)
+{
+	const FVector2D Speeds(10.f, 150.f);
+	TestEqual(TEXT("At a stand: the whole stance"), UVCAnimLayerInstance::ComputeStanceFade(0.f, Speeds, 0.f), 1.f);
+	TestEqual(TEXT("At the fade's start: the whole stance"), UVCAnimLayerInstance::ComputeStanceFade(10.f, Speeds, 0.f), 1.f);
+	TestTrue(TEXT("Halfway: half"), FMath::IsNearlyEqual(UVCAnimLayerInstance::ComputeStanceFade(80.f, Speeds, 0.f), 0.5f, 1.0e-5f));
+	TestEqual(TEXT("A walk (200): the moving weight"), UVCAnimLayerInstance::ComputeStanceFade(200.f, Speeds, 0.f), 0.f);
+	TestTrue(TEXT("A moving weight of 0.4 at a run"), FMath::IsNearlyEqual(UVCAnimLayerInstance::ComputeStanceFade(500.f, Speeds, 0.4f), 0.4f, 1.0e-5f));
+	TestEqual(TEXT("A moving weight of 1: no fade"), UVCAnimLayerInstance::ComputeStanceFade(500.f, Speeds, 1.f), 1.f);
+	TestEqual(TEXT("No span: a step past the start"), UVCAnimLayerInstance::ComputeStanceFade(20.f, FVector2D(10.f, 10.f), 0.f), 0.f);
+	TestEqual(TEXT("No span: the whole stance below it"), UVCAnimLayerInstance::ComputeStanceFade(5.f, FVector2D(10.f, 10.f), 0.f), 1.f);
+	TestEqual(TEXT("The default keeps the stance moving"), GetDefault<UVCAnimLayerInstance>()->MovingStanceWeight, 1.f);
+
+	UVCAnimInstance* Body = VCAnimTestHelpers::NewAnimInstance();
+	Body->StanceWeight = 1.f;
+	Body->StanceMode = 2;
+	UVCAnimLayerInstance* Bow = NewObject<UVCAnimLayerInstance>(Body->GetOuter());
+	Bow->MovingStanceWeight = 0.f;
+	UVCAnimLayerInstance* Sword = NewObject<UVCAnimLayerInstance>(Body->GetOuter());
+
+	Body->Speed = 0.f;
+	Bow->CopyBodyValues(Body);
+	TestEqual(TEXT("The bow at a stand: its stance"), Bow->StanceWeight, 1.f);
+	Body->Speed = 500.f;
+	Bow->CopyBodyValues(Body);
+	Sword->CopyBodyValues(Body);
+	TestEqual(TEXT("The bow running: the locomotion's arms"), Bow->StanceWeight, 0.f);
+	TestEqual(TEXT("The sword running: its stance"), Sword->StanceWeight, 1.f);
+	TestEqual(TEXT("The blend space still gets the speed"), Bow->Speed, 500.f);
+
+	Body->StanceWeight = Body->StanceSprintWeight;
+	Sword->CopyBodyValues(Body);
+	TestTrue(TEXT("The body's own weight still scales it (the sprint)"), FMath::IsNearlyEqual(Sword->StanceWeight, Body->StanceSprintWeight, 1.0e-5f));
+	Body->StanceWeight = 1.f;
+
+	Body->StanceMode = 3;
+	Bow->CopyBodyValues(Body);
+	TestEqual(TEXT("vc.Anim.Stance 3: no fade (C2)"), Bow->StanceWeight, 1.f);
+	Body->StanceMode = 1;
+	Bow->CopyBodyValues(Body);
+	TestEqual(TEXT("vc.Anim.Stance 1: no fade, the static idle"), Bow->StanceWeight, 1.f);
+	TestEqual(TEXT("vc.Anim.Stance 1: speed 0"), Bow->Speed, 0.f);
+	Body->StanceMode = 2;
+
+	Body->bIsCrouching = true;
+	Body->Speed = 0.f;
+	Bow->CopyBodyValues(Body);
+	TestTrue(TEXT("The crouch reaches the layer"), Bow->bIsCrouching);
+	TestEqual(TEXT("Crouched at a stand: the stance (the crouched one)"), Bow->StanceWeight, 1.f);
+	Body->Speed = 225.f;
+	Bow->CopyBodyValues(Body);
+	TestEqual(TEXT("Crouch-walking: the locomotion's"), Bow->StanceWeight, 0.f);
+
+	Bow->CopyBodyValues(nullptr);
+	TestFalse(TEXT("No body: not crouched"), Bow->bIsCrouching);
+	TestEqual(TEXT("No body: no stance"), Bow->StanceWeight, 0.f);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
 // The aim raises the bow (the user's flow after the character refinement plan: aim raises, the draw pulls, the release
 // shoots): AimRaiseWeight moves toward 1 while aiming at 1 / AimRaiseTime a second, back to 0 when the aim ends or the
 // character is downed; the layer's aim branch takes the larger of it and the upper body's montage.
