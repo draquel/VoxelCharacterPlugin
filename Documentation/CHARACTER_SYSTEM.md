@@ -859,7 +859,9 @@ class.
 - Persistent (`CreatePersistentWidgets`): the hotbar, the interaction prompt, `UVCVitalsWidget` (health, stamina,
   breath, the `EDIT` cue, the torch, an objective line and a timed toast), the minimap, the aim reticle
   (`UVCReticleWidget`, centre-anchored: a dot and four ticks, shown while the pawn aims (`IsAiming`), the ticks closing
-  with the owner's draw and the colour red over a hostile; C3), and an optional clock
+  with the owner's draw and the colour red over a hostile; C3), `UVCCarriedWeaponsWidget` just above the hotbar (one
+  icon per carried weapon in the sheaths' order, the drawn one lit blue, the R / X hint; display only, rebound with the
+  vitals to each possessed character; the equipment sheathing plan), and an optional clock
   (`ClockWidgetClass`; the demo uses WorldClockPlugin's widget, this plugin never reads the time).
 - On demand: the inventory and equipment panels, the item cursor, the world map (`ToggleWorldMapUI`), the pause menu
   (`IA_Pause`), the crafting panel and the campsite panel.
@@ -908,7 +910,9 @@ Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, World
 `Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
-and `Combat.AimCameraLocation` (C3). The feel is judged by hand on `/Game/PluginTesting/Tests/Character/CharacterTest`
+and `Combat.AimCameraLocation` (C3); the sheaths' `EquipmentLoop.SheathSlots`, `SheathActionSet` (the set follows the
+drawn weapon, R and X, the snapshot's drawn state), `SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip`
+(the equipment sheathing plan's S2-S4). The feel is judged by hand on `/Game/PluginTesting/Tests/Character/CharacterTest`
 (the plan's C0; `Scripts/setup_character_test.py` builds it: a flat floor with a measured lane, block steps and a ramp,
 a shooting range and a kit that hands out every held item): the game module's `vox.Lane` runs the lane hands-free with
 the foot slide per leg, `vox.Stop` measures a stop, `vox.FootSlide` the planted feet's drift; the QA rows are area F13.

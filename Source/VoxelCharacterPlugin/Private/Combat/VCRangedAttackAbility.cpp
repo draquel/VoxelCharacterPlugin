@@ -57,7 +57,7 @@ namespace
 		{
 			return false;
 		}
-		Out.Item = Out.Equipment->GetEquippedItem(CGFGameplayTags::Equipment_Slot_MainHand);
+		Out.Item = Out.Equipment->GetHeldItem(CGFGameplayTags::Equipment_Slot_MainHand); // its own slot's or drawn from a sheath
 		const UItemDatabaseSubsystem* ItemDB = Out.Item.IsValid() ? FindItemDatabase(Avatar) : nullptr;
 		Out.Definition = ItemDB ? ItemDB->GetDefinition(Out.Item.ItemDefinitionId) : nullptr;
 		Out.Ranged = Out.Definition ? Out.Definition->FindFragment<UItemFragment_RangedWeapon>() : nullptr;
@@ -393,7 +393,7 @@ bool UVCRangedAttackAbility::Shoot(AActor* Avatar, float DrawSeconds)
 	// Every shot wears the bow by its DegradeRate.
 	if (Durability && Durability->DegradeRate > 0.f && Weapon.Equipment)
 	{
-		Weapon.Equipment->ApplyDurabilityLoss(CGFGameplayTags::Equipment_Slot_MainHand, Durability->DegradeRate);
+		Weapon.Equipment->ApplyDurabilityLoss(Weapon.Equipment->GetHeldSlotTag(CGFGameplayTags::Equipment_Slot_MainHand), Durability->DegradeRate);
 	}
 	UE_LOG(LogVoxelCharacter, Log, TEXT("%s shoots after %.2f s: power %.2f, %.0f uu/s, %s"), *GetNameSafe(Avatar), DrawSeconds, Power,
 		Ranged->LaunchSpeed * Power, *GetNameSafe(Arrow));

@@ -16,6 +16,7 @@
 #include "Subsystems/ItemDatabaseSubsystem.h"
 #include "Tags/CGFGameplayTags.h"
 #include "Testing/CGFTestGameInstance.h"
+#include "UI/VCCarriedWeaponsWidget.h"
 #include "Types/EquipmentSystemTypes.h"
 #include "EngineUtils.h"
 #include "JsonObjectConverter.h"
@@ -221,6 +222,42 @@ bool FVCSheath_ActionSetFollowsDrawn::RunTest(const FString& Parameters)
 		}
 	}
 	TestEqual(TEXT("Both weapons are in the snapshot"), Found, 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCSheath_CarriedStrip, "VoxelCharacter.EquipmentLoop.SheathCarriedStrip", VC_SHEATH_FLAGS)
+bool FVCSheath_CarriedStrip::RunTest(const FString& Parameters)
+{
+	// The HUD's strip shows each carried weapon in the sheaths' order and lights the drawn one, following the equipment.
+	using namespace VCSheathTestHelpers;
+	FSheathWorld W;
+	const FGameplayTag HipLeft = CGFGameplayTags::Equipment_Slot_Sheath_HipLeft;
+	const FGameplayTag Back = CGFGameplayTags::Equipment_Slot_Sheath_Back;
+	UItemDefinition* Sword = W.DefineWeapon(TEXT("SheathStripSword"), HipLeft, VCGameplayTags::Equipment_AnimSet_SwordShield);
+	UItemDefinition* Bow = W.DefineWeapon(TEXT("SheathStripBow"), Back, VCGameplayTags::Equipment_AnimSet_Bow);
+	AVCCharacterBase* Player = W.SpawnPlayer();
+	UEquipmentManagerComponent* Equipment = Player ? Player->FindComponentByClass<UEquipmentManagerComponent>() : nullptr;
+	UVCCarriedWeaponsWidget* Strip = CreateWidget<UVCCarriedWeaponsWidget>(W.World, UVCCarriedWeaponsWidget::StaticClass());
+	if (!TestNotNull(TEXT("The player and its equipment"), Equipment) || !TestNotNull(TEXT("The strip"), Strip))
+	{
+		return false;
+	}
+	Strip->InitWithCharacter(Player);
+	TestEqual(TEXT("Nothing carried, nothing shown"), Strip->GetShownSheaths().Num(), 0);
+	Equipment->TryEquip(W.Database->CreateItemInstance(Bow->GetPrimaryAssetId()));
+	Equipment->TryEquip(W.Database->CreateItemInstance(Sword->GetPrimaryAssetId()));
+	const TArray<FGameplayTag> Shown = Strip->GetShownSheaths();
+	if (TestEqual(TEXT("Two shown"), Shown.Num(), 2))
+	{
+		TestTrue(TEXT("In the sheaths' order: the hip, then the back"), Shown[0] == HipLeft && Shown[1] == Back);
+	}
+	TestFalse(TEXT("None lit while all are sheathed"), Strip->GetLitSheath().IsValid());
+	Equipment->TryDraw(Back);
+	TestTrue(TEXT("The drawn bow is lit"), Strip->GetLitSheath() == Back);
+	Equipment->TrySheathe(Back);
+	TestFalse(TEXT("Sheathed again: none lit"), Strip->GetLitSheath().IsValid());
+	Strip->InitWithCharacter(nullptr);
+	TestEqual(TEXT("Unbound: nothing shown"), Strip->GetShownSheaths().Num(), 0);
 	return true;
 }
 

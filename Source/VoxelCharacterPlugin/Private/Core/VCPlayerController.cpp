@@ -3,6 +3,7 @@
 #include "Core/VCPlayerController.h"
 #include "Core/VCPlayerState.h"
 #include "UI/VCVitalsWidget.h"
+#include "UI/VCCarriedWeaponsWidget.h"
 #include "UI/VCReticleWidget.h"
 #include "Core/VCCharacterBase.h"
 #include "Gathering/VCGatherTable.h"
@@ -498,6 +499,10 @@ void AVCPlayerController::BindVitalsToPawn(APawn* InPawn)
 	{
 		Vitals->InitWithCharacter(Cast<AVCCharacterBase>(InPawn));
 	}
+	if (UVCCarriedWeaponsWidget* Carried = Cast<UVCCarriedWeaponsWidget>(CarriedWeaponsWidget))
+	{
+		Carried->InitWithCharacter(Cast<AVCCharacterBase>(InPawn));
+	}
 }
 
 void AVCPlayerController::CreatePersistentWidgets()
@@ -563,6 +568,20 @@ void AVCPlayerController::CreatePersistentWidgets()
 			InteractionPromptWidget->SetAnchorsInViewport(FAnchors(0.5f, 0.7f, 0.5f, 0.7f));
 			InteractionPromptWidget->SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
 			// Starts collapsed (NativeConstruct sets Collapsed)
+		}
+	}
+#endif
+
+	// The weapons carried on the body, just above the hotbar (display only, Z-order 0)
+#if WITH_EQUIPMENT_PLUGIN
+	{
+		CarriedWeaponsWidget = CreateWidget<UUserWidget>(this, UVCCarriedWeaponsWidget::StaticClass());
+		if (CarriedWeaponsWidget)
+		{
+			CarriedWeaponsWidget->AddToViewport(0);
+			CarriedWeaponsWidget->SetAnchorsInViewport(FAnchors(0.5f, 0.86f, 0.5f, 0.86f));
+			CarriedWeaponsWidget->SetAlignmentInViewport(FVector2D(0.5f, 1.f));
+			CarriedWeaponsWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 		}
 	}
 #endif

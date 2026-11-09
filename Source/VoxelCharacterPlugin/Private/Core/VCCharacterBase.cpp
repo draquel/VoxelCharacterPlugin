@@ -2508,6 +2508,12 @@ bool AVCCharacterBase::UnequipSlotToInventory(FGameplayTag SlotTag)
 	{
 		return false;
 	}
+	// A hand names what is in it: a weapon drawn from a sheath leaves from its sheath (the equipment sheathing plan).
+	const FGameplayTag Held = EquipmentManager->GetHeldSlotTag(SlotTag);
+	if (Held.IsValid())
+	{
+		SlotTag = Held;
+	}
 	const EEquipmentResult Result = EquipmentManager->TryUnequipToInventory(SlotTag, InventoryComponent);
 	UE_LOG(LogVoxelCharacter, Log, TEXT("UnequipSlotToInventory: %s: %s"), *SlotTag.ToString(), *UEnum::GetValueAsString(Result));
 	return Result == EEquipmentResult::Success;

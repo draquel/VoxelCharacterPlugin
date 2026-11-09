@@ -391,6 +391,10 @@ private:
 	UPROPERTY()
 	TObjectPtr<UUserWidget> VitalsWidget;
 
+	/** The weapons carried on the body, above the hotbar (UVCCarriedWeaponsWidget; the equipment sheathing plan). */
+	UPROPERTY()
+	TObjectPtr<UUserWidget> CarriedWeaponsWidget;
+
 	/** Point the vitals widget at a (re)possessed character. */
 	void BindVitalsToPawn(APawn* InPawn);
 

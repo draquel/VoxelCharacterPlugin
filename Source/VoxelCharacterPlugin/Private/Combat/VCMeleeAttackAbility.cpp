@@ -50,7 +50,7 @@ UVCMeleeAttackAbility::FAttackParameters UVCMeleeAttackAbility::ResolveAttackPar
 		return Out;
 	}
 
-	const FItemInstance MainHand = Equipment->GetEquippedItem(CGFGameplayTags::Equipment_Slot_MainHand);
+	const FItemInstance MainHand = Equipment->GetHeldItem(CGFGameplayTags::Equipment_Slot_MainHand); // its own slot's or drawn from a sheath
 	if (!MainHand.IsValid())
 	{
 		return Out;
@@ -110,7 +110,7 @@ void UVCMeleeAttackAbility::ApplyWeaponWear(AActor* Avatar) const
 	{
 		return;
 	}
-	const FItemInstance MainHand = Equipment->GetEquippedItem(CGFGameplayTags::Equipment_Slot_MainHand);
+	const FItemInstance MainHand = Equipment->GetHeldItem(CGFGameplayTags::Equipment_Slot_MainHand); // its own slot's or drawn from a sheath
 	if (!MainHand.IsValid())
 	{
 		return;
@@ -124,7 +124,7 @@ void UVCMeleeAttackAbility::ApplyWeaponWear(AActor* Avatar) const
 	{
 		return;
 	}
-	const float Remaining = Equipment->ApplyDurabilityLoss(CGFGameplayTags::Equipment_Slot_MainHand, Durability->DegradeRate);
+	const float Remaining = Equipment->ApplyDurabilityLoss(Equipment->GetHeldSlotTag(CGFGameplayTags::Equipment_Slot_MainHand), Durability->DegradeRate);
 	UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s weapon wear: -%.1f -> %.1f"), *GetNameSafe(Avatar), Durability->DegradeRate, Remaining);
 #endif
 }
