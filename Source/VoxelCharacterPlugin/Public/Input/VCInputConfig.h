@@ -75,6 +75,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_Use;
 
+	/** Digital — R key — sheathe the drawn weapon, or draw the last one (the equipment sheathing plan, D79). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_Sheathe;
+
+	/** Digital — X key — sheathe the drawn weapon and draw the next carried one (D79). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_CycleWeapon;
+
 	/** Digital — B key — toggle voxel edit mode (dig / place on the primary / secondary actions). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_ToggleEditMode;

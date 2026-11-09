@@ -300,8 +300,8 @@ float AVCCharacterBase::GetMiningSpeed() const
 bool AVCCharacterBase::HasDiggingTool() const
 {
 #if WITH_EQUIPMENT_PLUGIN
-	static const FGameplayTag MainHandTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.MainHand"), false);
-	if (!EquipmentManager || !EquipmentManager->IsSlotOccupied(MainHandTag))
+	// A pickaxe in the hand, its own slot's or drawn from the belt (a belted one grants no mining speed either, D77).
+	if (!EquipmentManager || !EquipmentManager->GetHeldItem(CGFGameplayTags::Equipment_Slot_MainHand).IsValid())
 	{
 		return false;
 	}

@@ -58,6 +58,21 @@ namespace
 		return FGameplayTag::RequestGameplayTag(FName(*Full), /*ErrorIfNotFound*/ false);
 	}
 
+	/**
+	 * The slot whose visual a hand names: a weapon drawn from a sheath is that sheath's visual, so its nudge and fit are the
+	 * sheath slot's (the equipment sheathing plan). Any other slot names itself.
+	 */
+	FGameplayTag ResolveHeldSlot(const AVCCharacterBase* Character, const FGameplayTag& SlotTag)
+	{
+#if WITH_EQUIPMENT_PLUGIN
+		const UEquipmentManagerComponent* Manager = Character ? Character->FindComponentByClass<UEquipmentManagerComponent>() : nullptr;
+		const FGameplayTag Held = Manager ? Manager->GetHeldSlotTag(SlotTag) : FGameplayTag();
+		return Held.IsValid() ? Held : SlotTag;
+#else
+		return SlotTag;
+#endif
+	}
+
 	FString PythonTransform(const FTransform& T)
 	{
 		const FVector L = T.GetLocation();
@@ -88,6 +103,7 @@ namespace
 			UE_LOG(LogVoxelCharacter, Warning, TEXT("vc.Equip.Nudge: unknown slot %s"), Args.Num() ? *Args[0] : TEXT(""));
 			return;
 		}
+		SlotTag = ResolveHeldSlot(Character, SlotTag);
 		FTransform& Nudge = Character->EquipFitNudges.FindOrAdd(SlotTag.GetTagName());
 		if (Args.Num() > First && Args[First] == TEXT("reset"))
 		{
@@ -126,7 +142,7 @@ namespace
 			UE_LOG(LogVoxelCharacter, Warning, TEXT("vc.Equip.PrintFit: no local player character with equipment."));
 			return;
 		}
-		const FGameplayTag SlotTag = SlotTagFromArg(Args.Num() > 0 ? Args[0] : TEXT("MainHand"));
+		const FGameplayTag SlotTag = ResolveHeldSlot(Character, SlotTagFromArg(Args.Num() > 0 ? Args[0] : TEXT("MainHand")));
 		const FTransform* Found = Character->EquipFitNudges.Find(SlotTag.GetTagName());
 		const FTransform Nudge = Found ? *Found : FTransform::Identity;
 		const FName Bone = Manager->GetVisualAttachSocket(SlotTag);
@@ -134,7 +150,9 @@ namespace
 		const FTransform Correction = Character->GetBodyAttachCorrection(Bone);
 		// The item's line: the fit with the nudge folded in (the body's correction kept apart, so it stays per body).
 		UE_LOG(LogVoxelCharacter, Display, TEXT("vc.Equip.PrintFit %s on %s:"), *SlotTag.ToString(), *Bone.ToString());
-		UE_LOG(LogVoxelCharacter, Display, TEXT("  item AttachOffset (fit then nudge): %s"), *PythonTransform(Fit * Nudge));
+		// A sheathed weapon's fit is its SheathOffset (the character's sheaths correct nothing); in the hand, its AttachOffset.
+		const bool bSheathed = Manager->IsSheathSlot(SlotTag) && !Manager->IsDrawn(SlotTag);
+		UE_LOG(LogVoxelCharacter, Display, TEXT("  item %s (fit then nudge): %s"), bSheathed ? TEXT("SheathOffset") : TEXT("AttachOffset"), *PythonTransform(Fit * Nudge));
 		UE_LOG(LogVoxelCharacter, Display, TEXT("  body AttachCorrections[%s] (correction then nudge): %s"), *Bone.ToString(), *PythonTransform(Correction * Nudge));
 		UE_LOG(LogVoxelCharacter, Display, TEXT("  today: fit %s, correction %s, nudge %s"), *PythonTransform(Fit), *PythonTransform(Correction), *PythonTransform(Nudge));
 		if (const UVCActionMontageComponent* Montages = Character->FindComponentByClass<UVCActionMontageComponent>())
@@ -153,12 +171,12 @@ namespace
 
 	FAutoConsoleCommand CmdEquipNudge(
 		TEXT("vc.Equip.Nudge"),
-		TEXT("[slot=MainHand] dx dy dz [pitch yaw roll] | [slot] reset: move the local player's held item on its bone, live, to fit it in the pose (character refinement plan C1). vc.Equip.PrintFit prints the result."),
+		TEXT("[slot=MainHand] dx dy dz [pitch yaw roll] | [slot] reset: move the local player's item in a slot on its bone, live, to fit it in the pose (character refinement plan C1; a sheath (Sheath.HipLeft) moves the sheathed weapon, MainHand the one drawn). vc.Equip.PrintFit prints the result."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&OnNudgeCommand));
 
 	FAutoConsoleCommand CmdEquipPrintFit(
 		TEXT("vc.Equip.PrintFit"),
-		TEXT("[slot=MainHand]: print the slot's fit with its nudge folded in, as the item's AttachOffset line for the scripts and as the body's AttachCorrections entry for the appearance."),
+		TEXT("[slot=MainHand]: print the slot's fit with its nudge folded in, as the item's AttachOffset line (SheathOffset for a sheathed weapon) for the scripts and as the body's AttachCorrections entry for the appearance."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&OnPrintFitCommand));
 }
 

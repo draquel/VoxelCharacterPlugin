@@ -169,6 +169,10 @@ struct VOXELCHARACTERPLUGIN_API FVCSnapshotEquipmentEntry
 
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
 	FString ItemJson;
+
+	/** A sheath's weapon was in the hand (the equipment sheathing plan, D80): restored drawn. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
+	bool bDrawn = false;
 };
 
 /**

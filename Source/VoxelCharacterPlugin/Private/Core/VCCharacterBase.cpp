@@ -205,6 +205,22 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 		Chest.AttachOffset = FTransform(FRotator(-23.f, 83.f, -90.f), FVector(16.f, -3.f, 0.f)); // up onto the chest
 		Chest.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Armor")));
 		EquipmentManager->AvailableSlots.Add(Chest);
+
+		// The sheaths (the equipment sheathing plan, D78), in the cycle's order: a weapon carried on the body, drawn into
+		// the main hand. Each item's SheathOffset fits it on the bone; the slot's correction stays the identity.
+		auto AddSheath = [this](const FGameplayTag& Tag, const FText& Name, FName Bone)
+		{
+			FEquipmentSlotDefinition Sheath;
+			Sheath.SlotTag = Tag;
+			Sheath.SlotDisplayName = Name;
+			Sheath.AttachSocket = Bone;
+			Sheath.DrawSlotTag = CGFGameplayTags::Equipment_Slot_MainHand;
+			Sheath.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Weapon")));
+			EquipmentManager->AvailableSlots.Add(Sheath);
+		};
+		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_Belt, NSLOCTEXT("VoxelCharacter", "SheathBelt", "Belt"), FName("pelvis"));
+		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_HipLeft, NSLOCTEXT("VoxelCharacter", "SheathHipLeft", "Left Hip"), FName("pelvis"));
+		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_Back, NSLOCTEXT("VoxelCharacter", "SheathBack", "Back"), FName("spine_05"));
 	}
 #endif
 
@@ -334,6 +350,7 @@ void AVCCharacterBase::BeginPlay()
 		EquipmentManager->OnItemBroken.AddDynamic(this, &AVCCharacterBase::HandleItemBroken);
 		EquipmentManager->OnVisualAttached.AddDynamic(this, &AVCCharacterBase::HandleEquipmentVisualAttached);
 		EquipmentManager->OnEquipmentChanged.AddDynamic(this, &AVCCharacterBase::HandleEquipmentChanged);
+		EquipmentManager->OnDrawnChanged.AddDynamic(this, &AVCCharacterBase::HandleEquipmentDrawnChanged);
 	}
 #endif
 	RefreshActionSet();
@@ -479,6 +496,7 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 
 	TickWorldSafety(DeltaSeconds);
 	UpdateDrawnGrip();
+	UpdateSheathHandOff();
 
 	// The weather on the character (the weather plan's P5): the server sets the wet and cold states every half second.
 	if (HasAuthority())
@@ -1522,7 +1540,19 @@ void AVCCharacterBase::UpdateEquipmentAttachments()
 			continue;
 		}
 
-		USkeletalMeshComponent* TargetMesh = GetTargetMeshForSlot(Slot.SlotTag);
+		// A sheath's weapon sits where this machine's unsheathe or sheathe montage has it until the montage's hand-off (at
+		// the sheath while an unsheathe reaches for it, in the hand while a sheathe carries it back), else where its state
+		// says (the equipment sheathing plan, D79). In the hand it takes the hand slot's view mapping.
+		const bool bSheath = Slot.DrawSlotTag.IsValid();
+		bool bInHand = Slot.IsInHand();
+		EVCAnimAction PendingAction;
+		if (bSheath && ActionMontages && ActionMontages->IsSheathHandOffPending(Slot.SlotTag, PendingAction))
+		{
+			bInHand = PendingAction == EVCAnimAction::Sheathe;
+		}
+		const FGameplayTag ViewSlot = bSheath && bInHand ? Slot.DrawSlotTag : Slot.SlotTag;
+
+		USkeletalMeshComponent* TargetMesh = GetTargetMeshForSlot(ViewSlot);
 		if (!TargetMesh)
 		{
 			continue;
@@ -1530,11 +1560,13 @@ void AVCCharacterBase::UpdateEquipmentAttachments()
 
 		// Determine the correct socket for the current view mode; an item that chooses its own bone (a bow on the left
 		// hand) keeps it in both views.
-		const FName ItemBone = EquipmentManager->GetItemAttachBone(Slot.SlotTag);
-		FName SocketName = ItemBone.IsNone() ? Slot.AttachSocket : ItemBone;
+		const FName StateSocket = EquipmentManager->GetVisualAttachSocketForState(Slot.SlotTag, bInHand);
+		const FName SlotSocket = bSheath && bInHand ? EquipmentManager->GetVisualAttachSocketForState(Slot.DrawSlotTag, true) : Slot.AttachSocket;
+		const bool bOwnBone = StateSocket != SlotSocket;
+		FName SocketName = StateSocket;
 		for (const FVCEquipmentSocketMapping& Mapping : EquipmentSocketMappings)
 		{
-			if (Mapping.SlotTag == Slot.SlotTag && ItemBone.IsNone())
+			if (Mapping.SlotTag == ViewSlot && !bOwnBone)
 			{
 				if (CurrentViewMode == EVCViewMode::FirstPerson && !Mapping.ArmsSocket.IsNone())
 				{
@@ -1556,8 +1588,8 @@ void AVCCharacterBase::UpdateEquipmentAttachments()
 		// The snap wipes the visual's offset: re-apply the slot / item fit (or the set's drawn grip, as far as the draw
 		// plays), the body's correction for the bone (D71) and any QA nudge.
 		const FTransform* Nudge = EquipFitNudges.Find(Slot.SlotTag.GetTagName());
-		FTransform Fit = EquipmentManager->GetVisualAttachOffset(Slot.SlotTag);
-		if (Slot.SlotTag == FGameplayTag::RequestGameplayTag(TEXT("Equipment.Slot.MainHand"), false))
+		FTransform Fit = EquipmentManager->GetVisualAttachOffsetForState(Slot.SlotTag, bInHand);
+		if (bInHand && ViewSlot == CGFGameplayTags::Equipment_Slot_MainHand.GetTag())
 		{
 			const float DrawWeight = GetDrawnGripWeight();
 			if (DrawWeight > 0.f)
@@ -1717,11 +1749,11 @@ void AVCCharacterBase::RefreshActionSet()
 	bool bHoldsItem = false;
 	FGameplayTag ItemActionSet;
 #if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
-	static const FGameplayTag MainHandTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.MainHand"), false);
-	if (EquipmentManager && EquipmentManager->IsSlotOccupied(MainHandTag))
+	// What is in the hand: the hand slot's own item or the weapon drawn from a sheath; all sheathed is Unarmed (D80).
+	const FItemInstance Item = EquipmentManager ? EquipmentManager->GetHeldItem(CGFGameplayTags::Equipment_Slot_MainHand) : FItemInstance();
+	if (Item.IsValid())
 	{
 		bHoldsItem = true;
-		const FItemInstance Item = EquipmentManager->GetEquippedItem(MainHandTag);
 		const UGameInstance* GI = GetGameInstance();
 		const UItemDatabaseSubsystem* ItemDB = GI ? GI->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
 		const UItemDefinition* Def = ItemDB ? ItemDB->GetDefinition(Item.ItemDefinitionId) : nullptr;
@@ -1797,6 +1829,10 @@ void AVCCharacterBase::RelinkEquipmentAnimLayers()
 	}
 	for (const FGameplayTag& SlotTag : EquipmentManager->GetOccupiedSlotTags())
 	{
+		if (EquipmentManager->IsSheathSlot(SlotTag) && !EquipmentManager->IsDrawn(SlotTag))
+		{
+			continue; // a sheathed weapon links no stance (D77)
+		}
 		const UItemDefinition* Def = ItemDB->GetDefinition(EquipmentManager->GetEquippedItem(SlotTag).ItemDefinitionId);
 		const UItemFragment_Equipment* EquipFrag = Def ? Def->FindFragment<UItemFragment_Equipment>() : nullptr;
 		if (EquipFrag && EquipFrag->AnimLayerClass)
@@ -2088,6 +2124,14 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	{
 		EIC->BindAction(Config->IA_Craft, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Craft);
 	}
+	if (Config->IA_Sheathe)
+	{
+		EIC->BindAction(Config->IA_Sheathe, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Sheathe);
+	}
+	if (Config->IA_CycleWeapon)
+	{
+		EIC->BindAction(Config->IA_CycleWeapon, ETriggerEvent::Started, this, &AVCCharacterBase::Input_CycleWeapon);
+	}
 	if (Config->IA_ToggleEditMode)
 	{
 		EIC->BindAction(Config->IA_ToggleEditMode, ETriggerEvent::Started, this, &AVCCharacterBase::Input_ToggleEditMode);
@@ -2214,6 +2258,11 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 {
 	// Priority chain: GAS ability -> [edit mode only] equipped item action -> voxel dig -> fallback
 	if (IsIncapacitated())
+	{
+		return;
+	}
+	// The hands are busy while a weapon comes out or goes back (the equipment sheathing plan, D79).
+	if (ActionMontages && ActionMontages->IsSheathActionPlaying())
 	{
 		return;
 	}
@@ -2436,6 +2485,12 @@ bool AVCCharacterBase::EquipHotbarItem(int32 HotbarSlot)
 		return false;
 	}
 
+	// A carried weapon goes through the use path: into its sheath and drawn with its montage, on the server (D79).
+	if (EquipFrag->SheathSlotTag.IsValid())
+	{
+		RequestUseItemInSlot(Slot);
+		return true;
+	}
 	// The manager routes to its server RPC when called on a client.
 	const EEquipmentResult Result = EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, EquipFrag->EquipmentSlotTag);
 	UE_LOG(LogVoxelCharacter, Log, TEXT("EquipHotbarItem: %s -> %s: %s"), *Item.ItemDefinitionId.PrimaryAssetName.ToString(),
@@ -2452,6 +2507,12 @@ bool AVCCharacterBase::UnequipSlotToInventory(FGameplayTag SlotTag)
 	if (!InventoryComponent || !EquipmentManager || !SlotTag.IsValid())
 	{
 		return false;
+	}
+	// A hand names what is in it: a weapon drawn from a sheath leaves from its sheath (the equipment sheathing plan).
+	const FGameplayTag Held = EquipmentManager->GetHeldSlotTag(SlotTag);
+	if (Held.IsValid())
+	{
+		SlotTag = Held;
 	}
 	const EEquipmentResult Result = EquipmentManager->TryUnequipToInventory(SlotTag, InventoryComponent);
 	UE_LOG(LogVoxelCharacter, Log, TEXT("UnequipSlotToInventory: %s: %s"), *SlotTag.ToString(), *UEnum::GetValueAsString(Result));
@@ -2528,6 +2589,27 @@ bool AVCCharacterBase::UseItemInSlot(int32 SlotIndex)
 		const UItemFragment_Equipment* EquipFrag = Def ? Def->FindFragment<UItemFragment_Equipment>() : nullptr;
 		if (EquipFrag && EquipFrag->EquipmentSlotTag.IsValid() && EquipmentManager)
 		{
+			// A carried weapon (D79): into its sheath (the sheath's weapon to the bag), then drawn with its montage, the
+			// weapon drawn before going back to its own sheath.
+			if (EquipFrag->SheathSlotTag.IsValid())
+			{
+				const EEquipmentResult Equipped = EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, FGameplayTag());
+				FGameplayTag Sheath;
+				for (const FEquipmentSlot& Slot : EquipmentManager->EquipmentSlots)
+				{
+					if (Slot.bIsOccupied && Slot.EquippedItem.InstanceId == Item.InstanceId)
+					{
+						Sheath = Slot.SlotTag;
+					}
+				}
+				UE_LOG(LogVoxelCharacter, Log, TEXT("UseItemInSlot: carry %s -> %s: %s"), *Item.ItemDefinitionId.PrimaryAssetName.ToString(),
+					*Sheath.ToString(), *UEnum::GetValueAsString(Equipped));
+				if (Equipped == EEquipmentResult::Success && EquipmentManager->IsSheathSlot(Sheath))
+				{
+					RunSheathSequence(Sheath, /*bOwnerPlayedIt*/ false);
+				}
+				return Equipped == EEquipmentResult::Success;
+			}
 			const EEquipmentResult Result = EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, EquipFrag->EquipmentSlotTag);
 			UE_LOG(LogVoxelCharacter, Log, TEXT("UseItemInSlot: equip %s -> %s: %s"), *Item.ItemDefinitionId.PrimaryAssetName.ToString(),
 				*EquipFrag->EquipmentSlotTag.ToString(), *UEnum::GetValueAsString(Result));
@@ -2676,6 +2758,7 @@ void AVCCharacterBase::BuildItemSnapshot(FVCItemSnapshot& Snapshot) const
 				FVCSnapshotEquipmentEntry& Entry = Snapshot.Equipment.AddDefaulted_GetRef();
 				Entry.SlotTag = SlotTag;
 				Entry.ItemJson = ItemToJson(Item);
+				Entry.bDrawn = EquipmentManager->IsDrawn(SlotTag);
 			}
 		}
 	}
@@ -2781,7 +2864,8 @@ bool AVCCharacterBase::RestoreItemSnapshotFromPlayerState()
 			{
 				continue;
 			}
-			if (EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, Entry.SlotTag) == EEquipmentResult::Success)
+			// A drawn weapon comes back drawn (no montage); an old save's main-hand weapon lands in its sheath, drawn.
+			if (EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, Entry.SlotTag, Entry.bDrawn) == EEquipmentResult::Success)
 			{
 				++Restored;
 			}

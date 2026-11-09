@@ -8,6 +8,11 @@ FString UVCAnimNotify_ActionHit::GetNotifyName_Implementation() const
 	return TEXT("ActionHit");
 }
 
+FString UVCAnimNotify_ItemHandOff::GetNotifyName_Implementation() const
+{
+	return TEXT("ItemHandOff");
+}
+
 UAnimMontage* FVCDirectionalMontages::Get(EVCHitDirection Direction) const
 {
 	UAnimMontage* Side = nullptr;
@@ -36,8 +41,45 @@ UAnimMontage* UVCActionAnimSet::GetMontage(EVCAnimAction Action, int32 Variant) 
 	case EVCAnimAction::Revive:   return Revive;
 	case EVCAnimAction::Draw:     return Draw;
 	case EVCAnimAction::Release:  return Release;
+	case EVCAnimAction::Unsheathe:
+	case EVCAnimAction::Sheathe:  return GetSheathMontage(Action, FGameplayTag());
 	}
 	return nullptr;
+}
+
+UAnimMontage* UVCActionAnimSet::GetSheathMontage(EVCAnimAction Action, const FGameplayTag& Sheath) const
+{
+	const FVCSheathMontages* Entry = SheathMontages.FindByPredicate([&Sheath](const FVCSheathMontages& M) { return M.Sheath == Sheath; });
+	if (!Entry && SheathMontages.Num() > 0)
+	{
+		Entry = &SheathMontages[0];
+	}
+	if (!Entry)
+	{
+		return nullptr;
+	}
+	return Action == EVCAnimAction::Unsheathe ? Entry->Unsheathe.Get() : Action == EVCAnimAction::Sheathe ? Entry->Sheathe.Get() : nullptr;
+}
+
+float UVCActionAnimSet::GetHandOffTime(const UAnimMontage* Montage, float DefaultFraction)
+{
+	if (!Montage)
+	{
+		return 0.f;
+	}
+	float Earliest = TNumericLimits<float>::Max();
+	for (const FAnimNotifyEvent& Event : Montage->Notifies)
+	{
+		if (Cast<UVCAnimNotify_ItemHandOff>(Event.Notify))
+		{
+			Earliest = FMath::Min(Earliest, Event.GetTriggerTime());
+		}
+	}
+	if (Earliest < TNumericLimits<float>::Max())
+	{
+		return FMath::Max(0.f, Earliest);
+	}
+	return Montage->GetPlayLength() * FMath::Clamp(DefaultFraction, 0.f, 1.f);
 }
 
 float UVCActionAnimSet::GetHitTime(const UAnimMontage* Montage, float DefaultFraction)
