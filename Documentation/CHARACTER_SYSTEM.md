@@ -152,6 +152,21 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
   upper body only, the drawn bow follows the view's pitch, and in third person the body turns toward the view while the
   bow is drawn (`SetFacesAim`). First person shows no draw (D57: the demo has no arms mesh); the crosshair, the shot and
   the arrow work the same.
+- **Aiming** (the character refinement plan's C3, D73 and D74, 2026-11-08). Holding the secondary action with a ranged
+  weapon in the main hand aims, and a draw aims too (`AVCCharacterBase::IsAiming`): the server decides (`bIsAiming`,
+  replicated; the ASC's `State.Aiming` tag) from the owner's request (`Server_SetWantsToAim`, checked again there) and
+  its own ability's draw (`SetDrawingOnServer`), and the owner counts its own input and draw at once so nothing waits a
+  round trip. `ApplyAimState` runs on every change (input, draw, replication, a view toggle: G155) and does three
+  things: the body faces the view and strafes (`SetFacesAim`, the movement's eased flip, third person), the motion
+  matching plays GASP's aim set (`WantsToAim`), and for the local player in third person the camera moves in
+  (`UVCAimCameraMode`, pushed on the stack and popped after: "Camera"). The reticle (`UVCReticleWidget`: "HUD and
+  widgets") shows while aiming in both views, its ticks closing with the owner's draw (`GetOwnDrawPower`), red over a
+  hostile (`IsAimOnHostile`). **The shot's ray** (G156): `UVCCombatStatics::ComputeAimRay` is one predicate on the owner
+  and the server: a character aiming in third person aims from its aim camera, whose place follows from the pawn and
+  the view alone (`UVCAimCameraMode::ComputeDefaultCameraLocation`, no lag), so the arrow converges on the reticle;
+  anyone else aims from the eyes along the view as before. The arrow still leaves the bow (`ArrowStartOffset`) toward
+  the ray's hit. Edit mode keeps the secondary action for placing (a held bow is no placing tool). Tests
+  `VoxelCharacter.Combat.AimCameraLocation`.
 
 ### Death and respawn
 
@@ -508,7 +523,12 @@ First person sits at the head socket with a wider field of view; third person is
 follows at `LagSpeed`, never farther than `MaxLagDistance` behind the character (0 = no cap; the character refinement
 plan's C4: at a steady speed the pivot settles speed / `LagSpeed` behind and swings past on a direction change, which
 read as the body sliding) and snaps across a teleport (`ComputeLaggedPivot`, G41), with a trace against voxel terrain when
-`bUseVoxelCameraCollision` is set (`ResolveVoxelCameraCollision`). For a walker that
+`bUseVoxelCameraCollision` is set (`ResolveVoxelCameraCollision`). **The aim camera** (C3): `UVCAimCameraMode`, a
+third-person mode closer in (arm 150, offset (0, 60, 55), 70 degrees) with no lag, so its place is a function of the pawn
+and the control rotation alone (`ComputeCameraLocation`, pure), which is what lets the server compute the shot's ray
+from the same origin (D74). The character pushes it while aiming (`AimModeClass`) and `PopCameraMode` brings the mode
+under it back as a fresh instance on top (the stack had a push and no pop); the blend is the stack's as for a view
+change. For a walker that
 `IsSteppingBlocks()` the view eases through each block step (`bEaseBlockSteps`, `BlockStepEaseSpeed`, pure
 `ComputeStepEaseOffset`). `UVCUnderwaterPostProcess` follows the camera, not the feet, so a third-person view above the
 surface stays clear while the pawn swims. It is the local player's view and nothing else's (G133, 2026-11-06): its
@@ -540,7 +560,8 @@ Enhanced Input only. `UVCInputConfig` holds the actions (`IA_Move`, `IA_Look`, `
 `IA_ScrollHotbar`, `IA_Drop`, `IA_Use` (F), `IA_ToggleEditMode` (B), `IA_Craft` (C), `IA_Sprint` (Shift), `IA_Crouch`
 (Ctrl), `IA_Pause` (P)) and two mapping contexts: `IMC_Gameplay` at priority 0, always on, and `IMC_UI` at 1 while an
 inventory or menu is open (cursor shown). The asset is the controller's `InputConfig`; the character binds the actions,
-the controller adds the contexts.
+the controller adds the contexts. The secondary action is bound on its release too (C3): held with a ranged weapon in
+hand it aims ("The bow" › Aiming), in edit mode it places.
 
 ### The primary action
 
@@ -805,7 +826,9 @@ second (5 past 80 m), so it stays 0.05.
 class.
 
 - Persistent (`CreatePersistentWidgets`): the hotbar, the interaction prompt, `UVCVitalsWidget` (health, stamina,
-  breath, the `EDIT` cue, the torch, an objective line and a timed toast), the minimap, and an optional clock
+  breath, the `EDIT` cue, the torch, an objective line and a timed toast), the minimap, the aim reticle
+  (`UVCReticleWidget`, centre-anchored: a dot and four ticks, shown while the pawn aims (`IsAiming`), the ticks closing
+  with the owner's draw and the colour red over a hostile; C3), and an optional clock
   (`ClockWidgetClass`; the demo uses WorldClockPlugin's widget, this plugin never reads the time).
 - On demand: the inventory and equipment panels, the item cursor, the world map (`ToggleWorldMapUI`), the pause menu
   (`IA_Pause`), the crafting panel and the campsite panel.

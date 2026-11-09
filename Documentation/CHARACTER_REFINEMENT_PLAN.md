@@ -344,6 +344,43 @@ content scripts the phase changed (never while another editor runs, G150).
   `ComputeAimRay`, the RMB release binding. Tests above; the replication test gets an aiming step. Docs: "The bow",
   "Camera", "Input", "HUD and widgets", `EDITOR_CONSOLE_GUIDE.md` §4.
 
+**C3 result (2026-11-08; VoxelCharacterPlugin).**
+- **The aim state** (D73): `AVCCharacterBase::IsAiming` is the owner's held secondary action with a ranged weapon in
+  hand or a draw; the server decides (`bIsAiming`, replicated; `State.Aiming` on the ASC) from the owner's request
+  (`SetWantsToAim`, `Server_SetWantsToAim`, checked again on the server) and its own ability's draw (`SetDrawingOnServer`
+  from `UVCRangedAttackAbility`'s activation and end, in place of its `SetFacesAim` calls), and the owner counts its own
+  input and draw at once. `ApplyAimState` on every change: `SetFacesAim` (C4's eased flip), the motion matching's
+  `WantsToAim` (GASP's aim set), the local third-person camera pushed and popped, and after a view toggle (G155:
+  `SetViewMode` re-applies it, so the camera comes back in and the body stays on the view when the toggle lands in third
+  person). `IA_SecondaryAction` gets its Completed and Canceled bindings; edit mode keeps the button for placing.
+- **The camera** (D74): `UVCAimCameraMode` (arm 150, offset (0, 60, 55), 70 degrees, no lag: its place is a pure
+  function of the pawn and the view, `ComputeCameraLocation`), `UVCCameraManager::AimModeClass`, and `PopCameraMode`,
+  which the stack never had: the mode under the top comes back as a fresh instance, or the fallback (the view's own
+  class) when it has already blended out and gone (a replaced mode leaves the stack about three seconds after its
+  replacement, so a long aim found nothing under the top: the first pass's camera stayed in).
+- **The reticle**: `UVCReticleWidget` (a dot and four ticks, centre-anchored, built in code; the controller's
+  `ReticleWidgetClass`), shown while the pawn aims in both views, the ticks closing with the owner's draw
+  (`GetOwnDrawPower`), red over a hostile (`IsAimOnHostile`, a sweep ten times a second). A C++ widget with no Blueprint
+  tick is not ticked under the engine's Auto frequency (the switch is private) and a collapsed widget not at all, so it
+  watches the pawn on a 30 Hz timer and hides its canvas, not itself; and a `UBorder` with its default brush (no
+  resource) paints nothing, so each piece gets a solid `FSlateColorBrush`; and `SetDesiredSizeInViewport` called after
+  `SetAnchorsInViewport` left the anchors at the top-left corner (the dot drew there), so the size is set first (four
+  passes showed no reticle at the centre, one reason each; the fourth found with a 200 px red dot and the widget's
+  anchors read back from Python). On the range: the dot and the four ticks at the screen's centre while aiming, the
+  ticks closing during the draw (`Saved/Screenshots/Claudius/aimui_lp5_*.png`).
+- **The shot's ray** (G156): `UVCCombatStatics::ComputeAimRay` (the aim camera's origin while aiming in third person,
+  the eyes otherwise) in `ComputeShot`; the arrow still leaves the bow toward the ray's hit. On the range, the view 2
+  degrees right of the posts and 1.5 up at the wall 45 m out: the arrow landed at y = -989 against the camera ray's
+  -978 (the arrow's drop took it to the floor just before the wall) where the eyes' ray would have put it at -1043; and
+  since a draw aims, every third-person shot takes the aim ray, so a hip shot in third person lands where the reticle
+  would have been. A near obstacle between the bow and a far aim point is still hit first (the arrow leaves the bow,
+  not the camera): the 10 m post took an arrow meant for the 20 m one when the two stood in line.
+- **Not written**: the steps in `VoxelEngine.Replication.Framework` (the aim state's and C1's swap: the test's pawn is
+  not a character; the aim state is a replicated bool and a replicated loose tag of the kinds the test already covers).
+  Melee keeps the eye ray (`SweepHostileUnderView`): its reach is 2 m, where the two rays meet.
+- Tests `VoxelCharacter.Combat.AimCameraLocation` (the camera's place and the reticle's spread). Docs:
+  `CHARACTER_SYSTEM.md` "The bow" › Aiming, "Camera", "Input", "HUD and widgets".
+
 ### C4: Handling (VoxelCharacterPlugin, VoxelCharacterAnimation; L)
 - `FVCGaitSettings` and its application, the rotation rates, the eased face-aim flip, the graph's inputs, G154,
   `vc.Move.*`, then the pass on the lane: Legacy → GASP → Tuned, the numbers in this plan's results, the camera lag last.

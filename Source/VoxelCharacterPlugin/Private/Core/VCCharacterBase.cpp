@@ -595,6 +595,7 @@ void AVCCharacterBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(AVCCharacterBase, bIsCorpse);
+	DOREPLIFETIME(AVCCharacterBase, bIsAiming);
 }
 
 // ---------------------------------------------------------------------------
@@ -897,7 +898,7 @@ bool AVCCharacterBase::TryStartRangedAttack()
 	}
 	bDrawingRangedWeapon = true;
 	OwnDrawStartTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
-	SetFacesAim(true);
+	ApplyAimState(); // a draw aims (C3): the facing, the camera and the reticle at once on the owner
 	PlayOwnAction(EVCAnimAction::Draw);
 	return true;
 }
@@ -909,7 +910,7 @@ void AVCCharacterBase::ReleaseRangedAttack()
 		return;
 	}
 	bDrawingRangedWeapon = false;
-	SetFacesAim(false);
+	ApplyAimState(); // the draw ended: the aim stays only while the secondary action is held (C3)
 	// The owner's look follows its own clock; the server's measure decides the shot.
 	if (ActionMontages && IsLocallyControlled())
 	{
@@ -943,6 +944,146 @@ void AVCCharacterBase::SetFacesAim(bool bFaceAim)
 	// The engine's turn toward the controller's rotation keeps the body upright in a custom gravity frame.
 	Move->bOrientRotationToMovement = !bFaceAim;
 	Move->bUseControllerDesiredRotation = bFaceAim;
+}
+
+// ---------------------------------------------------------------------------
+// Aiming (the character refinement plan's C3, D73)
+// ---------------------------------------------------------------------------
+
+bool AVCCharacterBase::IsAiming() const
+{
+	if (bIsAiming)
+	{
+		return true;
+	}
+	// The owner counts its own request and draw before the server answers; the server its own draw before it replicates.
+	if (IsLocallyControlled() && (bLocalWantsToAim || bDrawingRangedWeapon))
+	{
+		return true;
+	}
+	return HasAuthority() && (bServerWantsToAim || bServerDrawing);
+}
+
+void AVCCharacterBase::SetWantsToAim(bool bWantsToAim)
+{
+	if (!IsLocallyControlled())
+	{
+		return;
+	}
+	// Nothing to aim without a ranged weapon; a release always lands (the weapon may have gone meanwhile).
+	if (bWantsToAim && (IsIncapacitated() || !UVCRangedAttackAbility::HoldsRangedWeapon(this)))
+	{
+		bWantsToAim = false;
+	}
+	if (bLocalWantsToAim == bWantsToAim)
+	{
+		return;
+	}
+	bLocalWantsToAim = bWantsToAim;
+	if (HasAuthority())
+	{
+		bServerWantsToAim = bWantsToAim;
+		UpdateServerAiming();
+	}
+	else
+	{
+		Server_SetWantsToAim(bWantsToAim);
+		ApplyAimState();
+	}
+}
+
+void AVCCharacterBase::Server_SetWantsToAim_Implementation(bool bWantsToAim)
+{
+	// The server's own check: a ranged weapon in hand, the character able.
+	bServerWantsToAim = bWantsToAim && !IsIncapacitated() && UVCRangedAttackAbility::HoldsRangedWeapon(this);
+	UpdateServerAiming();
+}
+
+void AVCCharacterBase::SetDrawingOnServer(bool bDrawing)
+{
+	if (!HasAuthority() || bServerDrawing == bDrawing)
+	{
+		return;
+	}
+	bServerDrawing = bDrawing;
+	UpdateServerAiming();
+}
+
+void AVCCharacterBase::UpdateServerAiming()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	const bool bNow = bServerWantsToAim || bServerDrawing;
+	if (bIsAiming != bNow)
+	{
+		bIsAiming = bNow;
+		if (UAbilitySystemComponent* ASC = GetAbilitySystemComponent())
+		{
+			ASC->SetLooseGameplayTagCount(VCGameplayTags::State_Aiming, bNow ? 1 : 0, EGameplayTagReplicationState::TagOnly);
+		}
+	}
+	ApplyAimState();
+}
+
+void AVCCharacterBase::OnRep_IsAiming()
+{
+	ApplyAimState();
+}
+
+void AVCCharacterBase::ApplyAimState()
+{
+	const bool bAiming = IsAiming();
+	// The body toward the view while aiming (third person; the movement eases the flip), back to its heading after.
+	SetFacesAim(bAiming);
+	if (bAimStateApplied == bAiming)
+	{
+		return;
+	}
+	bAimStateApplied = bAiming;
+	// The local player's camera: in over the shoulder while aiming in third person, back when it ends. First person keeps
+	// its camera (nothing to move in; the reticle shows there too).
+	if (IsLocallyControlled() && CameraManager && CurrentViewMode != EVCViewMode::FirstPerson && CameraManager->AimModeClass)
+	{
+		const bool bAimCameraOn = CameraManager->GetTopCameraModeClass() == CameraManager->AimModeClass;
+		if (bAiming && !bAimCameraOn)
+		{
+			CameraManager->PushCameraMode(CameraManager->AimModeClass);
+		}
+		else if (!bAiming && bAimCameraOn)
+		{
+			CameraManager->PopCameraMode(CameraManager->ThirdPersonModeClass);
+		}
+	}
+}
+
+float AVCCharacterBase::GetOwnDrawPower() const
+{
+	if (!bDrawingRangedWeapon || !GetWorld())
+	{
+		return 0.f;
+	}
+	return UVCRangedAttackAbility::GetDrawPower(this, static_cast<float>(GetWorld()->GetTimeSeconds() - OwnDrawStartTime));
+}
+
+bool AVCCharacterBase::IsAimOnHostile(float Range) const
+{
+	UWorld* World = GetWorld();
+	FVector Origin, Direction;
+	if (!World || !UVCCombatStatics::ComputeAimRay(this, Origin, Direction))
+	{
+		return false;
+	}
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCAimOnHostile), /*bTraceComplex*/ false, this);
+	FHitResult Hit;
+	if (!World->SweepSingleByChannel(Hit, Origin, Origin + Direction * Range, FQuat::Identity, ECC_Pawn, FCollisionShape::MakeSphere(4.f), Params))
+	{
+		return false;
+	}
+	const UVCCombatComponent* Target = Hit.GetActor() ? UVCCombatStatics::FindCombatComponent(Hit.GetActor()) : nullptr;
+	return Target && CombatComponent && UCGFCombatStatics::AreHostileFactions(CombatComponent->FactionTag, Target->FactionTag)
+		&& !Target->IsDead_Implementation();
 }
 
 void AVCCharacterBase::PlayOwnAction(EVCAnimAction Action)
@@ -1132,6 +1273,9 @@ void AVCCharacterBase::SetViewMode(EVCViewMode NewMode)
 			MovComp->bOrientRotationToMovement = true;
 		}
 	}
+	// A view toggle mid-aim keeps the body on the view and moves the camera with the mode (G155, C3).
+	bAimStateApplied = false;
+	ApplyAimState();
 
 	// 3. Mesh visibility — defer hide when entering FP so the camera
 	//    blend can "zoom in" on the character before hiding the body.
@@ -1914,6 +2058,9 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	if (Config->IA_SecondaryAction)
 	{
 		EIC->BindAction(Config->IA_SecondaryAction, ETriggerEvent::Started, this, &AVCCharacterBase::Input_SecondaryAction);
+		// Holding it aims a ranged weapon (C3): the release ends the aim.
+		EIC->BindAction(Config->IA_SecondaryAction, ETriggerEvent::Completed, this, &AVCCharacterBase::Input_StopSecondaryAction);
+		EIC->BindAction(Config->IA_SecondaryAction, ETriggerEvent::Canceled, this, &AVCCharacterBase::Input_StopSecondaryAction);
 	}
 
 	// UI / Hotbar
@@ -2134,9 +2281,15 @@ void AVCCharacterBase::Input_StopPrimaryAction(const FInputActionValue& Value)
 
 void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 {
-	// Priority chain: GAS ability -> [edit mode only] equipped item alt -> voxel place -> fallback
+	// Priority chain: aim a ranged weapon (held) -> GAS ability -> [edit mode only] equipped item alt -> voxel place -> fallback
 	if (IsIncapacitated())
 	{
+		return;
+	}
+	// A ranged weapon in hand aims while the button is held (C3, D73); edit mode keeps placing (a held bow is no placing tool).
+	if (!bEditModeEnabled && UVCRangedAttackAbility::HoldsRangedWeapon(this))
+	{
+		SetWantsToAim(true);
 		return;
 	}
 
@@ -2156,6 +2309,11 @@ void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 		PlayOwnAction(EVCAnimAction::Place);
 		PC->Server_RequestVoxelModification(PlaceVoxel, EVCVoxelModificationType::Place, 2); // Stone
 	}
+}
+
+void AVCCharacterBase::Input_StopSecondaryAction(const FInputActionValue& Value)
+{
+	SetWantsToAim(false);
 }
 
 void AVCCharacterBase::Input_OpenInventory(const FInputActionValue& Value)

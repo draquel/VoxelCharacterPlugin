@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Combat/VCRangedAttackAbility.h"
+#include "Combat/VCCombatStatics.h"
 #include "Combat/VCArrowProjectile.h"
 #include "Animation/VCActionMontageComponent.h"
 #include "Core/VCCharacterBase.h"
@@ -189,11 +190,15 @@ bool UVCRangedAttackAbility::ComputeShot(const AActor* Avatar, FVector& OutStart
 	const FVector ViewDirection = View.Vector();
 	OutStart = Eyes + View.RotateVector(ArrowStartOffset);
 
-	// What the crosshair is on: terrain and props block the Pawn channel, and so do the capsules a visibility trace passes.
+	// What the reticle is on (D74, G156): the aim ray starts at the aim camera while the character aims in third person
+	// (the same origin the owner's screen centre has, computed alike here), at the eyes otherwise. Terrain and props
+	// block the Pawn channel, and so do the capsules a visibility trace passes.
+	FVector RayOrigin, RayDirection;
+	UVCCombatStatics::ComputeAimRay(Avatar, RayOrigin, RayDirection);
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCRangedAim), /*bTraceComplex*/ false, Avatar);
 	FHitResult Hit;
-	const FVector Far = Eyes + ViewDirection * AimRange;
-	const FVector AimPoint = World->SweepSingleByChannel(Hit, Eyes, Far, FQuat::Identity, ECC_Pawn, FCollisionShape::MakeSphere(4.f), Params)
+	const FVector Far = RayOrigin + RayDirection * AimRange;
+	const FVector AimPoint = World->SweepSingleByChannel(Hit, RayOrigin, Far, FQuat::Identity, ECC_Pawn, FCollisionShape::MakeSphere(4.f), Params)
 		? Hit.ImpactPoint : Far;
 
 	// An aim point at the bow or behind it (a wall at the face) gives no direction: fly along the view.
@@ -232,10 +237,10 @@ void UVCRangedAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Ha
 	// The draw is timed here, on the server, from now to the input release (InputReleased).
 	DrawStartTime = World->GetTimeSeconds();
 	bDrawing = true;
-	// The server turns the body toward the view as the owner does, so its moves and the others' view agree.
+	// The server's draw aims (C3): the body toward the view as the owner does, the aim state replicated to every machine.
 	if (AVCCharacterBase* Character = Cast<AVCCharacterBase>(Avatar))
 	{
-		Character->SetFacesAim(true);
+		Character->SetDrawingOnServer(true);
 	}
 	if (UVCActionMontageComponent* Montages = Avatar->FindComponentByClass<UVCActionMontageComponent>())
 	{
@@ -280,7 +285,7 @@ void UVCRangedAttackAbility::EndAbility(const FGameplayAbilitySpecHandle Handle,
 {
 	if (AVCCharacterBase* Character = Cast<AVCCharacterBase>(ActorInfo ? ActorInfo->AvatarActor.Get() : nullptr))
 	{
-		Character->SetFacesAim(false);
+		Character->SetDrawingOnServer(false);
 	}
 	// Cancelled mid-draw (killed, knocked out): the draw stops everywhere, the owner's too.
 	if (bDrawing)

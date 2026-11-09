@@ -22,5 +22,6 @@ namespace VCGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Stat_Defense,            "SetByCaller.Stat.Defense",            "Equipment stat key: UVCCombatAttributeSet::Defense");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Weather_Wet,  "State.Weather.Wet",  "Soaked by the rain or a swim: the stamina regenerates slower (UVCMovementComponent::WetStaminaRegenMultiplier)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Aiming,                "State.Aiming",                "The character aims a ranged weapon (the secondary action held, or the draw): camera in, reticle, strafing; the server sets it (character refinement plan C3)");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Weather_Cold, "State.Weather.Cold", "In the cold: the move speed drops (UVCWeatherColdEffect)");
 }

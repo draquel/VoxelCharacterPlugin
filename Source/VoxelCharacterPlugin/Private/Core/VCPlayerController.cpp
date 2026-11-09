@@ -3,6 +3,7 @@
 #include "Core/VCPlayerController.h"
 #include "Core/VCPlayerState.h"
 #include "UI/VCVitalsWidget.h"
+#include "UI/VCReticleWidget.h"
 #include "Core/VCCharacterBase.h"
 #include "Gathering/VCGatherTable.h"
 #include "Editing/VCBlockInteractionComponent.h"
@@ -584,6 +585,24 @@ void AVCPlayerController::CreatePersistentWidgets()
 			VitalsWidget->SetPadding(FMargin(24.f, 0.f, 0.f, 24.f));
 			VitalsWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 			BindVitalsToPawn(GetPawn());
+		}
+	}
+
+	// The aim reticle (centre, Z-order 1; C3): it shows itself while the pawn aims.
+	{
+		TSubclassOf<UUserWidget> ClassToUse = ReticleWidgetClass;
+		if (!ClassToUse)
+		{
+			ClassToUse = UVCReticleWidget::StaticClass();
+		}
+		ReticleWidget = CreateWidget<UUserWidget>(this, ClassToUse);
+		if (ReticleWidget)
+		{
+			ReticleWidget->AddToViewport(1);
+			// The size first: SetDesiredSizeInViewport after the anchors left them at the top-left corner (the dot drew there).
+			ReticleWidget->SetDesiredSizeInViewport(FVector2D(64.f, 64.f));
+			ReticleWidget->SetAnchorsInViewport(FAnchors(0.5f, 0.5f, 0.5f, 0.5f));
+			ReticleWidget->SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
 		}
 	}
 
