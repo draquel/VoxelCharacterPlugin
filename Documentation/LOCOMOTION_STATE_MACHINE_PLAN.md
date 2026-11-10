@@ -1,7 +1,7 @@
 # Locomotion State Machine Plan: the player's locomotion from the animation packs
 
 > **Agreed 2026-11-10.** Proposed and revised the same day; the user approved D86-D91 (§6) as recommended. L0 done
-> 2026-11-10 (§4 "L0 results": the bow carries hold `B`, D92; D91's speeds proposed again); L1 next. Scope:
+> 2026-11-10 (§4 "L0 results": the bow carries hold `B`, D92; D91 revised and agreed); L1 next. Scope:
 > the player's locomotion played from the Essential Animation packs' clips through a state machine of our own, built up
 > one feature at a time as the content and the need arrive, with Game Animation Sample's motion matching kept selectable
 > beside it for comparison. The user's words: GASP is "a difficult system to tune for reliable smooth character behavior
@@ -247,18 +247,18 @@ comparison's baseline.) The new graph's target from §7: near `ABP_VoxelCharacte
 The packs' turns in place carry their whole turn in the root (90 and 180 degrees exactly, no travel, 1.33 s), so
 TurnInPlace can unwind `RootYawOffset` from the clip's root yaw as §3.1 plans.
 
-**What it changes (proposals for the user, not decisions).**
+**What it changes.** D91's revision and the speeds on the clip set are agreed (2026-11-10); the rest are proposals.
 
 - D91 as written would slow the player a lot: following the clips, the run (the jog loops) is about 300 uu/s against
   today's 500, the walk 92 against 200, and the sprint either 378-446 (`Run_01`, slower than today's run) or 920
-  (`Run_02`). The packs' author plays the sword jog at 1.63 in his own demo. Proposed: D91 becomes "the gait table
-  retuned around the clips within a play-rate band" (for example walk 120, run 400, sprint 700: the walk at 1.3, the jog
-  at 1.33, the sprint between `Run_01` at 1.6 and `Run_02` at 0.76 by a blend on speed), stride warping taking part of
-  the gap, judged on the lane in L2. The user picks the speeds.
+  (`Run_02`). The packs' author plays the sword jog at 1.63 in his own demo. **Agreed** (the user, 2026-11-10: "I agree with your
+  recommendation on D91"): D91 becomes "the gait table retuned around the clips within a play-rate band", starting at
+  walk 120, run 400, sprint 700 (the walk at 1.3, the jog at 1.33, the sprint between `Run_01` at 1.6 and `Run_02` at
+  0.76 by a blend on speed), stride warping taking part of the gap, tuned on the lane in L2.
 - Unarmed's template loops are authored at 300 and 600, the packs' at 92 and 300: one gait table cannot fit both at a
   play rate of 1. Either the table's speeds are per action set (a row set per clip set, `UVCLocomotionClipSet` naming
-  its speeds), or Unarmed plays its walk at about 0.4 at a shared walk speed. Proposed: speeds on the clip set (L1), the
-  gait table's caps from the held set.
+  its speeds), or Unarmed plays its walk at about 0.4 at a shared walk speed. Agreed with D91: speeds on the clip set
+  (L1), the gait table's caps from the held set.
 - Root motion is in every pack clip, so distance matching for starts and stops is possible (a `Distance` curve on
   copies, L2 or the backlog); until then the starts and stops play by time, as §2 plans.
 - `C` has no jog or run, so it is the walk while drawn, not a carry (D92): the drawn bow walks side-on in `C`'s six
@@ -310,7 +310,7 @@ arrow on `hand_r` in the bow's carry; distance matching (if root motion); pivots
 | D88 | A clip family a set lacks | Degrade, never block (§3.3); Unarmed on the template loops until its pack | Wait for the content before a set moves to the new graph |
 | D89 | Where the choice lives | C++ on `UVCLocomotionAnimInstance` (pure, tested, gravity frame); the tunables as properties with cvar overrides | Blueprint thread-safe functions in the graph |
 | D90 | How the graph is made | By script into the content pack, its numbers in data so a rebuild keeps them | A tracked asset edited by hand (as `ABP_VoxelCharacter`) |
-| D91 | The gait speeds | Follow the packs' clips (L0 measures the walk, jog and run loops), the gait table retuned once; motion matching unaffected | Keep GASP's speeds and stretch the packs' clips by play rate |
+| D91 | The gait speeds | Revised after L0 (agreed 2026-11-10): the gait table retuned around the packs' clips within a play-rate band (starting at walk 120, run 400, sprint 700, about 1.3 on the walk and jog), stride warping taking part of the gap, the speeds on each clip set (the template Unarmed's are twice the packs'), tuned on the lane in L2; motion matching unaffected. As first agreed: follow the clips at a play rate of 1 (a 300 uu/s run) | Keep GASP's speeds and stretch the packs' clips by play rate |
 | D92 | The bow's carry under the new graph (the user after L0, 2026-11-10: "B, both hands") | Hold `B`: the bow flat across the front of the hips, both hands on the bow and the nocked arrow; its clips for every family the pack has. `C` (side-on, walk only) is the walk while aiming, `A` (the right hand free) the carry with no arrow, both proposed for later | Only `A` (today's stance) |
 
 ## 7. Risks
