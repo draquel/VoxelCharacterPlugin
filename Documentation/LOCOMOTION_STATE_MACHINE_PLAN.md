@@ -1,7 +1,7 @@
 # Locomotion State Machine Plan: the player's locomotion from the animation packs
 
-> **Agreed 2026-11-10.** Proposed and revised the same day; the user approved D86-D91 (§6) as recommended. L0 is next;
-> nothing is built. Scope:
+> **Agreed 2026-11-10.** Proposed and revised the same day; the user approved D86-D91 (§6) as recommended. L0 done
+> 2026-11-10 (§4 "L0 results": the bow carries hold `B`, D92; D91's speeds proposed again); L1 next. Scope:
 > the player's locomotion played from the Essential Animation packs' clips through a state machine of our own, built up
 > one feature at a time as the content and the need arrive, with Game Animation Sample's motion matching kept selectable
 > beside it for comparison. The user's words: GASP is "a difficult system to tune for reliable smooth character behavior
@@ -46,7 +46,7 @@ G171) was never seen with the pack's own legs and pelvis under it, and with the 
 hand (our arrow shows only while drawn) and the pack's skeletal bow on a `weapon_l` bone our skeletons lack. That is
 the likeliest reason the pack's carry, held in front with bow and arrow together, read as a stiff chest carry in play.
 
-Curves: none on the pack clip sampled (a sword jog stop). Root motion: not readable from disk (L0). The packs and GASP's
+Curves: none on any pack clip; root motion: in the root bone of every locomotion clip (both read in L0, §4). The packs and GASP's
 folder are junctions shared by every checkout and never edited: a curve or a sync marker has to go on a copy.
 
 ### 1.3 What GASP still provides besides the locomotion
@@ -149,6 +149,119 @@ state machine can be put into a graph by node-text import. The motion matching b
 on the low-poly body and on Kellan, three runs each (the slide per leg and gait, `vox.Stop`), the CSV profiler's
 animation cost.
 
+#### L0 results (2026-11-10)
+
+Read in the editor on `claude/locomotion-l0`; nothing in the packs changed (the scripts are read only; the scratch
+content under `/Game/L0Scratch` was deleted after).
+
+**1. The bow's holds.** Every pack clip animates the skeleton's `bow`, `bow_string`, `arrow_bow_string` and
+`arrow_hand_r` bones, so the authored carry is a bow with an arrow nocked on its string. Placed by those bones on the
+pack's own mannequin (the sheet shown to the user on 2026-11-10; the pack's demo places its bow the same way, its `bow` bone at
+(31, 9, 75) cm in its idle against (31, 9, 77) read from the clip, and hides its arrow until a draw):
+
+| Hold | The carry | The right hand | Locomotion |
+|---|---|---|---|
+| `A` (the Bow set's today, `setup_character_layers.py`; the demo's default) | The bow flat and low in the left hand at the hip, string up, the arrow nocked | Free: 60 cm from the nock at the idle, 67 at the walk, swinging | Walk and jog start, loop, stop in six directions, run, crouch |
+| `B` | The bow flat across the front of the hips, string up, the arrow nocked | On the nock: 14 cm from it at the idle, the walk and the jog | As `A` |
+| `C` | As `B`, the body turned about 90 degrees from the travel (a sideways stance) | On the nock, 14 cm | Walk only (start, loop, stop in FL, FR, L, R, BL, BR), the slow crouch walk; no jog, run or crouch walk |
+
+"The bow and the arrow together in front of the character" reads as `B` (or `C`, sideways): both hands meet on the bow
+and the nocked arrow in front. `A` carries them together only in the sense that the arrow sits on the bow; the right
+arm swings free. **The user chose `B`** (2026-11-10, "B, both hands"; D92): the Bow clip set plays `B`'s idle, walk,
+jog, run, starts, stops and turns; `B`'s crouch is the crouch. `C` reads as the walk while aiming (the user: "sounds
+like C is for walking while aiming"): side-on to the travel as an archer stands to shoot, walk only, its own `Aim_C`,
+`Draw_C` and `Release_C`. Proposed for when the drawn bow moves (L3 or the backlog): while drawn the legs play `C`'s
+walk by direction, which is the lane's "strafe +Y, bow drawn" leg. `A` stays for the backlog's holds as states.
+
+**2. Per set.** Measured from the clips' bones: the root bone's displacement over the clip, and
+the planted ball's speed against the root, which agree within a few uu/s.
+
+| Set | Root motion | Walk loop | Jog loop | Run | Starts / stops (root distance) | Sync markers, curves |
+|---|---|---|---|---|---|---|
+| Bow (`A`, `B`; `C` walk) | In the root bone, every locomotion clip; `bEnableRootMotion` off except six landings | 91.5 uu/s, every direction | 302 uu/s, every direction (`A`, `B`) | `Run_01` 446, `Run_02` 920 (a sprint), run stop 218 uu | walk start 58 uu / 0.6 s, walk stop 30 / 0.83, jog start 115 / 0.5, jog stop 50 / 1.17 | none, none |
+| SwordShield (`SSH`) | As the bow (landings flagged) | 92.3 | 306 | `Run_01`, `_03` 378, `Run_02` 920, run stop 218 uu | jog start 67 / 0.5, jog stop 30 / 1.17; no walk start or stop | none, none |
+| TwoHand (`2H`) | As `SSH` | 92.3 | 306 | as `SSH` | as `SSH` | none, none |
+| Unarmed (template) | In the root, flag on | 300, every direction | 600, every direction | none | none | `L`/`R` foot markers on every loop; no curves |
+| Bow crouch | In the root | slow crouch walk 114, crouch walk 302 | | | crouch walk start 58 / 0.6, stop 59 / 0.83 | none |
+
+The pack's own demo blend spaces play these faster than authored: the bow's walk at 112.5 (1.23) and jog at 300; the
+sword sets' walk at 100, jog at 500 (1.63) and `Run_01` at 800 (2.1). Every directional loop of a set has one speed,
+the strafes and backs included. Every clip is free of curves, so distance matching needs a `Distance` curve made on a
+copy (the root motion is there to make it from) and sync groups need markers on copies too (the template's loops have
+them).
+
+**3. A state machine by script: yes.** `UVCAnimAuthoringLibrary::ExportGraphNodes` / `ImportGraphNodes` (the editor's
+copy and paste) carry a whole state machine: `ABP_VoxelCharacter`'s `Locomotion` (8 states, 23 transitions, their
+state and rule graphs) pasted into a throwaway ABP on the same skeleton, wired to the output pose by `ConnectPins`, and
+compiled clean. Text rewritten before the paste imports too (a blend space path swapped for the bow's). States paste
+into an existing state machine's graph, alone (`Land` arrived as `Land_1`) or with their transitions (`Fall_1 to
+Land_2`); a name that clashes is made unique, and a transition whose ends are left behind arrives dangling and still
+compiles, so the script must check what arrived. Renaming a state by editing the text broke the state (only its
+transition arrived): names come from the paste or a helper. So D90's script can keep a template state machine as text
+and paste it, or paste states one by one; a `RenameState` (and perhaps `AddTransition`) helper is the one gap.
+
+**4. The motion matching baseline** (`CharacterTest`, the bow in hand, `vc.Move.Preset Tuned`, the weather locked
+clear, the wind off, the editor's background throttle off; `Scripts/qa/lane_pass.py`, three runs; `Saved/QA/lane/l0_mm_*`):
+
+The foot slide per leg in uu/s, the mean of three runs (the range in brackets); relative, as C0's measure counts the
+swing's low pass too, so compare graphs, not against zero:
+
+| Leg | Low-poly body | Kellan |
+|---|---|---|
+| run-up +X | 124 (117-136) | 168 (164-174) |
+| pivot 90 to +Y | 145 (143-146) | 121 (116-129) |
+| pivot 90 back to +X | 141 (134-149) | 68 (55-77) |
+| pivot 180 to -X | 151 (148-158) | 137 (135-139) |
+| pivot 180 back to +X | 76 (74-81) | 184 (180-191) |
+| strafe +Y, bow drawn | 87 (86-87) | 179 (174-184) |
+| released, -Y | 104 (104-104) | 195 (167-248) |
+| straight +X | 134 (133-135) | 138 (95-218) |
+| whole lane, walk gait | 83 (79-91) | 133 (130-135) |
+| whole lane, run gait | 136 (134-138) | 166 (162-172) |
+| `vox.Stop` from 500 uu/s | 0.27 s, 67 uu, every run | 0.27 s, 67 uu, every run |
+
+Close to C4's pass with `Tuned` (150 and 160 over the whole lane's run): the low-poly body is steady between runs,
+Kellan's release and last straight vary as much as C4 saw. The stop is the movement's (GASP's 2000 uu/s^2 braking),
+the same on both bodies; the new graph's stops (L2) are judged against these 67 uu.
+
+The CSV profiler over one lane (one player, in-editor PIE, about 840 frames each, the bow in hand, `CsvProfile` around `vox.Lane`, `vc.Anim.MotionMatching 1` then 0),
+in ms a frame, mean (p95):
+
+| | Game thread, `Animation` | Workers, animation evaluation | Game thread, whole frame |
+|---|---|---|---|
+| Low-poly, motion matching | 0.28 (0.37) | 0.97 (1.31) | 9.8 |
+| Low-poly, `ABP_VoxelCharacter` | 0.14 (0.17) | 0.40 (0.56) | 9.0 |
+| Kellan, motion matching | 0.55 (0.78) | 4.20 (5.44), three tasks | 13.6 |
+| Kellan, `ABP_VoxelCharacter` | 0.36 (0.51) | 3.38 (4.16), three tasks | 12.3 |
+
+Motion matching costs about 0.15-0.2 ms of game thread and 0.6-0.8 ms of worker over the Blueprint's graph on either
+body; Kellan's evaluation is mostly his MetaHuman parts (three tasks), whatever the locomotion. (The figures in
+`CHARACTER_SYSTEM.md`, 0.50 / 1.39 against 0.22 / 0.33, were a running player, not a lane; this lane is the L3
+comparison's baseline.) The new graph's target from §7: near `ABP_VoxelCharacter`'s plus warping.
+
+The packs' turns in place carry their whole turn in the root (90 and 180 degrees exactly, no travel, 1.33 s), so
+TurnInPlace can unwind `RootYawOffset` from the clip's root yaw as §3.1 plans.
+
+**What it changes (proposals for the user, not decisions).**
+
+- D91 as written would slow the player a lot: following the clips, the run (the jog loops) is about 300 uu/s against
+  today's 500, the walk 92 against 200, and the sprint either 378-446 (`Run_01`, slower than today's run) or 920
+  (`Run_02`). The packs' author plays the sword jog at 1.63 in his own demo. Proposed: D91 becomes "the gait table
+  retuned around the clips within a play-rate band" (for example walk 120, run 400, sprint 700: the walk at 1.3, the jog
+  at 1.33, the sprint between `Run_01` at 1.6 and `Run_02` at 0.76 by a blend on speed), stride warping taking part of
+  the gap, judged on the lane in L2. The user picks the speeds.
+- Unarmed's template loops are authored at 300 and 600, the packs' at 92 and 300: one gait table cannot fit both at a
+  play rate of 1. Either the table's speeds are per action set (a row set per clip set, `UVCLocomotionClipSet` naming
+  its speeds), or Unarmed plays its walk at about 0.4 at a shared walk speed. Proposed: speeds on the clip set (L1), the
+  gait table's caps from the held set.
+- Root motion is in every pack clip, so distance matching for starts and stops is possible (a `Distance` curve on
+  copies, L2 or the backlog); until then the starts and stops play by time, as §2 plans.
+- `C` has no jog or run, so it is the walk while drawn, not a carry (D92): the drawn bow walks side-on in `C`'s six
+  directions, and a run while drawn falls back to `B`'s jog under the aim layer (§3.3's rules).
+- The pack's arrow: its carry includes a nocked arrow (the bones), which the demo hides until a draw. A nocked arrow on
+  `arrow_hand_r` in the carry (§5) is a visual choice; our skeletons lack the bow bones, so it would be placed on
+  `hand_r` by an offset per hold.
+
 ### L1: The mechanism (M)
 
 `UVCLocomotionAnimInstance`, `UVCLocomotionClipSet` and its place on `UVCActionAnimSet`, the switch (§3.5), the script
@@ -180,7 +293,7 @@ the new graph is recorded as a follow-up.
 Each is a later piece of work on the same graph, taken when the content or the need arrives: the unarmed pack's clip
 set (and Unarmed's turns, starts, stops, crouch); the two-handed pack's, if it differs from the sword pack's `2H`; a
 staff set (`Equipment.AnimSet.Staff`, its pack's clip set, an item tagged); the bow's holds as states (`A`/`B`/`C` and
-the pack's transitions, e.g. lowered while exploring, ready in combat); the SSH guard variants while blocking; a nocked
+the pack's transitions, e.g. lowered while exploring, ready in combat; `C`'s walk while drawn, D92); the SSH guard variants while blocking; a nocked
 arrow on `hand_r` in the bow's carry; distance matching (if root motion); pivots; idle breaks; NPCs on the graph.
 
 ## 6. Decisions (agreed 2026-11-10, each as recommended)
@@ -193,6 +306,7 @@ arrow on `hand_r` in the bow's carry; distance matching (if root motion); pivots
 | D89 | Where the choice lives | C++ on `UVCLocomotionAnimInstance` (pure, tested, gravity frame); the tunables as properties with cvar overrides | Blueprint thread-safe functions in the graph |
 | D90 | How the graph is made | By script into the content pack, its numbers in data so a rebuild keeps them | A tracked asset edited by hand (as `ABP_VoxelCharacter`) |
 | D91 | The gait speeds | Follow the packs' clips (L0 measures the walk, jog and run loops), the gait table retuned once; motion matching unaffected | Keep GASP's speeds and stretch the packs' clips by play rate |
+| D92 | The bow's carry under the new graph (the user after L0, 2026-11-10: "B, both hands") | Hold `B`: the bow flat across the front of the hips, both hands on the bow and the nocked arrow; its clips for every family the pack has. `C` (side-on, walk only) is the walk while aiming, proposed for later | `A` (today's stance, the right arm free) |
 
 ## 7. Risks
 
