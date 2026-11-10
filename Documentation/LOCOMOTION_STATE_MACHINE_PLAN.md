@@ -171,7 +171,12 @@ arm swings free. **The user chose `B`** (2026-11-10, "B, both hands"; D92): the 
 jog, run, starts, stops and turns; `B`'s crouch is the crouch. `C` reads as the walk while aiming (the user: "sounds
 like C is for walking while aiming"): side-on to the travel as an archer stands to shoot, walk only, its own `Aim_C`,
 `Draw_C` and `Release_C`. Proposed for when the drawn bow moves (L3 or the backlog): while drawn the legs play `C`'s
-walk by direction, which is the lane's "strafe +Y, bow drawn" leg. `A` stays for the backlog's holds as states.
+walk by direction, which is the lane's "strafe +Y, bow drawn" leg. `A` reads as the carry with no arrow nocked (the
+user: "if you dont have an arrow notched (maybe out of ammo in game mechanics)"): its right hand is free, so nothing
+holds an arrow, and the clips park the arrow bones on the string in every hold, so the bones do not say otherwise.
+Proposed (L1 or the backlog): the Bow clip set plays `A` while the character carries no arrows and `B` otherwise, the
+switch through the pack's `Idle_A-to-B` / `Idle_B-to-A` (crouched too) at a stand and an inertialized blend on the move;
+the nocked-arrow visual (§5) shows in `B` only.
 
 **2. Per set.** Measured from the clips' bones: the root bone's displacement over the clip, and
 the planted ball's speed against the root, which agree within a few uu/s.
@@ -293,7 +298,7 @@ the new graph is recorded as a follow-up.
 Each is a later piece of work on the same graph, taken when the content or the need arrives: the unarmed pack's clip
 set (and Unarmed's turns, starts, stops, crouch); the two-handed pack's, if it differs from the sword pack's `2H`; a
 staff set (`Equipment.AnimSet.Staff`, its pack's clip set, an item tagged); the bow's holds as states (`A`/`B`/`C` and
-the pack's transitions, e.g. lowered while exploring, ready in combat; `C`'s walk while drawn, D92); the SSH guard variants while blocking; a nocked
+the pack's transitions: `A` with no arrows, `B` with them, `C`'s walk while drawn, D92); the SSH guard variants while blocking; a nocked
 arrow on `hand_r` in the bow's carry; distance matching (if root motion); pivots; idle breaks; NPCs on the graph.
 
 ## 6. Decisions (agreed 2026-11-10, each as recommended)
@@ -306,7 +311,7 @@ arrow on `hand_r` in the bow's carry; distance matching (if root motion); pivots
 | D89 | Where the choice lives | C++ on `UVCLocomotionAnimInstance` (pure, tested, gravity frame); the tunables as properties with cvar overrides | Blueprint thread-safe functions in the graph |
 | D90 | How the graph is made | By script into the content pack, its numbers in data so a rebuild keeps them | A tracked asset edited by hand (as `ABP_VoxelCharacter`) |
 | D91 | The gait speeds | Follow the packs' clips (L0 measures the walk, jog and run loops), the gait table retuned once; motion matching unaffected | Keep GASP's speeds and stretch the packs' clips by play rate |
-| D92 | The bow's carry under the new graph (the user after L0, 2026-11-10: "B, both hands") | Hold `B`: the bow flat across the front of the hips, both hands on the bow and the nocked arrow; its clips for every family the pack has. `C` (side-on, walk only) is the walk while aiming, proposed for later | `A` (today's stance, the right arm free) |
+| D92 | The bow's carry under the new graph (the user after L0, 2026-11-10: "B, both hands") | Hold `B`: the bow flat across the front of the hips, both hands on the bow and the nocked arrow; its clips for every family the pack has. `C` (side-on, walk only) is the walk while aiming, `A` (the right hand free) the carry with no arrow, both proposed for later | Only `A` (today's stance) |
 
 ## 7. Risks
 
