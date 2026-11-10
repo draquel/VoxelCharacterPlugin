@@ -194,6 +194,10 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 	// a fill at a million texels tens of milliseconds.
 	const bool bResPow2 = FMath::IsPowerOfTwo(Res);
 	const int32 ResShift = bResPow2 ? static_cast<int32>(FMath::FloorLog2(static_cast<uint32>(Res))) : 0;
+	// The fog of war from the explored mask (MAP_PYRAMID_PLAN.md P2): a pixel at the view's level covers 2^FogShift level-0
+	// tiles a side, explored where any of them is (one cached lookup; G170's rebuild over every explored key is gone).
+	const int32 FogShift = FMath::Max(0, ViewLevel - static_cast<int32>(FMath::FloorLog2(static_cast<uint32>(Res))));
+	FVoxelMapExploredMask::FReader Explored(Map.GetExploredMask());
 	Step = FMath::Clamp(Step, 1, TexSize);
 	const int32 Points = (TexSize + Step - 1) / Step + 1;
 
@@ -218,10 +222,10 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 		}
 	}
 
-	// The level-0 tile the last texel fell in (its exploration), and the view's tile it read with the image it drew from:
-	// the tile's own at the view's level, or the nearest coarser one stored over it (cached across texels: texels in a run
+	// The fog cell the last texel fell in (its exploration), and the view's tile it read with the image it drew from: the
+	// tile's own at the view's level, or the nearest coarser one stored over it (cached across texels: texels in a run
 	// share tiles).
-	FIntPoint CachedTile0(MIN_int32, MIN_int32);
+	FIntVector CachedFogCell(MIN_int32, MIN_int32, MIN_int32);
 	bool bCachedExplored = false;
 	FIntPoint CachedViewTile(MIN_int32, MIN_int32);
 	const FVoxelMapTile* CachedImage = nullptr;
@@ -254,34 +258,19 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 			}
 		}
 	};
-	// Zoomed out: the globe albedo (WM-BP11), when it is there.
-	const FVoxelMapGlobeAlbedo* Albedo = bUseGlobeAlbedo ? Map.GetGlobeAlbedo() : nullptr;
-	const int32 AlbedoN = Albedo ? Albedo->Grid.GetCellsPerEdge() : 0;
 	auto Shade = [&](int32 X, int32 Y, int32 Face, const FVector2D& UV)
 	{
-		if (Albedo)
-		{
-			const int32 AU = FMath::Clamp(FMath::FloorToInt32((UV.X + 1.0) * 0.5 * AlbedoN), 0, AlbedoN - 1);
-			const int32 AV = FMath::Clamp(FMath::FloorToInt32((UV.Y + 1.0) * 0.5 * AlbedoN), 0, AlbedoN - 1);
-			const FIntPoint Cell = Albedo->Grid.ToAtlas(Face, AU, AV);
-			if (bRequireExplored && !Map.IsGlobeCellExplored(Cell))
-			{
-				Write(X, Y, Unexplored);
-				return;
-			}
-			Write(X, Y, Albedo->At(Cell));
-			++Drawn;
-			return;
-		}
 		// The texel's level-0 pixel along its face. UV >= -1, so the products are not negative (but by rounding, which the
 		// clamps take): truncation is the floor, without the library call (G64: this runs for every texel of the minimap).
 		const int32 PU = FMath::Clamp(static_cast<int32>((UV.X + 1.0) * PixelsPerUV), 0, FacePixels - 1);
 		const int32 PV = FMath::Clamp(static_cast<int32>((UV.Y + 1.0) * PixelsPerUV), 0, FacePixels - 1);
-		const FIntPoint Tile0 = bResPow2 ? Grid.ToAtlas(Face, PU >> ResShift, PV >> ResShift) : Grid.ToAtlas(Face, PU / Res, PV / Res);
-		if (Tile0 != CachedTile0)
+		const int32 U0 = bResPow2 ? PU >> ResShift : PU / Res;
+		const int32 V0 = bResPow2 ? PV >> ResShift : PV / Res;
+		const FIntVector FogCell(Face, U0 >> FogShift, V0 >> FogShift);
+		if (FogCell != CachedFogCell)
 		{
-			CachedTile0 = Tile0;
-			bCachedExplored = !bRequireExplored || Map.IsTileExplored(Tile0);
+			CachedFogCell = FogCell;
+			bCachedExplored = !bRequireExplored || Explored.IsAnyExplored(Face, U0, V0, FogShift);
 		}
 		if (!bCachedExplored)
 		{
@@ -419,9 +408,12 @@ int32 FVCPlaneMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 Te
 			: (WorldMinY + (I + 1) * WorldPerPixel - Inside - GridOrigin.Y) / TileSize);
 	}
 
-	// The level-0 tile the last texel fell in (its exploration), and the view's tile it read with the image it drew from:
-	// the tile's own at the view's level, or the nearest coarser one stored over it.
-	FIntPoint CachedTile0(MIN_int32, MIN_int32);
+	// The fog cell the last texel fell in (its exploration: a pixel at the view's level covers 2^FogShift level-0 tiles a
+	// side, explored where any of them is, read from the explored mask, MAP_PYRAMID_PLAN.md P2), and the view's tile it
+	// read with the image it drew from: the tile's own at the view's level, or the nearest coarser one stored over it.
+	const int32 FogShift = FMath::Max(0, ViewLevel - static_cast<int32>(FMath::FloorLog2(static_cast<uint32>(Res))));
+	FVoxelMapExploredMask::FReader Explored(Map.GetExploredMask());
+	FIntPoint CachedFogCell(MIN_int32, MIN_int32);
 	bool bCachedExplored = false;
 	FIntPoint CachedViewTile(MIN_int32, MIN_int32);
 	const FVoxelMapTile* CachedImage = nullptr;
@@ -456,11 +448,11 @@ int32 FVCPlaneMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 Te
 			// North up the texel's column runs along world Y and its row along world X.
 			const FAxis& AlongX = bNorthUp ? Rows[Y] : Columns[X];
 			const FAxis& AlongY = bNorthUp ? Columns[X] : Rows[Y];
-			const FIntPoint Tile0(AlongX.Tile0, AlongY.Tile0);
-			if (Tile0 != CachedTile0)
+			const FIntPoint FogCell(AlongX.Tile0 >> FogShift, AlongY.Tile0 >> FogShift);
+			if (FogCell != CachedFogCell)
 			{
-				CachedTile0 = Tile0;
-				bCachedExplored = !bRequireExplored || Map.IsTileExplored(Tile0);
+				CachedFogCell = FogCell;
+				bCachedExplored = !bRequireExplored || Explored.IsAnyExplored(0, AlongX.Tile0, AlongY.Tile0, FogShift);
 			}
 			if (!bCachedExplored)
 			{

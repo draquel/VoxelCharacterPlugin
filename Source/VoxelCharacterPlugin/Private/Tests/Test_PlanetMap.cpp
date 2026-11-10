@@ -153,10 +153,12 @@ bool FVCPlanet_MapSampler::RunTest(const FString& Parameters)
 			constexpr double Extent = 3000.0;
 			Map->RequestTilesInRadius(Player, static_cast<float>(Extent * 1.5));
 			// The level-0 images the check reads, asked for as a view (MAP_PYRAMID_PLAN.md P1: exploring draws nothing).
+			TArray<FIntPoint> ExploredTiles;
+			Map->GetExploredTiles(ExploredTiles);
 			TArray<FVoxelMapTileId> Explored;
-			for (const uint64 Key : Map->GetExploredTiles())
+			for (const FIntPoint& Tile : ExploredTiles)
 			{
-				Explored.Emplace(FIntPoint(static_cast<int32>(static_cast<uint32>(Key >> 32)), static_cast<int32>(static_cast<uint32>(Key & 0xFFFFFFFF))));
+				Explored.Emplace(Tile);
 			}
 			Map->RequestView(EVoxelMapRequester::Minimap, Explored);
 			const double Deadline = FPlatformTime::Seconds() + 60.0;
@@ -224,13 +226,15 @@ bool FVCPlanet_MapSampler::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
-// Spherical Phase 6, WM-BP11: the world map at scale, the character side (the albedo and ExploreAll are
+// Spherical Phase 6, WM-BP11: the world map at scale, the character side (the top levels and ExploreAll are
 // VoxelWorlds.Map.Planet.ZoomAtScale).
 // - The zoom range: on the small planet, M and L (tiles of a 4,800 uu chunk) the most zoomed out view shows the whole
 //   globe with a tenth to spare (MinZoom 0.25 showed it only up to R of about 5 x 10^5), the configured range kept where
 //   it already did; zoomed in to MaxZoom as before.
-// - Zoomed out the globe is drawn from the albedo: on a small planet's globe 200 px across, every texel on the disc is its
-//   albedo cell's colour where a tile in the cell is explored and the fog's elsewhere; no tile image is asked for.
+// - Zoomed out the globe is drawn from the pyramid's top levels (MAP_PYRAMID_PLAN.md P2, which retired the albedo): on a
+//   planet of R 10^6 (5.8 million tiles) seen 200 px across, the view's level is several above level 0; every texel on the
+//   disc is in the fog where the explored mask holds nothing under its pixel at that level (a square of level-0 tiles), and
+//   every explored texel is drawn, from the prefetched top levels while the view's own tiles are not drawn.
 // ---------------------------------------------------------------------------
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCPlanet_MapZoomAtScale, "VoxelCharacter.Planet.MapZoomAtScale", VC_PLANET_MAP_FLAGS)
 bool FVCPlanet_MapZoomAtScale::RunTest(const FString& Parameters)
@@ -249,76 +253,72 @@ bool FVCPlanet_MapZoomAtScale::RunTest(const FString& Parameters)
 		TestTrue(*FString::Printf(TEXT("R %.0f: the configured MinZoom kept when it shows the globe"), Radius), Low <= 0.25f && (Radius > 5.0e5 || Low == 0.25f));
 	}
 
-	// The sampler on the albedo.
+	// The globe zoomed out from the top levels (MAP_PYRAMID_PLAN.md P2: they replace the albedo), on a planet of R 10^6.
 	VoxelTesting::FTestChunkWorld W;
 	W.Create(TEXT("VCPlanetMapZoomAtScale"));
-	W.ConfigureSmallPlanet();
+	W.ConfigureSmallPlanet(1.0e6f);
 	W.StartManager();
 	UVoxelMapSubsystem* Map = W.World->GetSubsystem<UVoxelMapSubsystem>();
 	if (TestNotNull(TEXT("The game world has a map"), Map))
 	{
-		const FVoxelMapGlobeAlbedo* Albedo = Map->GetGlobeAlbedo();
-		const double Deadline = FPlatformTime::Seconds() + 60.0;
-		while (!Albedo && FPlatformTime::Seconds() < Deadline)
+		const FVector Site = FVector(0.3, 0.2, 1.0).GetSafeNormal();
+		Map->RequestTilesInRadius(W.Config->WorldOrigin + Site * (W.Config->WorldRadius + 200.0), 150000.0f);
+		// The top levels the map prefetched when it resolved the world.
+		const double Deadline = FPlatformTime::Seconds() + 120.0;
+		while (!Map->GetDebugStats().Contains(TEXT("waiting=0 drawing=0")) && FPlatformTime::Seconds() < Deadline)
 		{
 			FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
-			FPlatformProcess::Sleep(0.01f);
-			Albedo = Map->GetGlobeAlbedo();
+			FPlatformProcess::Sleep(0.005f);
 		}
-		if (TestNotNull(TEXT("The albedo builds"), Albedo))
+		TestTrue(TEXT("The top levels drew"), Map->GetPrefetchLevel() >= 0 && Map->GetDebugStats().Contains(TEXT("waiting=0 drawing=0")));
+
+		// The globe 200 px across: a texel is R / 100, so the view's level is several above level 0 and the fog of a texel
+		// is a square of level-0 tiles.
+		constexpr int32 TexSize = 256;
+		const FVCGlobeProjection Globe = FVCGlobeProjection::Make(Site, 100.0);
+		TArray<uint8> Texels;
+		Texels.SetNumZeroed(TexSize * TexSize * 4);
+		FVCPlanetMapSampler Sampler;
+		Sampler.Level = Map->LevelForTexel(W.Config->WorldRadius / Globe.RadiusPx);
+		const int32 FogShift = FMath::Max(0, Sampler.Level - static_cast<int32>(FMath::FloorLog2(static_cast<uint32>(Map->GetTileResolution()))));
+		const double Half = 0.5 * TexSize;
+		auto TexelDirection = [&Globe, Half](double X, double Y, FVector& OutDirection)
 		{
-			const FVector Site = FVector(0.3, 0.2, 1.0).GetSafeNormal();
-			Map->RequestTilesInRadius(W.Config->WorldOrigin + Site * (W.Config->WorldRadius + 200.0), 4000.0f);
-			// Tile images waiting or drawing (the map's debug line).
-			auto Pending = [Map]()
+			return Globe.ScreenToDirection(FVector2D(X - Half, Y - Half), OutDirection);
+		};
+		const int32 Drawn = Sampler.Fill(*Map, Texels.GetData(), TexSize, 16, TexelDirection);
+		const FVoxelMapExploredMask& Mask = Map->GetExploredMask();
+		int32 OnDisc = 0, Explored = 0, Fog = 0, FogWrong = 0, Undrawn = 0, ExploredByTile = 0;
+		for (int32 Y = 0; Y < TexSize; ++Y)
+		{
+			for (int32 X = 0; X < TexSize; ++X)
 			{
-				const FString Stats = Map->GetDebugStats();
-				int32 Waiting = 0, Drawing = 0;
-				FParse::Value(*Stats, TEXT("waiting="), Waiting);
-				FParse::Value(*Stats, TEXT("drawing="), Drawing);
-				return Waiting + Drawing;
-			};
-			const int32 QueuedBefore = Pending();
-			constexpr int32 TexSize = 256;
-			const FVCGlobeProjection Globe = FVCGlobeProjection::Make(Site, 100.0);
-			TArray<uint8> Texels;
-			Texels.SetNumZeroed(TexSize * TexSize * 4);
-			FVCPlanetMapSampler Sampler;
-			Sampler.bUseGlobeAlbedo = true;
-			const double Half = 0.5 * TexSize;
-			auto TexelDirection = [&Globe, Half](double X, double Y, FVector& OutDirection)
-			{
-				return Globe.ScreenToDirection(FVector2D(X - Half, Y - Half), OutDirection);
-			};
-			const int32 Drawn = Sampler.Fill(*Map, Texels.GetData(), TexSize, 16, TexelDirection);
-			int32 OnDisc = 0, Exact = 0, Fog = 0, Wrong = 0;
-			for (int32 Y = 0; Y < TexSize; ++Y)
-			{
-				for (int32 X = 0; X < TexSize; ++X)
+				FVector Direction;
+				if (!TexelDirection(X + 0.5, Y + 0.5, Direction))
 				{
-					FVector Direction;
-					if (!TexelDirection(X + 0.5, Y + 0.5, Direction))
-					{
-						continue;
-					}
-					++OnDisc;
-					const FIntPoint Cell = Albedo->Grid.CellOfDirection(Direction);
-					const uint8* Got = Texels.GetData() + (Y * TexSize + X) * 4;
-					const FColor Expected = Map->IsGlobeCellExplored(Cell) ? Albedo->At(Cell) : Sampler.Unexplored;
-					const bool bMatch = Got[0] == Expected.B && Got[1] == Expected.G && Got[2] == Expected.R;
-					Exact += bMatch ? 1 : 0;
-					Fog += Map->IsGlobeCellExplored(Cell) ? 0 : 1;
-					Wrong += (!bMatch && Map->IsGlobeCellExplored(Cell)) ? 1 : 0;
+					continue;
 				}
+				++OnDisc;
+				FIntPoint Tile;
+				int32 PX = 0, PY = 0, Face = 0, U = 0, V = 0;
+				Map->PlanetDirectionToTilePixel(Direction, Tile, PX, PY);
+				Map->TileToMaskTile(Tile, Face, U, V);
+				const bool bExpected = Mask.IsAnyExplored(Face, U, V, FogShift);
+				const uint8* Got = Texels.GetData() + (Y * TexSize + X) * 4;
+				const bool bFog = Got[0] == Sampler.Unexplored.B && Got[1] == Sampler.Unexplored.G && Got[2] == Sampler.Unexplored.R;
+				Explored += bExpected ? 1 : 0;
+				ExploredByTile += Map->IsTileExplored(Tile) ? 1 : 0;
+				Fog += bFog ? 1 : 0;
+				FogWrong += bFog == bExpected ? 1 : 0;
+				Undrawn += (Got[0] == Sampler.Undrawn.B && Got[1] == Sampler.Undrawn.G && Got[2] == Sampler.Undrawn.R) ? 1 : 0;
 			}
-			const int32 QueuedAfter = Pending();
-			AddInfo(FString::Printf(TEXT("The globe 200 px across: %d texels on the disc, %d drawn from the albedo, %d exact (%d in the fog, %d explored texels off); tile requests %d -> %d"),
-				OnDisc, Drawn, Exact, Fog, Wrong, QueuedBefore, QueuedAfter));
-			TestTrue(TEXT("Some texels drawn from the albedo"), Drawn > 0);
-			TestTrue(TEXT("The rest in the fog"), Fog > 0 && Drawn + Fog >= OnDisc * 98 / 100);
-			TestTrue(TEXT("At least 98% of the texels exact (cell boundaries may round either way)"), Exact >= OnDisc * 98 / 100);
-			TestTrue(TEXT("No tile image asked for"), QueuedAfter <= QueuedBefore);
 		}
+		AddInfo(FString::Printf(TEXT("The globe 200 px across at level %d (the fog over squares of 2^%d tiles; the top from level %d): %d texels on the disc, %d explored (%d by their own tile), %d drawn, %d in the fog (%d off the mask), %d undrawn"),
+			Sampler.Level, FogShift, Map->GetPrefetchLevel(), OnDisc, Explored, ExploredByTile, Drawn, Fog, FogWrong, Undrawn));
+		TestTrue(TEXT("The view's level is above level 0 (the fog over squares)"), FogShift > 0);
+		TestTrue(TEXT("Some texels explored, the rest in the fog"), Explored > 0 && Fog > 0);
+		TestTrue(TEXT("The fog is the mask's at the view's level (98%: control points round either way)"), FogWrong <= OnDisc / 50);
+		TestTrue(TEXT("Every explored texel is drawn, from the top levels while the view's tiles are not drawn"), Undrawn == 0 && Drawn == OnDisc - Fog);
 	}
 	W.Stop();
 	return true;

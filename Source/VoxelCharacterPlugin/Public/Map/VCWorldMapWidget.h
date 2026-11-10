@@ -140,9 +140,6 @@ public:
 	 */
 	static void GetPlanetZoomRange(double PlanetRadius, double TileWorldSize, float InMinZoom, float InMaxZoom, float& OutMinZoom, float& OutMaxZoom);
 
-	/** Zoomed out until a texel spans more tiles than 1 / this, the globe is drawn from the planet's albedo (WM-BP11). */
-	static constexpr double GlobeAlbedoTexelsPerTile = 0.5;
-
 	/**
 	 * The zoom range in force: MinZoom to MaxZoom, out to the whole globe on a planet (GetPlanetZoomRange).
 	 * @param OutMinZoom Most zoomed out
@@ -243,9 +240,8 @@ private:
 	/** Last mouse position during pan. */
 	FVector2D LastMousePos = FVector2D::ZeroVector;
 
-	/** Delegate handles for tile and globe albedo arrivals. */
+	/** Delegate handle for tile arrivals. */
 	FDelegateHandle TileReadyHandle;
-	FDelegateHandle AlbedoReadyHandle;
 
 	/** Arrivals in view, coalesced into redraws (G166). */
 	FVCMapArrivalCoalescer Arrivals;
