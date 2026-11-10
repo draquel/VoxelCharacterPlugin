@@ -1,7 +1,7 @@
 # Map UI Widgets
 
 > State as of 2026-11-09 (MAP_PYRAMID_PLAN.md P1: both maps on the tile pyramid; P2: the fog from the explored mask, the
-> globe from the top levels).
+> globe from the top levels; P3: the fills on the task graph's workers, the planet's marker caps kept, G169).
 
 **Module**: VoxelCharacterPlugin
 **Dependencies**: VoxelWorlds' `VoxelMap` module (`UVoxelMapSubsystem`, the tile data), UMG (rendering)
@@ -191,6 +191,15 @@ The rendering composes the view into a larger fixed texture (`MapTextureFixedSiz
 above. It replaces the 2 s throttle of world modes review WM-MP9 (`DefersTileRedraw`, `TileRedrawThrottleTiles`), which a
 planet's globe never applied.
 
+Both samplers fill in bands on the task graph's workers (MAP_PYRAMID_PLAN.md P3; `vc.Map.ParallelFill`, 0 for the calling
+thread): a planet's by its rows of control cells (64 bands at 1024² and 16 texels a cell), a plane's by 16 rows. The game
+thread waits in the `ParallelFor`, so the tile store and the explored mask are only read meanwhile (tiles arrive on the game
+thread); each band has its own caches, reads the store without marking its images used (`FindTile(Id, false)`: the store's
+LRU clock is game-thread state) and lists them, and the merge marks them used and joins the bands' view tiles. On the fully
+explored 50 km planet a 1024² fill at zoom 1 fell from 27.0 to 5.4 ms and its rebuild, the upload included (1.4 ms), from
+28.5 to 7.1 ms (Insights, `VCWorldMap_Rebuild`). The cost was the per-texel loop: the globe's projection and
+`DirectionToSurface` at the control points took 0.19 ms of the 27.
+
 `vc.WorldMap.Stats [reset]` logs the rebuilds since the last reset (per second, those over 2 ms, the tile arrivals and
 those deferred) and each phase's count, mean and maximum: texture fill, upload, markers, the rebuild. Insights shows the
 same phases as `VCWorldMap_*` scopes (the map scaling plan's M0, G163).
@@ -201,6 +210,14 @@ Both maps draw the markers `UVCMapMarkerRegistry` gathers around the view, at mo
 highest `Priority` first); the world map gathers them when the view changes and every `MarkerUpdateInterval` (0.5 s).
 VoxelWorldPOI's `VoxelWorlds.POI.Map.MarkerCap` checks the cap on a zoomed-out view; the POI side bounds its own
 query on a big planet (G50).
+
+On a planet the POI side places its far markers over a cap on a coarse ladder (`UPOIMapMarkerSubsystem::
+SnapPlanetMarkerCap`: the angle up to the next of a ladder a quarter octave apart, the direction to a cube-sphere cell an
+eighth of that across) and keeps the last four caps with their markers finished (G169, MAP_PYRAMID_PLAN.md P3). The
+minimap, which stays open under the world map and gathers at the player every 0.1 s, had replaced the globe's one cached
+cap, so every world map gather placed the globe's 20,000 cells again: 65.8 ms twice a second on the 50 km planet
+zoomed out (64.8 of it placement). Now each map keeps its cap, and a view dragged or zoomed less than a step keeps it
+too: 0.98 ms a gather (`VoxelWorlds.POI.Map.PlanetMarkerCapSnap`, `VoxelWorlds.POI.Planet.MapMarkersAtScale`).
 
 ### Player Marker
 

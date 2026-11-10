@@ -3,6 +3,8 @@
 #include "Map/VCMapSamplers.h"
 #include "VoxelCubeSphere.h"
 #include "VoxelMapSubsystem.h"
+#include "Async/ParallelFor.h"
+#include "HAL/IConsoleManager.h"
 
 // ==================== FVCPlanetMapFrame ====================
 
@@ -134,6 +136,16 @@ namespace
 			Span.MaxY = FMath::Max(Span.MaxY, Y);
 		}
 
+		/** Another collector's tiles and their texel boxes added to these (a band of a fill). */
+		void Merge(const FVCViewTileCollector& Other)
+		{
+			for (const FSpan& Span : Other.Spans)
+			{
+				Touch(Span.Tile, Span.MinX, Span.MinY);
+				Touch(Span.Tile, Span.MaxX, Span.MaxY);
+			}
+		}
+
 		void NearestFirst(int32 TexSize, TArray<FIntPoint>& Out) const
 		{
 			const double Centre = 0.5 * TexSize;
@@ -168,6 +180,64 @@ namespace
 		const int64 Q = A / B;
 		return (A % B != 0 && ((A < 0) != (B < 0))) ? Q - 1 : Q;
 	}
+
+	TAutoConsoleVariable<int32> CVarMapParallelFill(
+		TEXT("vc.Map.ParallelFill"),
+		1,
+		TEXT("The map textures fill in bands on the task graph's workers (1, MAP_PYRAMID_PLAN.md P3), or on the calling thread (0: A/B)."),
+		ECVF_Default);
+
+	/** Rows of a plane fill's band (a 1024^2 world map: 64 bands). */
+	constexpr int32 FillBandRows = 16;
+
+	EParallelForFlags ParallelFlags()
+	{
+		return CVarMapParallelFill.GetValueOnAnyThread() != 0 ? EParallelForFlags::None : EParallelForFlags::ForceSingleThread;
+	}
+
+	/** One band of a fill: the tiles it showed, the images it read (to mark used in the store after) and its count. */
+	struct FVCFillBand
+	{
+		FVCViewTileCollector Collector;
+		TArray<FVoxelMapTileId> Images;
+		int32 Drawn = 0;
+
+		/** An image the band read (once a run: consecutive reads of one image are one). */
+		void Used(const FVoxelMapTileId& Id)
+		{
+			if (Images.IsEmpty() || !(Images.Last() == Id))
+			{
+				Images.Add(Id);
+			}
+		}
+	};
+
+	/**
+	 * The bands' results together, on the calling thread: the images they read marked used in the store (its LRU, which the
+	 * bands only read), the tiles shown nearest the centre first, the texels drawn.
+	 */
+	int32 MergeBands(UVoxelMapSubsystem& Map, const TArray<FVCFillBand>& Bands, int32 TexSize, TArray<FIntPoint>* ViewTiles)
+	{
+		FVCViewTileCollector Collector;
+		int32 Drawn = 0;
+		for (const FVCFillBand& Band : Bands)
+		{
+			Drawn += Band.Drawn;
+			for (const FVoxelMapTileId& Id : Band.Images)
+			{
+				Map.FindTile(Id, /*bTouch*/ true);
+			}
+			if (ViewTiles)
+			{
+				Collector.Merge(Band.Collector);
+			}
+		}
+		if (ViewTiles)
+		{
+			Collector.NearestFirst(TexSize, *ViewTiles);
+		}
+		return Drawn;
+	}
 }
 
 // ==================== FVCPlanetMapSampler ====================
@@ -197,7 +267,6 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 	// The fog of war from the explored mask (MAP_PYRAMID_PLAN.md P2): a pixel at the view's level covers 2^FogShift level-0
 	// tiles a side, explored where any of them is (one cached lookup; G170's rebuild over every explored key is gone).
 	const int32 FogShift = FMath::Max(0, ViewLevel - static_cast<int32>(FMath::FloorLog2(static_cast<uint32>(Res))));
-	FVoxelMapExploredMask::FReader Explored(Map.GetExploredMask());
 	Step = FMath::Clamp(Step, 1, TexSize);
 	const int32 Points = (TexSize + Step - 1) / Step + 1;
 
@@ -209,7 +278,7 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 	};
 	TArray<FControl> Controls;
 	Controls.SetNum(Points * Points);
-	for (int32 CY = 0; CY < Points; ++CY)
+	ParallelFor(TEXT("VCMapFill_PlanetControls"), Points, 1, [&](int32 CY)
 	{
 		for (int32 CX = 0; CX < Points; ++CX)
 		{
@@ -220,89 +289,97 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 				Controls[CY * Points + CX] = FControl{ Coord.Face, Coord.UV };
 			}
 		}
-	}
+	}, ParallelFlags());
 
-	// The fog cell the last texel fell in (its exploration), and the view's tile it read with the image it drew from: the
-	// tile's own at the view's level, or the nearest coarser one stored over it (cached across texels: texels in a run
-	// share tiles).
-	FIntVector CachedFogCell(MIN_int32, MIN_int32, MIN_int32);
-	bool bCachedExplored = false;
-	FIntPoint CachedViewTile(MIN_int32, MIN_int32);
-	const FVoxelMapTile* CachedImage = nullptr;
-	int32 CachedShift = 0;
-	int32 CachedBaseU = 0;
-	int32 CachedBaseV = 0;
-	FVCViewTileCollector Collector;
-	int32 Drawn = 0;
+	// A band of control rows at a time, on the task graph's workers (MAP_PYRAMID_PLAN.md P3: a 1024^2 fill was 23-40 ms
+	// on one thread). The store and the mask are only read meanwhile (the game thread waits in the ParallelFor; tiles
+	// arrive on it); each band keeps its own caches and the images it read, which are marked used in the store after.
+	TArray<FVCFillBand> Bands;
+	Bands.SetNum(Points - 1);
+	ParallelFor(TEXT("VCMapFill_PlanetBands"), Points - 1, 1, [&](int32 CY)
+	{
+		FVCFillBand& Band = Bands[CY];
+		FVoxelMapExploredMask::FReader Explored(Map.GetExploredMask());
+		// The fog cell the last texel fell in (its exploration), and the view's tile it read with the image it drew from:
+		// the tile's own at the view's level, or the nearest coarser one stored over it (cached across texels: texels in
+		// a run share tiles).
+		FIntVector CachedFogCell(MIN_int32, MIN_int32, MIN_int32);
+		bool bCachedExplored = false;
+		FIntPoint CachedViewTile(MIN_int32, MIN_int32);
+		const FVoxelMapTile* CachedImage = nullptr;
+		int32 CachedShift = 0;
+		int32 CachedBaseU = 0;
+		int32 CachedBaseV = 0;
 
-	auto Write = [OutBGRA, TexSize](int32 X, int32 Y, const FColor& Color)
-	{
-		WriteTexel(OutBGRA + (static_cast<int64>(Y) * TexSize + X) * 4, Color);
-	};
-	auto Resolve = [&](int32 Face, int32 TU, int32 TV)
-	{
-		CachedImage = nullptr;
-		for (int32 Up = 0; Up <= MaxFallbackLevels && ViewLevel + Up <= MaxLevel; ++Up)
+		auto Write = [OutBGRA, TexSize](int32 X, int32 Y, const FColor& Color)
 		{
-			const int32 TileLevel = ViewLevel + Up;
-			const int32 U = TU >> Up;
-			const int32 V = TV >> Up;
-			const FVoxelMapTile* Image = Map.FindTile(FVoxelMapTileId(FIntPoint(Face * Frame.TilesPerFaceEdgeAt(TileLevel) + U, V), TileLevel));
-			if (Image && Image->Resolution == Res && Image->PixelData.Num() == Res * Res)
+			WriteTexel(OutBGRA + (static_cast<int64>(Y) * TexSize + X) * 4, Color);
+		};
+		auto Resolve = [&](int32 Face, int32 TU, int32 TV)
+		{
+			CachedImage = nullptr;
+			for (int32 Up = 0; Up <= MaxFallbackLevels && ViewLevel + Up <= MaxLevel; ++Up)
 			{
-				CachedImage = Image;
-				CachedShift = TileLevel;
-				CachedBaseU = U * Res;
-				CachedBaseV = V * Res;
+				const int32 TileLevel = ViewLevel + Up;
+				const int32 U = TU >> Up;
+				const int32 V = TV >> Up;
+				const FVoxelMapTileId Id(FIntPoint(Face * Frame.TilesPerFaceEdgeAt(TileLevel) + U, V), TileLevel);
+				const FVoxelMapTile* Image = Map.FindTile(Id, /*bTouch*/ false);
+				if (Image && Image->Resolution == Res && Image->PixelData.Num() == Res * Res)
+				{
+					Band.Used(Id);
+					CachedImage = Image;
+					CachedShift = TileLevel;
+					CachedBaseU = U * Res;
+					CachedBaseV = V * Res;
+					return;
+				}
+			}
+		};
+		auto Shade = [&](int32 X, int32 Y, int32 Face, const FVector2D& UV)
+		{
+			// The texel's level-0 pixel along its face. UV >= -1, so the products are not negative (but by rounding, which
+			// the clamps take): truncation is the floor, without the library call (G64: this runs for every texel of the
+			// minimap).
+			const int32 PU = FMath::Clamp(static_cast<int32>((UV.X + 1.0) * PixelsPerUV), 0, FacePixels - 1);
+			const int32 PV = FMath::Clamp(static_cast<int32>((UV.Y + 1.0) * PixelsPerUV), 0, FacePixels - 1);
+			const int32 U0 = bResPow2 ? PU >> ResShift : PU / Res;
+			const int32 V0 = bResPow2 ? PV >> ResShift : PV / Res;
+			const FIntVector FogCell(Face, U0 >> FogShift, V0 >> FogShift);
+			if (FogCell != CachedFogCell)
+			{
+				CachedFogCell = FogCell;
+				bCachedExplored = !bRequireExplored || Explored.IsAnyExplored(Face, U0, V0, FogShift);
+			}
+			if (!bCachedExplored)
+			{
+				Write(X, Y, Unexplored);
 				return;
 			}
-		}
-	};
-	auto Shade = [&](int32 X, int32 Y, int32 Face, const FVector2D& UV)
-	{
-		// The texel's level-0 pixel along its face. UV >= -1, so the products are not negative (but by rounding, which the
-		// clamps take): truncation is the floor, without the library call (G64: this runs for every texel of the minimap).
-		const int32 PU = FMath::Clamp(static_cast<int32>((UV.X + 1.0) * PixelsPerUV), 0, FacePixels - 1);
-		const int32 PV = FMath::Clamp(static_cast<int32>((UV.Y + 1.0) * PixelsPerUV), 0, FacePixels - 1);
-		const int32 U0 = bResPow2 ? PU >> ResShift : PU / Res;
-		const int32 V0 = bResPow2 ? PV >> ResShift : PV / Res;
-		const FIntVector FogCell(Face, U0 >> FogShift, V0 >> FogShift);
-		if (FogCell != CachedFogCell)
-		{
-			CachedFogCell = FogCell;
-			bCachedExplored = !bRequireExplored || Explored.IsAnyExplored(Face, U0, V0, FogShift);
-		}
-		if (!bCachedExplored)
-		{
-			Write(X, Y, Unexplored);
-			return;
-		}
-		// The view's tile at its level, its image or the nearest coarser one's.
-		const int32 TU = bResPow2 ? PU >> (ViewLevel + ResShift) : (PU >> ViewLevel) / Res;
-		const int32 TV = bResPow2 ? PV >> (ViewLevel + ResShift) : (PV >> ViewLevel) / Res;
-		const FIntPoint ViewTile(Face * ViewTilesPerEdge + TU, TV);
-		if (ViewTile != CachedViewTile)
-		{
-			CachedViewTile = ViewTile;
-			Resolve(Face, TU, TV);
-		}
-		if (ViewTiles)
-		{
-			Collector.Touch(ViewTile, X, Y);
-		}
-		if (!CachedImage)
-		{
-			Write(X, Y, Undrawn);
-			return;
-		}
-		const int32 PX = FMath::Clamp((PU >> CachedShift) - CachedBaseU, 0, Res - 1);
-		const int32 PY = FMath::Clamp((PV >> CachedShift) - CachedBaseV, 0, Res - 1);
-		Write(X, Y, CachedImage->PixelData[PY * Res + PX]);
-		++Drawn;
-	};
+			// The view's tile at its level, its image or the nearest coarser one's.
+			const int32 TU = bResPow2 ? PU >> (ViewLevel + ResShift) : (PU >> ViewLevel) / Res;
+			const int32 TV = bResPow2 ? PV >> (ViewLevel + ResShift) : (PV >> ViewLevel) / Res;
+			const FIntPoint ViewTile(Face * ViewTilesPerEdge + TU, TV);
+			if (ViewTile != CachedViewTile)
+			{
+				CachedViewTile = ViewTile;
+				Resolve(Face, TU, TV);
+			}
+			if (ViewTiles)
+			{
+				Band.Collector.Touch(ViewTile, X, Y);
+			}
+			if (!CachedImage)
+			{
+				Write(X, Y, Undrawn);
+				return;
+			}
+			const int32 PX = FMath::Clamp((PU >> CachedShift) - CachedBaseU, 0, Res - 1);
+			const int32 PY = FMath::Clamp((PV >> CachedShift) - CachedBaseV, 0, Res - 1);
+			Write(X, Y, CachedImage->PixelData[PY * Res + PX]);
+			++Band.Drawn;
+		};
 
-	for (int32 CY = 0; CY + 1 < Points; ++CY)
-	{
 		for (int32 CX = 0; CX + 1 < Points; ++CX)
 		{
 			const FControl& C00 = Controls[CY * Points + CX];
@@ -348,12 +425,8 @@ int32 FVCPlanetMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 T
 				}
 			}
 		}
-	}
-	if (ViewTiles)
-	{
-		Collector.NearestFirst(TexSize, *ViewTiles);
-	}
-	return Drawn;
+	}, ParallelFlags());
+	return MergeBands(Map, Bands, TexSize, ViewTiles);
 }
 
 // ==================== FVCPlaneMapSampler ====================
@@ -408,81 +481,86 @@ int32 FVCPlaneMapSampler::Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 Te
 			: (WorldMinY + (I + 1) * WorldPerPixel - Inside - GridOrigin.Y) / TileSize);
 	}
 
-	// The fog cell the last texel fell in (its exploration: a pixel at the view's level covers 2^FogShift level-0 tiles a
-	// side, explored where any of them is, read from the explored mask, MAP_PYRAMID_PLAN.md P2), and the view's tile it
-	// read with the image it drew from: the tile's own at the view's level, or the nearest coarser one stored over it.
+	// Bands of rows on the task graph's workers, as the planet's fill (MAP_PYRAMID_PLAN.md P3).
 	const int32 FogShift = FMath::Max(0, ViewLevel - static_cast<int32>(FMath::FloorLog2(static_cast<uint32>(Res))));
-	FVoxelMapExploredMask::FReader Explored(Map.GetExploredMask());
-	FIntPoint CachedFogCell(MIN_int32, MIN_int32);
-	bool bCachedExplored = false;
-	FIntPoint CachedViewTile(MIN_int32, MIN_int32);
-	const FVoxelMapTile* CachedImage = nullptr;
-	int32 CachedUp = 0;
-	int64 CachedBaseX = 0;
-	int64 CachedBaseY = 0;
-	auto Resolve = [&](const FIntPoint& ViewTile)
+	const int32 MaxLevel = Frame.GetMaxLevel();
+	const int32 NumBands = (TexSize + FillBandRows - 1) / FillBandRows;
+	TArray<FVCFillBand> Bands;
+	Bands.SetNum(NumBands);
+	ParallelFor(TEXT("VCMapFill_PlaneBands"), NumBands, 1, [&](int32 BandIndex)
 	{
-		CachedImage = nullptr;
-		const int32 MaxLevel = Frame.GetMaxLevel();
-		for (int32 Up = 0; Up <= MaxFallbackLevels && ViewLevel + Up <= MaxLevel; ++Up)
+		FVCFillBand& Band = Bands[BandIndex];
+		// The fog cell the last texel fell in (its exploration: a pixel at the view's level covers 2^FogShift level-0 tiles
+		// a side, explored where any of them is, read from the explored mask, MAP_PYRAMID_PLAN.md P2), and the view's tile
+		// it read with the image it drew from: the tile's own at the view's level, or the nearest coarser one stored over it.
+		FVoxelMapExploredMask::FReader Explored(Map.GetExploredMask());
+		FIntPoint CachedFogCell(MIN_int32, MIN_int32);
+		bool bCachedExplored = false;
+		FIntPoint CachedViewTile(MIN_int32, MIN_int32);
+		const FVoxelMapTile* CachedImage = nullptr;
+		int32 CachedUp = 0;
+		int64 CachedBaseX = 0;
+		int64 CachedBaseY = 0;
+		auto Resolve = [&](const FIntPoint& ViewTile)
 		{
-			const FIntPoint Tile(ViewTile.X >> Up, ViewTile.Y >> Up);
-			const FVoxelMapTile* Image = Map.FindTile(FVoxelMapTileId(Tile, ViewLevel + Up));
-			if (Image && Image->Resolution == Res && Image->PixelData.Num() == Res * Res)
+			CachedImage = nullptr;
+			for (int32 Up = 0; Up <= MaxFallbackLevels && ViewLevel + Up <= MaxLevel; ++Up)
 			{
-				CachedImage = Image;
-				CachedUp = Up;
-				CachedBaseX = static_cast<int64>(Tile.X) * Res;
-				CachedBaseY = static_cast<int64>(Tile.Y) * Res;
-				return;
+				const FIntPoint Tile(ViewTile.X >> Up, ViewTile.Y >> Up);
+				const FVoxelMapTileId Id(Tile, ViewLevel + Up);
+				const FVoxelMapTile* Image = Map.FindTile(Id, /*bTouch*/ false);
+				if (Image && Image->Resolution == Res && Image->PixelData.Num() == Res * Res)
+				{
+					Band.Used(Id);
+					CachedImage = Image;
+					CachedUp = Up;
+					CachedBaseX = static_cast<int64>(Tile.X) * Res;
+					CachedBaseY = static_cast<int64>(Tile.Y) * Res;
+					return;
+				}
+			}
+		};
+		const int32 YEnd = FMath::Min(TexSize, (BandIndex + 1) * FillBandRows);
+		for (int32 Y = BandIndex * FillBandRows; Y < YEnd; ++Y)
+		{
+			uint8* Row = OutBGRA + static_cast<int64>(Y) * TexSize * 4;
+			for (int32 X = 0; X < TexSize; ++X)
+			{
+				// North up the texel's column runs along world Y and its row along world X.
+				const FAxis& AlongX = bNorthUp ? Rows[Y] : Columns[X];
+				const FAxis& AlongY = bNorthUp ? Columns[X] : Rows[Y];
+				const FIntPoint FogCell(AlongX.Tile0 >> FogShift, AlongY.Tile0 >> FogShift);
+				if (FogCell != CachedFogCell)
+				{
+					CachedFogCell = FogCell;
+					bCachedExplored = !bRequireExplored || Explored.IsAnyExplored(0, AlongX.Tile0, AlongY.Tile0, FogShift);
+				}
+				if (!bCachedExplored)
+				{
+					WriteTexel(Row + X * 4, Unexplored);
+					continue;
+				}
+				const FIntPoint ViewTile(AlongX.ViewTile, AlongY.ViewTile);
+				if (ViewTile != CachedViewTile)
+				{
+					CachedViewTile = ViewTile;
+					Resolve(ViewTile);
+				}
+				if (ViewTiles)
+				{
+					Band.Collector.Touch(ViewTile, X, Y);
+				}
+				if (!CachedImage)
+				{
+					WriteTexel(Row + X * 4, bRequireExplored ? Undrawn : Background);
+					continue;
+				}
+				const int32 PX = FMath::Clamp(static_cast<int32>((AlongX.ViewPixel >> CachedUp) - CachedBaseX), 0, Res - 1);
+				const int32 PY = FMath::Clamp(static_cast<int32>((AlongY.ViewPixel >> CachedUp) - CachedBaseY), 0, Res - 1);
+				WriteTexel(Row + X * 4, CachedImage->PixelData[PY * Res + PX]);
+				++Band.Drawn;
 			}
 		}
-	};
-	FVCViewTileCollector Collector;
-	int32 Drawn = 0;
-	for (int32 Y = 0; Y < TexSize; ++Y)
-	{
-		uint8* Row = OutBGRA + static_cast<int64>(Y) * TexSize * 4;
-		for (int32 X = 0; X < TexSize; ++X)
-		{
-			// North up the texel's column runs along world Y and its row along world X.
-			const FAxis& AlongX = bNorthUp ? Rows[Y] : Columns[X];
-			const FAxis& AlongY = bNorthUp ? Columns[X] : Rows[Y];
-			const FIntPoint FogCell(AlongX.Tile0 >> FogShift, AlongY.Tile0 >> FogShift);
-			if (FogCell != CachedFogCell)
-			{
-				CachedFogCell = FogCell;
-				bCachedExplored = !bRequireExplored || Explored.IsAnyExplored(0, AlongX.Tile0, AlongY.Tile0, FogShift);
-			}
-			if (!bCachedExplored)
-			{
-				WriteTexel(Row + X * 4, Unexplored);
-				continue;
-			}
-			const FIntPoint ViewTile(AlongX.ViewTile, AlongY.ViewTile);
-			if (ViewTile != CachedViewTile)
-			{
-				CachedViewTile = ViewTile;
-				Resolve(ViewTile);
-			}
-			if (ViewTiles)
-			{
-				Collector.Touch(ViewTile, X, Y);
-			}
-			if (!CachedImage)
-			{
-				WriteTexel(Row + X * 4, bRequireExplored ? Undrawn : Background);
-				continue;
-			}
-			const int32 PX = FMath::Clamp(static_cast<int32>((AlongX.ViewPixel >> CachedUp) - CachedBaseX), 0, Res - 1);
-			const int32 PY = FMath::Clamp(static_cast<int32>((AlongY.ViewPixel >> CachedUp) - CachedBaseY), 0, Res - 1);
-			WriteTexel(Row + X * 4, CachedImage->PixelData[PY * Res + PX]);
-			++Drawn;
-		}
-	}
-	if (ViewTiles)
-	{
-		Collector.NearestFirst(TexSize, *ViewTiles);
-	}
-	return Drawn;
+	}, ParallelFlags());
+	return MergeBands(Map, Bands, TexSize, ViewTiles);
 }

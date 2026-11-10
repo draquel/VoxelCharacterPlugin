@@ -11,6 +11,7 @@
 #include "VoxelCubeSphere.h"
 #include "Testing/VoxelTestChunkWorld.h"
 #include "Async/TaskGraphInterfaces.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformProcess.h"
 
 // ---------------------------------------------------------------------------
@@ -20,7 +21,8 @@
 // - WorldMapProjection: the globe's orthographic view, north up, round trips, the far side hidden, drags that move the
 //   content with the mouse.
 // - MapSampler: a minimap texture filled from a small planet's tiles shows at every sampled texel the tile pixel its
-//   exact direction falls in (the control-point interpolation inside one face, texel by texel across an edge).
+//   exact direction falls in (the control-point interpolation inside one face, texel by texel across an edge); in bands on
+//   the workers it draws the texels and reports the tiles that one thread does (vc.Map.ParallelFill, MAP_PYRAMID_PLAN.md P3).
 // ---------------------------------------------------------------------------
 
 #define VC_PLANET_MAP_FLAGS (EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
@@ -183,7 +185,30 @@ bool FVCPlanet_MapSampler::RunTest(const FString& Parameters)
 			Sampler.bRequireExplored = false;
 			Sampler.Level = Map->LevelForTexel(WorldPerPixel);
 			TestEqual(TEXT("Texels finer than pixels: level 0"), Sampler.Level, 0);
+			TArray<FIntPoint> Shown;
+			Sampler.ViewTiles = &Shown;
 			const int32 Drawn = Sampler.Fill(*Map, Texels.GetData(), TexSize, 16, TexelDirection);
+
+			// The bands on the workers draw what one thread does (MAP_PYRAMID_PLAN.md P3): the same texels, the same tiles.
+			if (IConsoleVariable* Parallel = IConsoleManager::Get().FindConsoleVariable(TEXT("vc.Map.ParallelFill")))
+			{
+				const int32 Was = Parallel->GetInt();
+				TArray<uint8> Serial;
+				Serial.SetNumZeroed(TexSize * TexSize * 4);
+				TArray<FIntPoint> SerialShown;
+				Sampler.ViewTiles = &SerialShown;
+				Parallel->Set(0, ECVF_SetByCode);
+				const int32 SerialDrawn = Sampler.Fill(*Map, Serial.GetData(), TexSize, 16, TexelDirection);
+				Parallel->Set(Was, ECVF_SetByCode);
+				TestEqual(TEXT("One thread draws as many texels"), SerialDrawn, Drawn);
+				TestTrue(TEXT("... the same texels"), FMemory::Memcmp(Serial.GetData(), Texels.GetData(), Serial.Num()) == 0);
+				TestTrue(TEXT("... and reports the same tiles"), TSet<FIntPoint>(SerialShown).Difference(TSet<FIntPoint>(Shown)).Num() == 0
+					&& SerialShown.Num() == Shown.Num() && Shown.Num() > 0);
+			}
+			else
+			{
+				AddError(TEXT("No vc.Map.ParallelFill"));
+			}
 
 			// Each texel against the tile pixel of its exact direction (texels at a pixel boundary may round either way).
 			int32 Exact = 0, Faces = 0;
