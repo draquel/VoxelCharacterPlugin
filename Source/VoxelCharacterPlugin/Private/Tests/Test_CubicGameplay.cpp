@@ -274,7 +274,7 @@ bool FVCCubic_MeleeTargetThroughAxis::RunTest(const FString& Parameters)
 		const bool bRay = W.World->LineTraceSingleByChannel(Ray, Eyes, Eyes + View.Vector() * Player->AttackTargetRange, ECC_Pawn, Params);
 		RayMisses += (!bRay || Ray.GetActor() != Target) ? 1 : 0;
 	}
-	AddInfo(FString::Printf(TEXT("%d of %d aims at a body's centre find it; the old line trace missed %d of them"), Found, UE_ARRAY_COUNT(Aims), RayMisses));
+	AddInfo(FString::Printf(TEXT("%d of %d aims at a body's centre find it; the old line trace missed %d of them"), Found, static_cast<int32>(UE_ARRAY_COUNT(Aims)), RayMisses));
 	TestEqual(TEXT("Every aim at a body's centre finds it"), Found, static_cast<int32>(UE_ARRAY_COUNT(Aims)));
 
 	// A wall between: nothing.
