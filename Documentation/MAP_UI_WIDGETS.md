@@ -1,7 +1,8 @@
 # Map UI Widgets
 
-> State as of 2026-11-09 (MAP_PYRAMID_PLAN.md P1: both maps on the tile pyramid; P2: the fog from the explored mask, the
-> globe from the top levels; P3: the fills on the task graph's workers, the planet's marker caps kept, G169).
+> State as of 2026-11-10 (MAP_PYRAMID_PLAN.md, done: P1, both maps on the tile pyramid; P2, the fog from the explored
+> mask, the globe from the top levels; P3, the fills on the task graph's workers, the planet's marker caps kept, G169; P4,
+> the frame with the map open measured).
 
 **Module**: VoxelCharacterPlugin
 **Dependencies**: VoxelWorlds' `VoxelMap` module (`UVoxelMapSubsystem`, the tile data), UMG (rendering)
@@ -199,6 +200,14 @@ LRU clock is game-thread state) and lists them, and the merge marks them used an
 explored 50 km planet a 1024² fill at zoom 1 fell from 27.0 to 5.4 ms and its rebuild, the upload included (1.4 ms), from
 28.5 to 7.1 ms (Insights, `VCWorldMap_Rebuild`). The cost was the per-texel loop: the globe's projection and
 `DirectionToSurface` at the control points took 0.19 ms of the 27.
+
+**The frame with the map open** (MAP_PYRAMID_PLAN.md P4). The open world map costs a frame 0.3-0.4 ms of Slate: the
+canvas's paint and the text (`SConstraintCanvas`, `Slate::AddShapedTextElement`), from Insights traces of a standing view
+at zooms 4, 1, 0.05 and the whole globe on the fully explored 50 km planet. A settled view does nothing else per frame; it
+rebuilds only for arrivals, exploration and input. With the weather held clear (`map_scale.py --weather=Clear`), every
+zoom reads 13.3-15.7 ms of game thread at P50 against 15.4 with the map closed. P3 had measured 6-10 ms more with the map
+open at zooms 2 to 0.25. That was a snow front, which the weather schedules at the same time in every PIE of the planet
+(G172, `NS_WeatherSnow`): with the map kept closed through the same windows, the frame rose by the same amount.
 
 `vc.WorldMap.Stats [reset]` logs the rebuilds since the last reset (per second, those over 2 ms, the tile arrivals and
 those deferred) and each phase's count, mean and maximum: texture fill, upload, markers, the rebuild. Insights shows the
