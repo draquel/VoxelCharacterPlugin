@@ -1,6 +1,7 @@
 # Map UI Widgets
 
-> State as of 2026-11-09 (MAP_PYRAMID_PLAN.md P1: both maps on the tile pyramid).
+> State as of 2026-11-09 (MAP_PYRAMID_PLAN.md P1: both maps on the tile pyramid; P2: the fog from the explored mask, the
+> globe from the top levels).
 
 **Module**: VoxelCharacterPlugin
 **Dependencies**: VoxelWorlds' `VoxelMap` module (`UVoxelMapSubsystem`, the tile data), UMG (rendering)
@@ -157,7 +158,12 @@ The world map only renders explored tiles. Unexplored areas within the view appe
 | Explored, tile not yet generated (or its image evicted) | Slightly lighter fog (RGB: 25, 25, 25) |
 | Explored, tile generated | Full terrain colors from the tile pyramid at the view's level, or the nearest coarser level stored while that draws |
 
-Exploration state is queried from `UVoxelMapSubsystem::IsTileExplored()`.
+The fog is read per texel from the map's explored mask (`UVoxelMapSubsystem::GetExploredMask`, MAP_PYRAMID_PLAN.md P2):
+a texel is explored where any level-0 tile under its pixel at the view's level is (`FVoxelMapExploredMask::FReader::
+IsAnyExplored` over an aligned square of 2^(level - 6) tiles a side at 64-pixel tiles; one tile at levels 0-6), one cached
+lookup that most texels answer from the block of the last. Before the mask the samplers asked the explored key set per
+tile, the zoomed-out globe its albedo cells' explored set, rebuilt from every explored key at most once a second (G170:
+40-49 ms at a million keys); there is nothing to rebuild now.
 
 ### Tile Images on Demand (the pyramid)
 
@@ -179,7 +185,6 @@ million at a tile a texel on the 50 km planet (G167).
   globe at 94 ms frames; `VoxelCharacter.Map.ArrivalsInViewCoalesce`). Arrivals elsewhere (another view's, another level's)
   ask for nothing
 - The exploration grew (`GetExplorationRevision`; the fog of war), at most once a second
-- The globe albedo lands (`OnGlobeAlbedoReady`)
 - The user zooms or pans (a dragged globe at most 30 times a second)
 
 The rendering composes the view into a larger fixed texture (`MapTextureFixedSize`, default 1024) with the fog of war
@@ -223,7 +228,7 @@ The marker's canvas slot position is set relative to the center anchor (0.5, 0.5
 | Event | Action |
 |-------|--------|
 | `NativeOnInitialized` | Build widget tree |
-| `NativeConstruct` | Resolve subsystem, bind `OnMapTileReady` and `OnGlobeAlbedoReady`, center on player |
+| `NativeConstruct` | Resolve subsystem, bind `OnMapTileReady`, center on player |
 | `NativeDestruct` | Unbind the delegates, drop the world map's request (`RequestView(WorldMap, {})`) |
 | `NativeTick` | Rebuild texture if dirty, update player marker |
 
@@ -241,10 +246,12 @@ On a planet (`UVoxelMapSubsystem::IsPlanetMap`) both widgets read the cube-spher
 - **World map**: a globe (decision D11, `FVCGlobeProjection`): an orthographic view around a direction, north up,
   opening on the player. Dragging brings what showed at −Δ to the centre; the wheel zooms at the plane map's scale (32
   tiles from the centre at zoom 1). The zoom range comes from the planet's radius (`GetPlanetZoomRange`): the most
-  zoomed-out view shows the whole globe at any radius, and where a texel covers more than two tiles
-  (`GlobeAlbedoTexelsPerTile` 0.5) the globe is drawn from the map's coarse albedo (`UVoxelMapSubsystem::GetGlobeAlbedo`)
-  rather than from the pyramid (spherical Phase 6, G51; MAP_PYRAMID_PLAN.md P2 retires the albedo for the pyramid's top
-  levels). Closer, the pyramid at the level of a texel at the globe's centre; arrivals redraw it coalesced, as on a plane.
+  zoomed-out view shows the whole globe at any radius. At every zoom the globe is composed from the pyramid at the level of
+  a texel at its centre; arrivals redraw it coalesced, as on a plane. Zoomed out, while the view's own tiles draw, it shows
+  the planet's top levels, which the map draws when it resolves the world and keeps (`UVoxelMapSubsystem::GetPrefetchLevel`:
+  from level 9 on the 50 km planet; the samplers fall back up to 16 levels, `MaxFallbackLevels`), so the globe always has
+  an image (MAP_PYRAMID_PLAN.md P2). They replace the coarse albedo the globe was drawn from zoomed out until P2 (spherical
+  Phase 6, G51: `GetGlobeAlbedo`, `GlobeAlbedoTexelsPerTile`).
   `SetZoom` (the game module's `vox.Map`) sets the zoom within the range. The footer shows the player's latitude and
   longitude.
 - **Markers** carry one 3D position (`FVCMapMarker::WorldLocation`; a plane's maps draw its X and Y, a planet's its

@@ -215,7 +215,7 @@ void UVCWorldMapWidget::NativeConstruct()
 
 	// Tile arrivals redraw the open map, coalesced, and only those the view shows (MAP_PYRAMID_PLAN.md P1, G166): a redraw
 	// per arrival held the 50 km globe at 94 ms frames, and before the pyramid an ExploreAll streamed images the view never
-	// showed. The globe albedo's arrival redraws at once.
+	// showed.
 	if (MapSubsystem.IsValid() && !TileReadyHandle.IsValid())
 	{
 		TileReadyHandle = MapSubsystem->OnMapTileReady.AddLambda([this](const FVoxelMapTileId& Id)
@@ -225,10 +225,6 @@ void UVCWorldMapWidget::NativeConstruct()
 			{
 				++VCWorldMapStats::Deferred;
 			}
-		});
-		AlbedoReadyHandle = MapSubsystem->OnGlobeAlbedoReady.AddLambda([this]()
-		{
-			bMapDirty = true;
 		});
 	}
 
@@ -254,11 +250,9 @@ void UVCWorldMapWidget::NativeDestruct()
 	if (MapSubsystem.IsValid())
 	{
 		MapSubsystem->OnMapTileReady.Remove(TileReadyHandle);
-		MapSubsystem->OnGlobeAlbedoReady.Remove(AlbedoReadyHandle);
 		MapSubsystem->RequestView(EVoxelMapRequester::WorldMap, {});
 	}
 	TileReadyHandle.Reset();
-	AlbedoReadyHandle.Reset();
 
 	Super::NativeDestruct();
 }
@@ -580,12 +574,11 @@ void UVCWorldMapWidget::RebuildPlanetMapTexture()
 	RenderedTexSize = TexSize;
 	RenderedWorldPerPixel = static_cast<float>(Subsystem->GetPlanetRadius() / RenderedGlobe.RadiusPx);
 
-	// The pyramid level matching a texel at the view's centre (MAP_PYRAMID_PLAN.md P1); zoomed out so a texel spans many
-	// tiles (a big planet's globe), the albedo instead (WM-BP11; P2 retires it for the pyramid's top levels).
-	const double TexelsPerTile = Subsystem->GetTileWorldSize() * RenderedGlobe.RadiusPx / FMath::Max(Subsystem->GetPlanetRadius(), 1.0);
+	// The pyramid level matching a texel at the view's centre (MAP_PYRAMID_PLAN.md P1), at every zoom: zoomed out the
+	// globe shows the planet's prefetched top levels while the view's own draw (P2: they replace the globe albedo), and its
+	// fog of war is read from the explored mask per texel.
 	FVCPlanetMapSampler Sampler;
 	Sampler.Level = Subsystem->LevelForTexel(RenderedWorldPerPixel);
-	Sampler.bUseGlobeAlbedo = TexelsPerTile < GlobeAlbedoTexelsPerTile;
 	Sampler.Background = FColor(2, 2, 5, 255);
 	TArray<FIntPoint> ViewTiles;
 	Sampler.ViewTiles = &ViewTiles;

@@ -304,10 +304,12 @@ bool FVCMap_WorldMapFill::RunTest(const FString& Parameters)
 		constexpr int32 TexSize = 128;
 		Map->RequestTilesInRadius(Center, static_cast<float>(TileSize * 2.5));
 		// The level-0 images (the reference blit reads them): a view of the explored tiles (MAP_PYRAMID_PLAN.md P1).
+		TArray<FIntPoint> ExploredTiles;
+		Map->GetExploredTiles(ExploredTiles);
 		TArray<FVoxelMapTileId> Explored;
-		for (const uint64 Key : Map->GetExploredTiles())
+		for (const FIntPoint& Tile : ExploredTiles)
 		{
-			Explored.Emplace(FIntPoint(static_cast<int32>(static_cast<uint32>(Key >> 32)), static_cast<int32>(static_cast<uint32>(Key & 0xFFFFFFFF))));
+			Explored.Emplace(Tile);
 		}
 		Map->RequestView(EVoxelMapRequester::WorldMap, Explored);
 		const double Deadline = FPlatformTime::Seconds() + 60.0;

@@ -127,22 +127,22 @@ struct VOXELCHARACTERPLUGIN_API FVCPlanetMapSampler
 	/** Texel colour off the view (the globe's background). */
 	FColor Background = FColor(5, 5, 5, 255);
 
-	/** Draw tiles whether explored or not (the minimap's area is explored as it draws). */
+	/**
+	 * Draw only explored ground, Unexplored elsewhere (the world map's fog of war); false: every tile (the minimap's area is
+	 * explored as it draws). A texel is explored where any level-0 tile under its pixel at Level is, read from the explored
+	 * mask (UVoxelMapSubsystem::GetExploredMask, MAP_PYRAMID_PLAN.md P2), so the fog at every zoom is one cached lookup.
+	 */
 	bool bRequireExplored = true;
 
 	/** The pyramid level the view is composed from (UVoxelMapSubsystem::LevelForTexel: its pixels match the texels). */
 	int32 Level = 0;
 
-	/** A tile not drawn yet at Level falls back on the stored tiles up to this many levels coarser (beyond: Undrawn). */
-	int32 MaxFallbackLevels = 8;
-
 	/**
-	 * Draw from the planet's globe albedo instead of tile images (spherical Phase 6, WM-BP11): a view zoomed out so far
-	 * that a texel spans many tiles. Each texel shows its albedo cell's colour where an explored tile lies in the cell
-	 * (UVoxelMapSubsystem::IsGlobeCellExplored), else Unexplored (bRequireExplored); no tile is reported. Without an
-	 * albedo yet (it builds on first use) the tiles are drawn.
+	 * A tile not drawn yet at Level falls back on the stored tiles up to this many levels coarser (beyond: Undrawn): to the
+	 * top levels a planet keeps (UVoxelMapSubsystem::GetPrefetchLevel, level 9 on the 50 km planet), so the globe always
+	 * has an image (MAP_PYRAMID_PLAN.md P2).
 	 */
-	bool bUseGlobeAlbedo = false;
+	int32 MaxFallbackLevels = 16;
 
 	/**
 	 * If set, receives the coordinates at Level of the tiles the fill shows (those holding an explored texel with
@@ -185,7 +185,8 @@ struct VOXELCHARACTERPLUGIN_API FVCPlaneMapSampler
 
 	/**
 	 * Draw only explored ground, Unexplored elsewhere and Undrawn where no level has an image yet (the world map); false:
-	 * every tile with an image, Background elsewhere (the minimap, whose area is explored as it draws).
+	 * every tile with an image, Background elsewhere (the minimap, whose area is explored as it draws). A texel is explored
+	 * where any level-0 tile under its pixel at Level is (the explored mask, MAP_PYRAMID_PLAN.md P2).
 	 */
 	bool bRequireExplored = false;
 
@@ -193,7 +194,7 @@ struct VOXELCHARACTERPLUGIN_API FVCPlaneMapSampler
 	int32 Level = 0;
 
 	/** A tile not drawn yet at Level falls back on the stored tiles up to this many levels coarser (beyond: Undrawn). */
-	int32 MaxFallbackLevels = 8;
+	int32 MaxFallbackLevels = 16;
 
 	/** Texel X along world +Y and texel Y along world -X (the world map's north-up image); false: texel (X, Y) is world (X, Y). */
 	bool bNorthUp = false;
