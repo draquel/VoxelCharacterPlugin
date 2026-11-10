@@ -9,6 +9,7 @@
 #include "VoxelMapSubsystem.h"
 #include "Testing/VoxelTestChunkWorld.h"
 #include "Async/TaskGraphInterfaces.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformProcess.h"
 
 // ---------------------------------------------------------------------------
@@ -17,7 +18,8 @@
 // - PlaneMapSampler: on a small plane's tiles the texel fill draws every texel from a tile image, where tiles are finer
 //   than texels and where they are coarser (the per-tile-pixel blit it replaced left gaps there; WorldMapFill keeps that
 //   blit as its reference), at the pyramid level matching the texels (MAP_PYRAMID_PLAN.md P1), reporting the tiles it shows
-//   nearest the centre first, and from a coarser level while its own draws.
+//   nearest the centre first, and from a coarser level while its own draws; in bands on the workers it draws the texels
+//   and reports the tiles that one thread does (vc.Map.ParallelFill, MAP_PYRAMID_PLAN.md P3).
 // - MinimapShift: on a planet, a texture filled two texels away and shifted, with the heading taken on the plane it was
 //   drawn in, shows the terrain where a fresh fill would, to a fraction of a texel, at every latitude short of the pole
 //   (the heading taken on the player's own plane would be off by over a texel at the rim near a pole).
@@ -184,6 +186,28 @@ bool FVCMap_PlaneMapSampler::RunTest(const FString& Parameters)
 			TestEqual(TEXT("Every texel is drawn from a tile image"), Drawn, Total);
 			TestEqual(TEXT("No texel is left as background"), NewGaps, 0);
 			TestTrue(TEXT("The tiles shown are reported"), Visited.Num() > 0);
+
+			// The bands on the workers draw what one thread does (MAP_PYRAMID_PLAN.md P3): the same texels, the same tiles.
+			if (IConsoleVariable* Parallel = IConsoleManager::Get().FindConsoleVariable(TEXT("vc.Map.ParallelFill")))
+			{
+				const int32 Was = Parallel->GetInt();
+				TArray<uint8> Serial;
+				Serial.SetNumZeroed(TexSize * TexSize * 4);
+				TArray<FIntPoint> SerialTiles;
+				New.ViewTiles = &SerialTiles;
+				Parallel->Set(0, ECVF_SetByCode);
+				const int32 SerialDrawn = New.Fill(*Map, Serial.GetData(), TexSize, Center, WorldPerPixel);
+				Parallel->Set(Was, ECVF_SetByCode);
+				New.ViewTiles = &Visited;
+				TestEqual(TEXT("One thread draws as many texels"), SerialDrawn, Drawn);
+				TestTrue(TEXT("... the same texels"), FMemory::Memcmp(Serial.GetData(), Texels.GetData(), Serial.Num()) == 0);
+				TestTrue(TEXT("... and reports the same tiles"), TSet<FIntPoint>(SerialTiles).Difference(TSet<FIntPoint>(Visited)).Num() == 0
+					&& SerialTiles.Num() == Visited.Num());
+			}
+			else
+			{
+				AddError(TEXT("No vc.Map.ParallelFill"));
+			}
 		}
 
 		// While a level's tiles draw, the coarser level stored over them shows: the view at level 4 drawn, level 3 not.

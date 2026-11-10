@@ -116,7 +116,8 @@ struct VOXELCHARACTERPLUGIN_API FVCGlobeProjection
  * falls in at the view's Level, or, while that tile draws, the pixel of the nearest coarser level stored over it, through a
  * grid of control points every Step texels (texels of a cell whose corners lie on one face interpolate the face's UV;
  * cells across a face edge or the globe's rim go texel by texel). It asks for nothing: it reports the tiles at Level it
- * shows (ViewTiles), and the caller requests them (UVoxelMapSubsystem::RequestView). Game thread.
+ * shows (ViewTiles), and the caller requests them (UVoxelMapSubsystem::RequestView). Called on the game thread; the texels
+ * fill in bands on the task graph's workers (`vc.Map.ParallelFill`, MAP_PYRAMID_PLAN.md P3), which call TexelDirection.
  */
 struct VOXELCHARACTERPLUGIN_API FVCPlanetMapSampler
 {
@@ -157,7 +158,7 @@ struct VOXELCHARACTERPLUGIN_API FVCPlanetMapSampler
 	 * @param TexSize Texture size (square)
 	 * @param Step Control point spacing (texels)
 	 * @param TexelDirection The direction at a texel position (continuous: texel (X, Y)'s centre is (X + 0.5, Y + 0.5));
-	 *        false where the view shows no ground
+	 *        false where the view shows no ground. Called from the workers at once: it must only read
 	 * @return Number of texels drawn from a tile image (at Level or coarser) or the albedo
 	 */
 	int32 Fill(UVoxelMapSubsystem& Map, uint8* OutBGRA, int32 TexSize, int32 Step,
@@ -172,7 +173,8 @@ struct VOXELCHARACTERPLUGIN_API FVCPlanetMapSampler
  * coarser level's stored over it. Columns and rows are worked out once, so a fill costs a few operations a texel. With
  * bRequireExplored (the world map) only explored ground draws and the fog colours cover the rest. It asks for nothing: it
  * reports the tiles at Level it shows (ViewTiles), and the caller requests them (UVoxelMapSubsystem::RequestView). The
- * minimap and the world map share it (code review CR2, VCP-15).
+ * minimap and the world map share it (code review CR2, VCP-15). Called on the game thread; the rows fill in bands on the
+ * task graph's workers (`vc.Map.ParallelFill`, MAP_PYRAMID_PLAN.md P3).
  */
 struct VOXELCHARACTERPLUGIN_API FVCPlaneMapSampler
 {
