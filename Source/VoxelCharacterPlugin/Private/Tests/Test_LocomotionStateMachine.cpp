@@ -19,6 +19,7 @@
 // - A set change: the new clips go into the slot not playing and it becomes the playing one.
 // - The state the graph follows (L2), the paces (D91), the starts, stops and turns with §3.3's missing-clip rules, the
 //   stop's entry by distance, and on the anim instance the body's frame and the procedural turn.
+// - The crouch (L3): own or borrowed, its pace, starts and stops, the begin and end; the tunables; the reversal.
 // ---------------------------------------------------------------------------
 
 namespace VCLocomotionTestHelpers
@@ -400,6 +401,10 @@ bool FVCLocomotion_States::RunTest(const FString& Parameters)
 		R.bStartDone = Random.FRand() < 0.5f;
 		R.bStopDone = Random.FRand() < 0.5f;
 		R.bTurnDone = Random.FRand() < 0.5f;
+		R.bWantsCrouchChange = Random.FRand() < 0.3f;
+		R.bCrouchChangeDone = Random.FRand() < 0.5f;
+		R.bReversal = Random.FRand() < 0.2f;
+		R.bReversalStop = Random.FRand() < 0.5f;
 		R.JumpEndSeconds = 0.5f;
 		R.LandEndSeconds = 0.5f;
 		const EState Current = static_cast<EState>(Random.RandRange(0, static_cast<int32>(EState::Swim)));
@@ -641,6 +646,199 @@ bool FVCLocomotion_Instance::RunTest(const FString& Parameters)
 		Update(Plain, Still);
 	}
 	TestTrue(TEXT("80 off: the body eases round, no turn state"), FMath::Abs(Plain->RootYawOffset) < 2.f && Plain->bInIdle);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The crouch (L3): the crouch set (own or borrowed), its pace, starts and stops, and on the anim instance the crouch's
+// begin and end at a stand, the crouch cycle, the borrowed crouch's upper body.
+// ---------------------------------------------------------------------------
+
+namespace VCLocomotionTestHelpers
+{
+	/** The bow's crouch (hold B): an idle, the begin and end, the slow crouch walk and the crouch walk, their starts and stops. */
+	void AddCrouch(UVCLocomotionClipSet* Set, const TCHAR* Name)
+	{
+		Set->CrouchIdle = NewClip(*FString::Printf(TEXT("%s_CrouchIdle"), Name));
+		Set->CrouchBegin = NewClip(*FString::Printf(TEXT("%s_CrouchBegin"), Name));
+		Set->CrouchEnd = NewClip(*FString::Printf(TEXT("%s_CrouchEnd"), Name));
+		Set->CrouchWalkSlow = SixWay(*FString::Printf(TEXT("%s_CrouchSlow"), Name), 114.f);
+		Set->CrouchWalk = SixWay(*FString::Printf(TEXT("%s_CrouchWalk"), Name), 302.f);
+		Set->CrouchWalkSlowStart = SixWay(*FString::Printf(TEXT("%s_CrouchSlowStart"), Name), 114.f);
+		Set->CrouchWalkStart = SixWay(*FString::Printf(TEXT("%s_CrouchWalkStart"), Name), 302.f);
+		Set->CrouchWalkSlowStop = SixWay(*FString::Printf(TEXT("%s_CrouchSlowStop"), Name), 114.f);
+		Set->CrouchWalkStop = SixWay(*FString::Printf(TEXT("%s_CrouchWalkStop"), Name), 302.f);
+		Set->CrouchCycle = NewObject<UBlendSpace>(GetTransientPackage());
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCLocomotion_Crouch, "VoxelCharacter.Locomotion.Crouch", VC_LOCO_FLAGS)
+bool FVCLocomotion_Crouch::RunTest(const FString& Parameters)
+{
+	using namespace VCLocomotionTestHelpers;
+	using EState = EVCLocomotionState;
+
+	const auto Near = [](float A, float B) { return FMath::IsNearlyEqual(A, B, 0.01f); };
+	UVCLocomotionClipSet* Base = NewSet(TEXT("Unarmed"));
+	UVCLocomotionClipSet* Bow = NewSet(TEXT("Bow"));
+	AddCrouch(Bow, TEXT("Bow"));
+	UVCLocomotionClipSet* Sword = NewSet(TEXT("SSH"));
+
+	// The crouch set: the bow's own; the sword's none until it borrows the bow's (§3.3).
+	TestTrue(TEXT("The bow has its own crouch"), Bow->HasCrouch() && Bow->GetCrouchSet() == Bow);
+	TestNull(TEXT("The sword has none"), Sword->GetCrouchSet());
+	Sword->BorrowedCrouch = Bow;
+	TestTrue(TEXT("Borrowing the bow's: the bow's crouch"), Sword->GetCrouchSet() == Bow);
+	TestNull(TEXT("Not when borrowing is off (vc.Anim.SM.BorrowCrouch 0)"), Sword->GetCrouchSet(false));
+	FVCLocomotionClips Clips = UVCLocomotionAnimInstance::ResolveClips(Sword, Base);
+	TestTrue(TEXT("Resolved: the sword's loops on the bow's crouch, borrowed"), Clips.Loops == Sword && Clips.Crouch == Bow && Clips.bBorrowedCrouch);
+	Clips = UVCLocomotionAnimInstance::ResolveClips(Bow, Base);
+	TestTrue(TEXT("The bow's own: not borrowed"), Clips.Crouch == Bow && !Clips.bBorrowedCrouch);
+	Clips = UVCLocomotionAnimInstance::ResolveClips(nullptr, Base);
+	TestNull(TEXT("Unarmed borrowing nothing: no crouch (the walk's loops)"), Clips.Crouch);
+
+	// The pace: the slow crouch walk whole at CrouchSlowSpeed, the crouch walk at CrouchSpeed, between them a blend.
+	FVCLocomotionPace Pace = Bow->ComputeCrouchPace(150.f, false);
+	TestTrue(TEXT("At 150: the slow crouch walk at 150 / 114"), Near(Pace.BlendSpeed, 114.f) && Near(Pace.PlayRate, 150.f / 114.f));
+	Pace = Bow->ComputeCrouchPace(250.f, false);
+	TestTrue(TEXT("At the cap: the crouch walk at 250 / 302"), Near(Pace.BlendSpeed, 302.f) && Near(Pace.PlayRate, 250.f / 302.f));
+	Pace = Bow->ComputeCrouchPace(200.f, false);
+	TestTrue(TEXT("Between: the feet on the ground"), Near(Pace.BlendSpeed * Pace.PlayRate, 200.f));
+	TArray<UAnimSequence*> Samples;
+	TArray<FVector2D> Positions;
+	Bow->GetCrouchCycleSamples(false, Samples, Positions);
+	TestTrue(TEXT("The crouch cycle's samples: both crouch walks and the crouch idle"),
+		Samples.Contains(Bow->CrouchWalkSlow.Forward.Get()) && Samples.Contains(Bow->CrouchWalk.Forward.Get()) && Samples.Contains(Bow->CrouchIdle.Get()));
+
+	// Starts and stops: the crouch walk's (it plays at the cap), the slow one's when the cap is the slow walk's.
+	FVCLocomotionPick Pick = Bow->ChooseCrouchStart(0.f, false);
+	TestTrue(TEXT("A crouch start: the crouch walk's, at the crouch's rate"), Pick.Clip == Bow->CrouchWalkStart.Forward && Near(Pick.PlayRate, 250.f / 302.f));
+	TestTrue(TEXT("A crouch stop to the right"), Bow->ChooseCrouchStop(90.f, false).Clip == Bow->CrouchWalkStop.Right);
+	Bow->CrouchSpeed = 150.f;
+	TestTrue(TEXT("A cap near the slow walk's: the slow start"), Bow->ChooseCrouchStart(0.f, false).Clip == Bow->CrouchWalkSlowStart.Forward);
+	Bow->AimCrouchWalk = SixWay(TEXT("Bow_C_CrouchSlow"), 114.f);
+	Bow->AimCrouchWalkStart.Right = NewClip(TEXT("Bow_C_CrouchSlowStart_R"));
+	Bow->AimCrouchWalkStart.AuthoredSpeed = 114.f;
+	TestTrue(TEXT("Aiming: hold C's slow crouch start"), Bow->ChooseCrouchStart(90.f, true).Clip == Bow->AimCrouchWalkStart.Right);
+	Bow->CrouchSpeed = 250.f;
+
+	// The steps: a change at a stand plays the begin or end, input leaves it, and only the listed transitions occur.
+	FVCLocomotionStepInput In;
+	In.bOnGround = true;
+	In.bWantsCrouchChange = true;
+	TestTrue(TEXT("Crouching at a stand: the change"), UVCLocomotionAnimInstance::StepState(EState::Idle, In) == EState::CrouchChange);
+	TestTrue(TEXT("It holds"), UVCLocomotionAnimInstance::StepState(EState::CrouchChange, In) == EState::CrouchChange);
+	In.bCrouchChangeDone = true;
+	TestTrue(TEXT("then stands (crouched)"), UVCLocomotionAnimInstance::StepState(EState::CrouchChange, In) == EState::Idle);
+	In.bHasInput = true;
+	In.bHasStart = true;
+	TestTrue(TEXT("Input during it: the start"), UVCLocomotionAnimInstance::StepState(EState::CrouchChange, In) == EState::Start);
+	TestTrue(TEXT("Listed: Idle to CrouchChange and back"), UVCLocomotionAnimInstance::IsStateTransition(EState::Idle, EState::CrouchChange)
+		&& UVCLocomotionAnimInstance::IsStateTransition(EState::CrouchChange, EState::Idle));
+
+	// On the anim instance: crouching at a stand plays the begin, then the crouch idle; moving, the crouch cycle.
+	UVCLocomotionAnimInstance* Anim = NewAnimInstance();
+	FVCAnimInput Stand = Standing(Bow, Base);
+	Update(Anim, Stand);
+	TestFalse(TEXT("Standing: not the crouch's pose"), Anim->bCrouchPose);
+	FVCAnimInput Crouched = Stand;
+	Crouched.bCrouching = true;
+	Update(Anim, Crouched);
+	TestTrue(TEXT("Crouched at a stand: the begin"), Anim->bInCrouchChange && Anim->CrouchChangeClip == Bow->CrouchBegin && Anim->bCrouchPose);
+	TestTrue(TEXT("The idle plays the crouch idle"), Anim->CrouchIdleClip == Bow->CrouchIdle);
+	Update(Anim, Stand);
+	TestTrue(TEXT("Up again mid-way: the end"), Anim->CrouchChangeClip == Bow->CrouchEnd && !Anim->bCrouchPose);
+	Update(Anim, Crouched);
+	FVCAnimInput Walking = Crouched;
+	Walking.Velocity = FVector(200.0, 0.0, 0.0);
+	Walking.Acceleration = FVector(800.0, 0.0, 0.0);
+	Walking.MaxSpeed = 250.f;
+	Update(Anim, Walking);
+	Update(Anim, Walking);
+	TestTrue(TEXT("Crouched on the move: the crouch cycle"), Anim->CycleChoice == 2 && Anim->CrouchCycleClip == Bow->CrouchCycle);
+	TestTrue(TEXT("at the crouch's pace"), Near(Anim->CrouchCycleBlendSpeed * Anim->CrouchCyclePlayRate, 200.f));
+	TestEqual(TEXT("Its own crouch: no borrowed upper body"), Anim->BorrowedCrouchWeight, 0.f);
+
+	// The borrowed crouch: the sword's idle over the upper body, eased in.
+	UVCLocomotionAnimInstance* Borrow = NewAnimInstance();
+	FVCAnimInput SwordCrouched = Standing(Sword, Base);
+	SwordCrouched.bCrouching = true;
+	for (int32 Step = 0; Step < 30; ++Step)
+	{
+		Update(Borrow, SwordCrouched);
+	}
+	TestTrue(TEXT("The sword crouched: the bow's crouch idle"), Borrow->bCrouchPose && Borrow->CrouchIdleClip == Bow->CrouchIdle);
+	TestTrue(TEXT("under the sword's own idle upper body"), Borrow->BorrowedUpperClip == Sword->Idle && Near(Borrow->BorrowedCrouchWeight, 1.f));
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// The tunables (L3: vc.Anim.SM.* over the properties) and the reversal (a stop, then a start the other way).
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCLocomotion_Tuning, "VoxelCharacter.Locomotion.Tuning", VC_LOCO_FLAGS)
+bool FVCLocomotion_Tuning::RunTest(const FString& Parameters)
+{
+	using namespace VCLocomotionTestHelpers;
+	using EState = EVCLocomotionState;
+
+	TestEqual(TEXT("No override: the property"), UVCLocomotionAnimInstance::ResolveTunable(-1.f, 60.f), 60.f);
+	TestEqual(TEXT("An override of 0 counts"), UVCLocomotionAnimInstance::ResolveTunable(0.f, 60.f), 0.f);
+	TestEqual(TEXT("An override"), UVCLocomotionAnimInstance::ResolveTunable(45.f, 60.f), 45.f);
+
+	TestTrue(TEXT("Input against the velocity: 180"),
+		FMath::IsNearlyEqual(UVCLocomotionAnimInstance::InputAngleToVelocity(FVector(-1, 0, 0), FVector(300, 0, 0)), 180.f, 0.01f));
+	TestTrue(TEXT("Across it: 90"), FMath::IsNearlyEqual(UVCLocomotionAnimInstance::InputAngleToVelocity(FVector(0, 1, 0), FVector(300, 0, 0)), 90.f, 0.01f));
+	TestEqual(TEXT("Standing: 0"), UVCLocomotionAnimInstance::InputAngleToVelocity(FVector(1, 0, 0), FVector::ZeroVector), 0.f);
+
+	// A reversal from 400 uu/s at friction 5 and 800 uu/s^2: v' = -10 v - 800 stops it in about 26 uu.
+	const float Reversal = UVCLocomotionAnimInstance::ReversalStopDistance(400.f, 800.f, 5.f);
+	TestTrue(TEXT("A reversal's stop: about 26 uu"), FMath::IsNearlyEqual(Reversal, 25.7f, 0.5f));
+	TestTrue(TEXT("shorter than the braking stop (40 uu at 2000)"), Reversal < 400.f * 400.f / (2.f * 2000.f));
+	TestTrue(TEXT("No friction: the acceleration alone"), FMath::IsNearlyEqual(UVCLocomotionAnimInstance::ReversalStopDistance(400.f, 800.f, 0.f), 100.f, 0.01f));
+
+	FVCLocomotionStepInput In;
+	In.bOnGround = true;
+	In.bHasInput = true;
+	In.Speed = 400.f;
+	In.bReversal = true;
+	In.bHasStop = true;
+	TestTrue(TEXT("A reversal in the cycle: the stop"), UVCLocomotionAnimInstance::StepState(EState::Cycle, In) == EState::Stop);
+	TestTrue(TEXT("in the sprint too"), UVCLocomotionAnimInstance::StepState(EState::Sprint, In) == EState::Stop);
+	TestTrue(TEXT("The stop holds while the input is against the velocity"), UVCLocomotionAnimInstance::StepState(EState::Stop, In) == EState::Stop);
+	In.bReversal = false;
+	In.bReversalStop = true;
+	In.bHasStart = true;
+	In.Speed = 40.f;
+	TestTrue(TEXT("The velocity turned: a start the new way"), UVCLocomotionAnimInstance::StepState(EState::Stop, In) == EState::Start);
+	In.bReversalStop = false;
+	TestTrue(TEXT("Not a reversal's stop, still moving: the cycle"), UVCLocomotionAnimInstance::StepState(EState::Stop, In) == EState::Cycle);
+
+	// On the anim instance, with the reversal on: the stop the way the body went, the body held through it.
+	UVCLocomotionClipSet* Base = NewSet(TEXT("Unarmed"));
+	UVCLocomotionClipSet* Bow = NewSet(TEXT("Bow"));
+	Bow->JogStop = SixWay(TEXT("Bow_JogStop"), 302.f);
+	UVCLocomotionAnimInstance* Anim = NewAnimInstance();
+	Anim->ReversalAngle = 135.f;
+	FVCAnimInput Run = Standing(Bow, Base);
+	Run.bOrientToMovement = true;
+	Run.GroundFriction = 5.f;
+	Run.MaxSpeed = 400.f;
+	Run.Velocity = FVector(400.0, 0.0, 0.0);
+	Run.Acceleration = FVector(800.0, 0.0, 0.0);
+	for (int32 Step = 0; Step < 10; ++Step)
+	{
+		Update(Anim, Run);
+	}
+	TestTrue(TEXT("Running: the cycle"), Anim->bInCycle);
+	FVCAnimInput Back = Run;
+	Back.ActorRotation = FRotator(0.0, 170.0, 0.0).Quaternion(); // the capsule turned to the input at once
+	Back.Acceleration = Back.ActorRotation.GetForwardVector() * 800.0;
+	Update(Anim, Back);
+	TestTrue(TEXT("Reversed: the stop forward of the body"), Anim->bInStop && Anim->StopClip == Bow->JogStop.Forward);
+	const float Held = Anim->RootYawOffset;
+	Update(Anim, Back);
+	TestTrue(TEXT("The body held through it"), FMath::Abs(Held) > 120.f && FMath::IsNearlyEqual(Anim->RootYawOffset, Held, 0.5f));
 	return true;
 }
 

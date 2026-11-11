@@ -38,6 +38,8 @@ struct FVCAnimInput
 
 	float MaxAcceleration = 0.f;
 	float MaxBrakingDeceleration = 0.f;
+	/** The movement's ground friction this update (the gait table's), for a reversal's stop (the locomotion plan's L3). */
+	float GroundFriction = 0.f;
 
 	FQuat ActorRotation = FQuat::Identity;
 
@@ -433,6 +435,13 @@ protected:
 	 * @return The offset; Offset here
 	 */
 	virtual double AdjustRootYawOffset(const FVCAnimInput& Input, double Offset, bool bStanding) { return Offset; }
+
+	/**
+	 * How fast the body's offset eases to 0 off the ground or on the move this update (FInterpTo speed).
+	 * @param Input This update's input
+	 * @return TurnInPlaceRecoverySpeed here; negative holds the offset (UVCLocomotionAnimInstance: through a reversal's stop)
+	 */
+	virtual float GetTurnInPlaceRecoverySpeed(const FVCAnimInput& Input) const { return TurnInPlaceRecoverySpeed; }
 
 	/** The look direction's yaw from the facing before AimYaw's clamp (degrees, -180 to 180). */
 	float ViewYaw = 0.f;

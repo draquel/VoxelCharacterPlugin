@@ -73,6 +73,7 @@ FVCMovementTable FVCMovementTable::WithForwardCaps(const FVCGaitCaps& Caps) cons
 	Out.Walk = Walk.WithForwardSpeed(Caps.Walk);
 	Out.Run = Run.WithForwardSpeed(Caps.Run);
 	Out.Sprint = Sprint.WithForwardSpeed(Caps.Sprint);
+	Out.Crouch = Crouch.WithForwardSpeed(Caps.Crouch);
 	return Out;
 }
 

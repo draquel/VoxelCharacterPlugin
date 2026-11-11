@@ -4,7 +4,8 @@
 > 2026-11-10 (§4 "L0 results": the bow carries hold `B`, D92; D91 revised and agreed); L1 built 2026-11-10 (§4 "L1
 > results": the graph under `vc.Anim.Locomotion 2`, the bow's `C` as the walk while aiming, motion matching
 > unchanged); L2 built 2026-11-10 (§4 "L2 results": starts, stops, turns, the sprint, the held set's gait caps); L3
-> next. Scope:
+> built 2026-11-11 (§4 "L3 results": the crouch, the borrowed crouch, the crouch's cap, the tunables' cvars, the
+> reversals tried and left off); L4 next. Scope:
 > the player's locomotion played from the Essential Animation packs' clips through a state machine of our own, built up
 > one feature at a time as the content and the need arrive, with Game Animation Sample's motion matching kept selectable
 > beside it for comparison. The user's words: GASP is "a difficult system to tune for reliable smooth character behavior
@@ -498,6 +499,101 @@ the cap) and the sprint's entry, as properties with `vc.Anim.SM.*` overrides. Th
 The bow's crouch; the borrowed crouch for the others (kept or dropped by eye); the tunables as properties with
 `vc.Anim.SM.*` overrides; a pass by hand with the user on `CharacterTest` and at `PlanetTest`'s equator, each set, both
 bodies, against motion matching under `vc.Anim.Locomotion 1`.
+
+#### L3 results (2026-11-11)
+
+Built on `claude/locomotion-l3` (issue draquel/UE5_PluginDev#405). What exists now is in `CHARACTER_SYSTEM.md`
+"Animation" › The state machine (The crouch, The tunables) and "Movement" › The held set's caps; the cvars in the
+console guide §4.
+
+**The crouch.** Read from the clips first (the root's travel over each): hold `B`'s crouch walk 302.4 uu/s, its slow
+crouch walk 114.4, `C`'s slow crouch walk 114.4, the begin and end 0.83 s with the root still; the loops, starts and
+stops carry `bForceRootLock`, the crouch idle, begin and end do not (the graph's component-space lock holds them either
+way). `UVCLocomotionClipSet` gained the crouch (`CrouchIdle`, `CrouchBegin`, `CrouchEnd`, `CrouchWalkSlow`, `CrouchWalk`
+and their starts and stops in six directions, `AimCrouchWalk` and its starts, stops and idle from `C`, `CrouchCycle` and
+`AimCrouchCycle`, built by the script from `GetCrouchCycleSamples`) and two speeds, `CrouchSlowSpeed` 150 (the slow
+crouch walk whole at 1.31) and `CrouchSpeed` 250 (the crouch walk at 0.83), between them a blend (`ComputeCrouchPace`).
+As §3.1 has it, the crouch is not a state machine of its own: crouched (`bCrouchPose`), Idle plays the crouch idle and
+Cycle the crouch cycle (`CycleChoice`: the slots' cycle, the aim cycle, the crouch cycle, the aim crouch cycle, one
+inertialized blend by int), Start and Stop choose from the crouch's starts and stops (`ChooseCrouchStart`,
+`ChooseCrouchStop`: the family that plays at the cap, the crouch walk's at 250), and one new state, `CrouchChange`,
+plays the begin or the end at a stand (a change back mid-way plays the other from the matching point, so the pelvis
+never jumps). Crouched the body turns procedurally (the packs' turns stand). `GetStateTransitions` has 55 transitions
+(seven new, `CrouchChange` to and from Idle, to Start, Cycle and the air and the water).
+
+**The borrowed crouch (§3.3).** A clip set names the set whose crouch it borrows (`BorrowedCrouch`: SwordShield,
+TwoHand, which Tool shares, and Unarmed borrow the bow's); `ResolveClips` gives the crouch set with the loops (the set's
+own, else the one it borrows), and while crouched on a borrowed crouch the graph lays the set's own idle over the upper
+body on the stance's ramp from `spine_01` (`BorrowedUpperClip` at `BorrowedCrouchWeight`, eased over the transition's
+0.2 s; between the root lock and the inertialization). `vc.Anim.SM.BorrowCrouch 0` drops it live (the walk's loops while
+crouched, as before L3). In PIE (`Saved/QA/l3/L3_crouch_LowPoly.png`, `_Kellan.png`, both bodies, each set, side and
+front at a stand and the crouch walk at 250): the bow crouches and crouch-walks in hold `B`, the bow low across the
+knees; the sword, the pickaxe and the empty hands crouch on the bow's legs with their own arms (the sword low at the
+side, the pickaxe across the chest, the empty hands at the knees), the torso a little more upright than the bow's.
+The user kept it by eye from those shots (2026-11-11): the borrowed crouch is on by default (`vc.Anim.SM.BorrowCrouch`
+1) until a set has a crouch of its own.
+
+**The crouch's cap.** `FVCGaitCaps` has a crouch row: `UpdateClipGaitCaps` sets it from the crouch set's `CrouchSpeed`
+(own or borrowed: data both the server and the client hold; the cvar above changes only the pose), and
+`WithForwardCaps` scales the crouch row with the others (GASP's 225 / 200 / 180 becomes 250 / 222 / 200). In PIE the
+crouch walks at 250 with the crouch walk at 0.83 on every set, and at the strafe cap with the bow drawn (234 uu/s) the
+aim crouch cycle is mostly `B`'s crouch walk: `C`'s slow crouch walk shows below about 150 (as `C`'s walk under the
+run's cap, L1). At `PlanetTest`'s equator (`vox.TPLatLon 0 30`) the bow's own and the sword's borrowed crouch idle and
+walk the same (the gravity frame needs nothing new).
+
+**The tunables.** The anim instance's `TransitionBlendSeconds`, `TurnInPlaceAngle`, `TurnPlayRate`, `BodyMaxOffset`,
+`StartExitSpeedFraction`, `SprintEnterMargin`, `SprintMaxAngle`, `ReversalAngle` and the body's recovery on the move
+each have a `vc.Anim.SM.*` override (negative keeps the property; `ResolveTunable`); the recovery reaches the base
+class through a new `UVCAnimInstance::GetTurnInPlaceRecoverySpeed` hook (the other graphs return their property).
+`TransitionBlendSeconds` moves when a state's clip hands over, not the graph's own blend (the script's constant).
+
+**The reversals.** Two levers tried on the lane, three runs each, both bodies (`Saved/QA/lane/l3_*`, the table in
+`l3_ab_table.md`; uu/s, relative):
+
+| Leg (low-poly / Kellan) | L3 as built | Stop then start (`ReversalAngle 135`) | Faster swing (`RecoverySpeed 20`) |
+|---|---|---|---|
+| pivot 180 to -X | 160 / 226 | 364 / 431 | 156 / 216 |
+| pivot 180 back to +X | 139 / 197 | 156 / 288 | 143 / 251 |
+| strafe +Y, bow drawn | 59 / 73 | 155 / 115 | 59 / 128 |
+| straight +X | 61 / 82 | 200 / 131 | 51 / 70 |
+| whole lane, walk bucket | 182 / 244 | 332 / 381 | 181 / 269 |
+| whole lane, run bucket | 58 / 78 | 108 / 86 | 59 / 85 |
+| `vox.Stop` from 400 | 0.22 s, 43 uu | 0.22 s, 43 uu | 0.22 s, 43 uu |
+
+The stop then start (the set's stop the way the body went, entered at the reversal's own stopping distance,
+`ReversalStopDistance`: the movement turns the velocity toward an input against it at twice the friction's rate, 26 uu
+from 400, with the body held, then the start the new way) doubles the 180 pivots' slide: the movement reverses in about
+0.2 s, so the stop is cut short, and the start plays forward of a body still a half turn off, as every start from a
+stand behind the body does (L2). A faster swing changes nothing beyond the runs' spread. Both stay off (`ReversalAngle`
+0, the recovery 10) as A/B levers; the 180 pivots wait for pivot clips (§5). L3 as built matches L2's lane after its
+fixes (run bucket 58 / 78 against 55 / 74, walk 182 / 244 against 179 / 253, the stop 43 uu).
+
+**The cost** (the CSV profiler over one lane, the bow in hand, as L0's item 4, both modes in the same session; ms a
+frame, mean (p95); `Saved/QA/l3/csv_cost.txt`):
+
+| | Game thread, `Animation` | Workers, animation evaluation | Game thread, whole frame |
+|---|---|---|---|
+| Low-poly, motion matching | 0.31 (0.41) | 1.00 (1.43) | 10.4 |
+| Low-poly, the state machine | 0.15 (0.21) | 0.37 (0.54) | 9.5 |
+| Kellan, motion matching | 0.56 (0.78) | 4.22 (5.49), three tasks | 13.8 |
+| Kellan, the state machine | 0.39 (0.57) | 3.38 (4.34), three tasks | 12.8 |
+
+The state machine costs what L0 measured for `ABP_VoxelCharacter` (0.14 / 0.40 low-poly, 0.36 / 3.38 Kellan), about
+half of motion matching's game thread and a third of its worker on the low-poly body (§7's expectation); motion
+matching's own numbers are L0's within 0.03 ms.
+
+**Tests.** `VoxelCharacter.Locomotion.Crouch` (the crouch set own, borrowed and off; its pace, starts and stops, the aim's
+`C`; the steps into and out of `CrouchChange`; on the anim instance the begin, a change back mid-way, the crouch cycle
+at its pace, the borrowed upper body) and `.Tuning` (`ResolveTunable`, `InputAngleToVelocity`, `ReversalStopDistance`;
+the reversal's steps and, on the anim instance, the stop with the body held); `.States`' random walk covers the new
+inputs; `Movement.GaitClipCaps` the crouch row (scaled, and applied crouched).
+
+The gate (`Scripts/qa/README.md`, "Any code"): the editor build with no warning (`build_warnings.py`: 0); the headless
+suite 906 of 906 (`Locomotion.Crouch` and `.Tuning` new), no new warning kind (`logwarnings.py` against L2's fixes:
+only the dungeon search's line counts move, 153 to 151 and 19 to 21, as between runs); the non-unity build of
+`VoxelCharacterPlugin`, no error. No new finding. Left for the pass by hand and L4: the look-at short of the view under
+hold `B` (L1) is unchanged; the 180 pivots slide most and wait for pivot clips; Unarmed stays the weak set until its
+pack.
 
 ### L4: Close (S)
 

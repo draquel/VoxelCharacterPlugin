@@ -289,7 +289,9 @@ re-mesh).
   (`vc.Anim.Locomotion 2`) the packs' loops are authored at about 92 and 302 uu/s, so the walk, run and sprint rows
   scale to the held set's `UVCLocomotionClipSet` (`WalkSpeed`, `RunSpeed`, `SprintSpeed`: 120, 400, 700 on the packs'
   sets, 200, 500, 700 on the template Unarmed's), the strafe and backward caps in proportion
-  (`FVCMovementTable::WithForwardCaps`), the crouch, the accelerations, the braking and the rates as they are. The caps
+  (`FVCMovementTable::WithForwardCaps`), and since L3 the crouch row to the crouch set's `CrouchSpeed` (250: the set's
+  own crouch, else the one it borrows, `GetCrouchSet`; FVCGaitCaps' `Crouch`), the accelerations, the braking and the
+  rates as they are. The caps
   come from the held item, replicated state: `AVCCharacterBase::UpdateClipGaitCaps` sets them on every machine
   (`SetClipGaitCaps`, from `RefreshActionSet` and `ApplyLocomotionAnimClass`; the set whose loops play, its own or
   Unarmed's). Whether they apply is the anim class this machine plays (`bWantsClipGaitCaps`), which travels in the saved
@@ -551,8 +553,8 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   before. While the character aims (raised or drawn) the Cycle plays the held set's aim cycle (`AimWalk`, `AimIdle`,
   `AimCycle`: the bow's hold `C`, side-on with the drawn shoulders, its walk under `B`'s jog; `UsesAimCycle`), so
   the hips do not twist away from the aim as the carry's strafes turn them.
-  The states (L2, 2026-11-10): Idle, TurnInPlace, Start, Cycle, Sprint, Stop, Jump, Fall, Land (the moving landing when
-  it touches down on the move), Swim; crouch is L3. The anim instance steps the state itself (`StepState`, one step an
+  The states (L2, 2026-11-10; L3 2026-11-11): Idle, TurnInPlace, Start, Cycle, Sprint, CrouchChange, Stop, Jump, Fall,
+  Land (the moving landing when it touches down on the move), Swim. The anim instance steps the state itself (`StepState`, one step an
   update along `GetStateTransitions`' list) and the graph's state machine follows it, each transition reading its
   target's bool (`bInIdle` ...), so the choices are C++ and tested. Each starts its clip as it begins and plays it by
   time (the packs have no distance curves; the graph evaluates `StartClip` at `StartTime` and so on): the start for the
@@ -577,6 +579,23 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   slot, foot placement, the foot-bone IK, look-at, off-hand IK), with one change: while the character moves the
   default slot's montages (attacks, digs, hit reacts) lay over the upper body on the stance's ramp
   (`ActionLegsWeight`), so a swing on the move keeps the legs running; standing they play over the whole body.
+  **The crouch** (L3, 2026-11-11). A clip set's crouch (`CrouchIdle`, `CrouchBegin`, `CrouchEnd`, the slow crouch walk
+  and the crouch walk by direction with their starts and stops, `AimCrouchWalk` and its starts, stops and idle for the
+  aim, `CrouchCycle` and `AimCrouchCycle`) is the bow's hold `B` (114 and 302 uu/s authored, the aim's hold `C` slow
+  crouch walk); a set without one names the set it borrows (`BorrowedCrouch`: SwordShield, TwoHand and Unarmed borrow
+  the bow's). Crouched (`bCrouchPose`), Idle plays the crouch set's crouch idle, Cycle its crouch cycle or, aiming, its
+  aim crouch cycle (`CycleChoice` 0-3: the slots' cycle, the aim cycle, the crouch cycle, the aim crouch cycle, each
+  inertialized), the starts and stops are its (`ChooseCrouchStart`, `ChooseCrouchStop`: the family that plays at the
+  cap), and a change at a stand plays its begin or end in `CrouchChange` (a change back mid-way plays the other from the
+  matching point). The pace (`ComputeCrouchPace`) has the slow crouch walk whole at `CrouchSlowSpeed` (150, 1.31) and
+  the crouch walk at `CrouchSpeed` (250, 0.83), the movement's crouch cap. Crouched the body turns procedurally (the
+  packs' turns stand). On a borrowed crouch the graph lays the set's own idle (`BorrowedUpperClip`) over the upper body
+  on the stance's ramp at `BorrowedCrouchWeight` (§3.3), so the bow's legs crouch under the sword's or the empty
+  hands' arms; `vc.Anim.SM.BorrowCrouch 0` plays the walk's loops instead. **The tunables** (L3): the anim instance's
+  `TransitionBlendSeconds`, `TurnInPlaceAngle`, `TurnPlayRate`, `BodyMaxOffset`, `StartExitSpeedFraction`,
+  `SprintEnterMargin`, `SprintMaxAngle`, `ReversalAngle` and the body's recovery each have a `vc.Anim.SM.*` override
+  (`Documentation/EDITOR_CONSOLE_GUIDE.md` §4). `ReversalAngle` (a stop the way the body went, the body held, then a
+  start the new way, on an input that far against the velocity) is off by default (the plan's L3 results).
 - **The content.** `Scripts/setup_character_layers.py` builds the interface, the layers, the montages (from the
   template mannequin's, Sword & Shield's, Bow and Arrow's, GASP's and VanillaLoop's sequences, a hit notify at the
   strike; the bow's draw a raise, a pull and a held loop in sections, `UVCAnimAuthoringLibrary::AppendMontageSegment`;

@@ -119,18 +119,22 @@ struct VOXELCHARACTERPLUGIN_API FVCGaitSettings
 
 /**
  * The forward caps a held set's locomotion clips run at (UVCLocomotionClipSet's WalkSpeed, RunSpeed, SprintSpeed; the
- * locomotion plan's D91, L2). 0 keeps the table's own row.
+ * locomotion plan's D91, L2; and the crouch set's CrouchSpeed, L3). 0 keeps the table's own row.
  */
 struct FVCGaitCaps
 {
 	float Walk = 0.f;
 	float Run = 0.f;
 	float Sprint = 0.f;
+	float Crouch = 0.f;
 
 	/** @return Whether any cap is set */
-	bool IsSet() const { return Walk > 0.f || Run > 0.f || Sprint > 0.f; }
+	bool IsSet() const { return Walk > 0.f || Run > 0.f || Sprint > 0.f || Crouch > 0.f; }
 
-	bool operator==(const FVCGaitCaps& Other) const { return Walk == Other.Walk && Run == Other.Run && Sprint == Other.Sprint; }
+	bool operator==(const FVCGaitCaps& Other) const
+	{
+		return Walk == Other.Walk && Run == Other.Run && Sprint == Other.Sprint && Crouch == Other.Crouch;
+	}
 };
 
 /**
@@ -202,8 +206,8 @@ struct VOXELCHARACTERPLUGIN_API FVCMovementTable
 	static FVCMovementTable Preset(EVCMovePreset Preset);
 
 	/**
-	 * The table with the walk, run and sprint rows at a held set's caps (FVCGaitSettings::WithForwardSpeed); the crouch's
-	 * row, the rates and the ramps unchanged (the locomotion plan's L2).
+	 * The table with the walk, run, sprint and crouch rows at a held set's caps (FVCGaitSettings::WithForwardSpeed); the
+	 * rates and the ramps unchanged (the locomotion plan's L2; the crouch's since L3).
 	 * @param Caps The caps; one of 0 keeps its row
 	 * @return The table
 	 */
