@@ -1,7 +1,8 @@
 # Locomotion State Machine Plan: the player's locomotion from the animation packs
 
 > **Agreed 2026-11-10.** Proposed and revised the same day; the user approved D86-D91 (§6) as recommended. L0 done
-> 2026-11-10 (§4 "L0 results": the bow carries hold `B`, D92; D91 revised and agreed); L1 next. Scope:
+> 2026-11-10 (§4 "L0 results": the bow carries hold `B`, D92; D91 revised and agreed); L1 built 2026-11-10 (§4 "L1
+> results": the graph under `vc.Anim.Locomotion 2`, motion matching unchanged); L2 next. Scope:
 > the player's locomotion played from the Essential Animation packs' clips through a state machine of our own, built up
 > one feature at a time as the content and the need arrive, with Game Animation Sample's motion matching kept selectable
 > beside it for comparison. The user's words: GASP is "a difficult system to tune for reliable smooth character behavior
@@ -275,6 +276,76 @@ SwordShield, TwoHand (and Tool as the two-handed stand-in, D51), Unarmed on the 
 tests: the clip choice by set, gait and direction; the stance weight 0 under a set's own locomotion; a set change.
 Done when every set walks, jogs and jumps in its own clips under `vc.Anim.Locomotion 2`, the draws and attacks play over
 the moving legs, the look-at and the bow's aim as under 1.
+
+#### L1 results (2026-11-10)
+
+Built on `claude/locomotion-l1` (issue draquel/UE5_PluginDev#403). What exists now is in `CHARACTER_SYSTEM.md`
+"Animation" › The state machine; the switch's rows are in the console guide §4.
+
+**The pieces.** `UVCLocomotionClipSet` (`Animation/VCLocomotionClipSet.h`): the idle, the walk, jog and run loops in eight
+directions with each gait's authored speed, the Cycle blend space, the jump, fall and landings, and D91's gait speeds
+(walk 120, run 400, sprint 700 on the packs' sets; 200, 500, 700 on Unarmed's, today's table, since the template's
+loops run twice the packs'), data only: the gait table does not read them until L2. `UVCActionAnimSet::LocomotionClips`
+names it. `UVCLocomotionAnimInstance` (`Core/VCLocomotionAnimInstance.h`) with the pure functions D89 asks for:
+`ResolveClips` (each family from the held set, else Unarmed's; the idle and the cycle as a pair), `ComputeStanceTarget`
+(0 under a set's own locomotion), `ApplySetChange` (the new set's idle and cycle into the slot not playing, flipped),
+`ComputeRules` (one bool per transition), and on the clip set `ChooseLoop` (the nearest direction a gait has, a
+missing gait from the nearest the set has, slower first; L2's starts and stops use it) and `GetCycleSamples` (what the
+script builds the Cycle from). `UVCAnimInstance` gained the held set's and Unarmed's clip sets in its input and a
+`GetStanceTarget` hook (the base class returns its target unchanged). The switch `vc.Anim.Locomotion 0|1|2`
+(`UVCSettings::PlayerStateMachineAnimClass`); `vc.Anim.MotionMatching N` sets it; the default stays 1. Tests
+`VoxelCharacter.Locomotion.ClipChoice`, `.StanceWeight`, `.SetChange`, `.Rules`.
+
+**The graph, by script.** `Scripts/setup_character_state_machine.py` builds four clip sets and their Cycle blend spaces
+(each set's walk and jog by local direction and speed, the idle along speed 0, Backward at both -180 and 180 so the
+axis wraps; on the clips' own skeleton) and `ABP_VCPlayerLocomotion`. Bow plays hold `B` (D92); SwordShield `SSH`;
+TwoHand `2H`, which the Tool set shares (D51); Unarmed the template's eight-way loops. The state machine is made with
+three new helpers in `UVCAnimAuthoringLibrary` (`AddState`, `SetEntryState`, `AddStateTransition`, which names each
+rule graph `From_to_To`, plus `RenameGraphNode` and `SetBlendSpaceSamples2D`): L0's gap, a state named in pasted text,
+does not arise. Idle, Cycle, Jump, Fall, Land, Swim, 18 transitions, all inertialized (0.2 s); Jump to Fall and Land
+to Idle at the clip's end. After it, `ABP_VoxelCharacter`'s chain is pasted as L0 found possible, so the layer, the
+slots and the IK are its nodes with its settings.
+
+Two things the plan did not foresee:
+- **The root.** The packs' clips carry their root motion in the root bone with the flag off (L0), and the engine locks
+  a clip's root only when that flag is on (or `bForceRootLock`): played as they are, the mesh walked off the capsule
+  and snapped back each loop. The graph zeroes the root's translation in its own space after the state machine
+  (a Transform Bone node), so the packs stay untouched; the turns' root yaw (L2) is left through.
+- **Attacks on the move.** The attacks, digs and hit reacts play in the default slot, over the whole body, in all three
+  graphs, so "attacks over the moving legs" needed more than the `UpperBodyAction` slot. In the new graph only, the
+  default slot's pose is laid over the upper body on the stance's ramp while the character moves (`ActionLegsWeight`,
+  eased; standing, the montage plays whole as authored). Motion matching keeps its full-body swing.
+
+**In PIE** (`CharacterTest`, `vc.Anim.Locomotion 2`, the weather clear and locked, the wind off, motion blur off; side
+views from `pie_camera`): on the low-poly body and on Kellan, Unarmed, Bow, SwordShield and Tool each idle, walk (the
+run's cap at 200), jog (500, the cycle at 1.63 of the packs' 306) and jump in their own clips; Bow's carry is `B`, both
+hands on the bow at the hips. No item carries the TwoHand set (both swords are SwordShield), so its clip set shows
+through the Tool set, which shares it. A set change flips the slot (read live: Unarmed in one slot, `2H` in the other,
+stance weight 0, play rate 1.635 at 500 uu/s). The sword's and the pickaxe's attack montages played on the move swing
+the upper body over running and walking legs (under 1 the swing takes the legs, as before); the bow's draw on the walk
+raises and aims the bow over walking legs, as under 1. The look-at: alpha 1 in both graphs; with the view 60 degrees
+right and 20 up, unarmed, the head ends 11 degrees from the view under 2 and 12 under 1 (63 and 64 with the look-at
+off). With the bow the node turns the head the same 51 degrees (its 50-degree clamp) under both, but hold `B`'s idle
+starts the head 28 degrees further down toward the bow than motion matching's pose with the bow's stance over it, so it
+ends 27 degrees short of the view against 0.5 under 1: the base pose, not the graph; for L3's pass (the clamp, or the
+look-at's weight on the bow's idle).
+
+**Motion matching unchanged.** `vox.Lane` under `vc.Anim.Locomotion 1` (`Scripts/qa/lane_pass.py`, `Tuned`, three runs on
+L1, one on the base, VoxelCharacterPlugin at dev 3a949df, built and run in the same checkout): every leg within a few
+uu/s of the base on both bodies, the stop 0.27 s and 67 uu on both. Two legs differ from L0's table on both sides alike
+(the low-poly body's "released, -Y" 231 against L0's 104, the whole lane's run 150 to 155 against 136; the strafe leg
+1.40 s against L0's 1.43): something between L0's checkout and dev 54e46bc moved them, not L1. The base's numbers are
+the comparison's from here (`Saved/QA/lane/l1_base_mm_summary.txt`).
+
+The new graph's lane, for L2's start (`Saved/QA/lane/l1_sm_summary.txt`; the gait table is still GASP's, no starts,
+stops or turns): the whole lane's slide per gait bucket, low-poly and Kellan, walk 258 and 289 uu/s, run 104 and 144
+(motion matching: 82 and 137, 152 and 168). The run already slides less; the walk, an idle and a walk blended under
+GASP's 200 uu/s walk with the packs' walk authored at 92, slides most, which D91's speeds (L2) address.
+
+The gate (`Scripts/qa/README.md`, "Any code"): the editor build with no warning (`build_warnings.py` against the base's
+build, 0 and 0); the headless suite 900 of 900 (the four new tests among them), no new warning kind (`logwarnings.py`);
+the non-unity build of `VoxelCharacterPlugin` and `VoxelCharacterEditor`, no error. No new finding: the look-at short
+of the view under hold `B` is L3's tuning, and the lane's move from L0's table is in dev, not in this change.
 
 ### L2: What the packs have between the loops (M)
 
