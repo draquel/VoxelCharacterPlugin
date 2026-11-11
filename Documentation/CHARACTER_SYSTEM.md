@@ -27,6 +27,7 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Core | `UVCAnimLayerInstance` | The parent of a stance layer that aims or plays montages of its own (the bow's): the body's montages in the layer's slots, the body's aim and upper-body montage weight copied each update |
 | Animation | `UVCActionMontageComponent`, `UVCActionAnimSet`, `UVCAnimNotify_ActionHit` | The action montages of both character classes: the owner's at input, everyone else's by multicast, hit reacts, deaths and get-ups from the combat events; a set's montages per action; the moment an action lands |
 | Animation | `UVCCharacterAppearance`, `UVCAppearanceComponent` | A body as data (a mesh, or a MetaHuman's Blueprint whose parts dress it) and the component that dresses both character classes in one (Appearance, below) |
+| Animation | `UVCLocomotionAnimInstance`, `UVCLocomotionClipSet` | The player's locomotion as a state machine of our own over the Essential Animation packs (`vc.Anim.Locomotion 2`; the locomotion state machine plan): the anim instance that resolves the held set's clips and computes the rules, and a set's full-body clips (Animation, below) |
 | Animation | `UVCLocomotionAnimSet` | An animal's locomotion for the creature template AnimBP: its blend space by speed, the run's own speed, its idle variant (NPCs, below) |
 | Animation | `FVCAnimNode_FootBoneIK` (its graph node `UVCAnimGraphNode_FootBoneIK` in `VoxelCharacterEditor`) | Foot placement on the foot bones, for a body without the Mannequin's `ik_foot` bones (a MetaHuman's) |
 | Animation | `UVCMotionMatchingAnimInstance`, `UVCGravityTrajectoryPredictor` (`VoxelCharacterAnimation`) | The player's motion matching: the parent of the Game Animation Sample's CMC AnimBP, which fills it from our pawn and does its world-Z arithmetic in the gravity frame; the trajectory predictor that turns about local up (Animation, below) |
@@ -496,7 +497,7 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   Animation Sample's CMC AnimBP that `Scripts/setup_character_locomotion.py` copies with its choosers
   (`UVCSettings::PlayerLocomotionAnimClass`). `AVCCharacterBase::ApplyLocomotionAnimClass` gives it to the mesh at
   BeginPlay on every machine that draws the player; a dedicated server and the automation tests keep the Blueprint's
-  `ABP_VoxelCharacter`, and `vc.Anim.MotionMatching 0` gives that back at once, the held items' layers linked again. It
+  `ABP_VoxelCharacter`, and `vc.Anim.Locomotion 0` gives that back at once, the held items' layers linked again. It
   plays GASP's databases unconverted through skeleton compatibility (D50): starts, stops, pivots, turns in place, jumps
   and landings, walking, running and sprinting, and crouching (the state machine's Crouch state has no pose, G140).
   - Its parent, `UVCMotionMatchingAnimInstance`, lives in the module `VoxelCharacterAnimation`, which carries PoseSearch
@@ -523,6 +524,28 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
     `RootRelativeAcceleration` in the copy (`UVCAnimInstance` has one of that name).
   - Cost for one running player (the CSV profiler): 0.50 ms of animation on the game thread and 1.39 ms on the animation
     worker, against 0.22 and 0.33 ms for `ABP_VoxelCharacter`.
+- **The state machine** (the player under `vc.Anim.Locomotion 2`; `LOCOMOTION_STATE_MACHINE_PLAN.md`, D86-D92, L1 built
+  2026-11-10; the default stays motion matching, 1, until its L4). `ABP_VCPlayerLocomotion`
+  (`Scripts/setup_character_state_machine.py`, `UVCSettings::PlayerStateMachineAnimClass`) plays the held action set's
+  full-body clips from the Essential Animation packs: each `UVCActionAnimSet` names a `UVCLocomotionClipSet`
+  (`LocomotionClips`: the idle, the walk, jog and run loops by direction with their authored speeds, the jump, fall and
+  landings, and the set's gait speeds, D91, data until L2), Bow on hold `B` (D92), SwordShield on `SSH`, TwoHand and
+  Tool on `2H`, Unarmed on the template Mannequin's loops. Its parent `UVCLocomotionAnimInstance` (a `UVCAnimInstance`,
+  so the layers, the montages and the IK read the same values) takes each family from the held set, else from
+  Unarmed's (D88, `ResolveClips`), gives the graph the idle and the Cycle (each set's loops in a 2D blend space by
+  local direction and speed) in two slots that a set change flips with an inertialized blend (`ApplySetChange`),
+  computes each transition's rule as one bool (`ComputeRules`) and the cycle's play rate (above the set's fastest loop
+  the steps quicken), and gives the held stance a weight of 0 while the set plays its own locomotion
+  (`ComputeStanceTarget`), so the clip's own arms show (D87); the bow's aim branch in its layer lays over them as
+  before. While the character aims (raised or drawn) the Cycle plays the held set's aim cycle (`AimWalk`, `AimIdle`,
+  `AimCycle`: the bow's hold `C`, side-on with the drawn shoulders, its walk under `B`'s jog; `UsesAimCycle`), so
+  the hips do not twist away from the aim as the carry's strafes turn them. The states: Idle, Cycle, Jump, Fall, Land (the moving landing when it touches down on the move), Swim; starts,
+  stops and turns are L2, crouch L3. After the state machine the graph zeroes the root bone's translation (the packs
+  carry their root motion in the root with the root-motion flag off, which would walk the mesh off the capsule), then
+  an Inertialization node and `ABP_VoxelCharacter`'s own chain, pasted (the layer, `UpperBodyAction`, the default
+  slot, foot placement, the foot-bone IK, look-at, off-hand IK), with one change: while the character moves the
+  default slot's montages (attacks, digs, hit reacts) lay over the upper body on the stance's ramp
+  (`ActionLegsWeight`), so a swing on the move keeps the legs running; standing they play over the whole body.
 - **The content.** `Scripts/setup_character_layers.py` builds the interface, the layers, the montages (from the
   template mannequin's, Sword & Shield's, Bow and Arrow's, GASP's and VanillaLoop's sequences, a hit notify at the
   strike; the bow's draw a raise, a pull and a held loop in sections, `UVCAnimAuthoringLibrary::AppendMontageSegment`;

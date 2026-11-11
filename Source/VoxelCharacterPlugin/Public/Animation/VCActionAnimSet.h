@@ -9,6 +9,7 @@
 #include "VCActionAnimSet.generated.h"
 
 class UAnimMontage;
+class UVCLocomotionClipSet;
 
 /** An action a character plays a montage for (character animation P3). */
 UENUM(BlueprintType)
@@ -197,6 +198,14 @@ public:
 	/** Loosing the arrow. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UAnimMontage> Release;
+
+	/**
+	 * The set's own full-body locomotion under ABP_VCPlayerLocomotion (vc.Anim.Locomotion 2; the locomotion state machine
+	 * plan's D87): while it is held the graph plays these clips and the set's stance layer gives way to them (its
+	 * StanceWeight 0). Empty: the base set's (Unarmed's) clips with the stance laid over them, as under the other graphs.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UVCLocomotionClipSet> LocomotionClips;
 
 	/** Taking this set's weapon from a sheath and putting it back, per sheath (the equipment sheathing plan, D79). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")

@@ -13,6 +13,7 @@ class UBlendSpace;
 class UVCActionMontageComponent;
 class UVCAppearanceComponent;
 class UVCLocomotionAnimSet;
+class UVCLocomotionClipSet;
 
 /**
  * What UVCAnimInstance reads from its character on the game thread, every vector in world space. The rest of the update
@@ -105,6 +106,12 @@ struct FVCAnimInput
 
 	/** The character aims a ranged weapon (IVCAnimatedCharacter::IsAnimAiming): the bow raised. */
 	bool bAiming = false;
+
+	/** The held action set's full-body locomotion (UVCActionAnimSet::LocomotionClips), or null. A data asset. */
+	const UVCLocomotionClipSet* LocomotionClips = nullptr;
+
+	/** The base set's (Unarmed's) locomotion: what plays for a family the held set lacks (D88), or null. */
+	const UVCLocomotionClipSet* BaseLocomotionClips = nullptr;
 };
 
 /**
@@ -398,6 +405,15 @@ public:
 	float LookAtMaxAngle = 110.f;
 
 protected:
+	/**
+	 * The held stance's weight the update eases StanceWeight toward, for a subclass to change (UVCLocomotionAnimInstance:
+	 * none while the held set plays its own locomotion).
+	 * @param Input      This update's input
+	 * @param BaseTarget The target from the ground, the sprint and vc.Anim.Stance (0 to 1)
+	 * @return The target (0 to 1); BaseTarget here
+	 */
+	virtual float GetStanceTarget(const FVCAnimInput& Input, float BaseTarget) const { return BaseTarget; }
+
 	/** @return The input NativeUpdateAnimation gathered this update; null when there was no character to read */
 	const FVCAnimInput* GetGatheredInput() const { return bHasGatheredInput ? &GatheredInput : nullptr; }
 

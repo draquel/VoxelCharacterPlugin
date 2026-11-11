@@ -110,8 +110,8 @@ namespace
 		return ChunkMgr && UVCBlockInteractionComponent::ShowsBlockFeedback(ChunkMgr->GetConfiguration());
 	}
 
-	/** vc.Anim.MotionMatching changed: every player in play takes the locomotion it now names. */
-	void OnMotionMatchingChanged(IConsoleVariable* Variable)
+	/** vc.Anim.Locomotion changed: every player in play takes the locomotion it now names. */
+	void OnLocomotionChanged(IConsoleVariable* Variable)
 	{
 		if (!GEngine)
 		{
@@ -129,10 +129,22 @@ namespace
 		}
 	}
 
+	TAutoConsoleVariable<int32> CVarAnimLocomotion(
+		TEXT("vc.Anim.Locomotion"), 1,
+		TEXT("The player's locomotion: 0 the player Blueprint's own anim class (ABP_VoxelCharacter), 1 motion matching (UVCSettings::PlayerLocomotionAnimClass, character animation P5), 2 the state machine over the packs' clips (UVCSettings::PlayerStateMachineAnimClass, the locomotion state machine plan); a class that does not load plays the Blueprint's. Applies at once to every player in play."),
+		FConsoleVariableDelegate::CreateStatic(&OnLocomotionChanged),
+		ECVF_Default);
+
+	/** vc.Anim.MotionMatching, the switch's name before the state machine: sets vc.Anim.Locomotion to its value. */
+	void OnMotionMatchingAliasChanged(IConsoleVariable* Variable)
+	{
+		CVarAnimLocomotion->Set(Variable->GetInt(), ECVF_SetByConsole);
+	}
+
 	TAutoConsoleVariable<int32> CVarAnimMotionMatching(
 		TEXT("vc.Anim.MotionMatching"), 1,
-		TEXT("The player's locomotion: 1 motion matching (UVCSettings::PlayerLocomotionAnimClass, character animation P5) when it loads, 0 the player Blueprint's own anim class (ABP_VoxelCharacter's state machine). Applies at once to every player in play."),
-		FConsoleVariableDelegate::CreateStatic(&OnMotionMatchingChanged),
+		TEXT("The old name of vc.Anim.Locomotion (0 the Blueprint's anim class, 1 motion matching, 2 the state machine): setting it sets that switch. Read vc.Anim.Locomotion for the locomotion in force."),
+		FConsoleVariableDelegate::CreateStatic(&OnMotionMatchingAliasChanged),
 		ECVF_Default);
 }
 
@@ -1779,29 +1791,32 @@ void AVCCharacterBase::ApplyLocomotionAnimClass()
 		BlueprintAnimClass = MeshComponent->GetAnimClass();
 	}
 
-	// The appearance's anim class, else the project's motion matching (character animation P6), on every machine that
-	// draws the player; a dedicated server and the automation tests keep the Blueprint's state machine (nothing there
-	// reads a pose, and the databases are large to load)
+	// The appearance's anim class, else the class vc.Anim.Locomotion names (1 motion matching, character animation P6;
+	// 2 the state machine, the locomotion state machine plan), on every machine that draws the player; a dedicated server
+	// and the automation tests keep the Blueprint's state machine (nothing there reads a pose, and the databases are
+	// large to load)
 	TSubclassOf<UAnimInstance> Wanted = BlueprintAnimClass;
-	TSoftClassPtr<UAnimInstance> MotionMatching = UVCSettings::Get().PlayerLocomotionAnimClass;
-	if (const UVCCharacterAppearance* Worn = AppearanceComponent ? AppearanceComponent->GetAppearance() : nullptr; Worn && !Worn->AnimClass.IsNull())
+	const int32 Mode = CVarAnimLocomotion.GetValueOnGameThread();
+	TSoftClassPtr<UAnimInstance> Named = Mode == 2 ? UVCSettings::Get().PlayerStateMachineAnimClass
+		: (Mode == 1 ? UVCSettings::Get().PlayerLocomotionAnimClass : TSoftClassPtr<UAnimInstance>());
+	if (const UVCCharacterAppearance* Worn = AppearanceComponent ? AppearanceComponent->GetAppearance() : nullptr;
+		Worn && !Worn->AnimClass.IsNull() && !Named.IsNull())
 	{
-		MotionMatching = Worn->AnimClass;
+		Named = Worn->AnimClass;
 	}
-	if (CVarAnimMotionMatching.GetValueOnGameThread() != 0 && !MotionMatching.IsNull()
-		&& GetNetMode() != NM_DedicatedServer && !GIsAutomationTesting)
+	if (!Named.IsNull() && GetNetMode() != NM_DedicatedServer && !GIsAutomationTesting)
 	{
-		if (UClass* Loaded = MotionMatching.LoadSynchronous())
+		if (UClass* Loaded = Named.LoadSynchronous())
 		{
 			Wanted = Loaded;
 		}
 		else
 		{
-			static bool bWarned = false;
-			UE_CLOG(!bWarned, LogVoxelCharacter, Warning,
-				TEXT("The player's motion-matching AnimBP %s does not load (Scripts/setup_character_locomotion.py builds it): the Blueprint's own plays"),
-				*MotionMatching.ToString());
-			bWarned = true;
+			static TSet<int32> WarnedModes;
+			UE_CLOG(!WarnedModes.Contains(Mode), LogVoxelCharacter, Warning,
+				TEXT("The player's locomotion AnimBP %s (vc.Anim.Locomotion %d) does not load (Scripts/setup_character_locomotion.py or setup_character_state_machine.py builds it): the Blueprint's own plays"),
+				*Named.ToString(), Mode);
+			WarnedModes.Add(Mode);
 		}
 	}
 	if (!Wanted || MeshComponent->GetAnimClass() == Wanted)

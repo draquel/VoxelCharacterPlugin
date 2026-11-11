@@ -40,10 +40,18 @@ public:
 	/**
 	 * The player's motion-matching AnimBP (character animation P5): the Game Animation Sample's CMC AnimBP on
 	 * UVCMotionMatchingAnimInstance, built by Scripts/setup_character_locomotion.py. The player plays it while
-	 * vc.Anim.MotionMatching is 1 and it loads; otherwise, and on a dedicated server, its Blueprint's own anim class.
+	 * vc.Anim.Locomotion is 1 and it loads; otherwise, and on a dedicated server, its Blueprint's own anim class.
 	 */
 	UPROPERTY(config, EditAnywhere, Category = "Animation")
 	TSoftClassPtr<UAnimInstance> PlayerLocomotionAnimClass;
+
+	/**
+	 * The player's state-machine AnimBP (the locomotion state machine plan, D86): ABP_VCPlayerLocomotion on
+	 * UVCLocomotionAnimInstance, the packs' clips by the held action set, built by Scripts/setup_character_state_machine.py.
+	 * The player plays it while vc.Anim.Locomotion is 2 and it loads; otherwise, and on a dedicated server, its Blueprint's own.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Animation")
+	TSoftClassPtr<UAnimInstance> PlayerStateMachineAnimClass;
 
 	/**
 	 * The player's body where nothing more particular names one (character animation P6): the project's choice, by its
