@@ -3,7 +3,8 @@
 > **Agreed 2026-11-10.** Proposed and revised the same day; the user approved D86-D91 (§6) as recommended. L0 done
 > 2026-11-10 (§4 "L0 results": the bow carries hold `B`, D92; D91 revised and agreed); L1 built 2026-11-10 (§4 "L1
 > results": the graph under `vc.Anim.Locomotion 2`, the bow's `C` as the walk while aiming, motion matching
-> unchanged); L2 next. Scope:
+> unchanged); L2 built 2026-11-10 (§4 "L2 results": starts, stops, turns, the sprint, the held set's gait caps); L3
+> next. Scope:
 > the player's locomotion played from the Essential Animation packs' clips through a state machine of our own, built up
 > one feature at a time as the content and the need arrive, with Game Animation Sample's motion matching kept selectable
 > beside it for comparison. The user's words: GASP is "a difficult system to tune for reliable smooth character behavior
@@ -372,6 +373,111 @@ of the view under hold `B` is L3's tuning, and the lane's move from L0's table i
 
 Start, Stop, TurnInPlace from the packs, the missing-clip rules (§3.3), the run as the sprint, the gait speeds (D91).
 Done when `vox.Lane` runs clean on both bodies with each set and the stops land within the gait table's distance.
+
+#### L2 results (2026-11-10)
+
+Built on `claude/locomotion-l2` (issue draquel/UE5_PluginDev#404). What exists now is in `CHARACTER_SYSTEM.md`
+"Animation" › The state machine and "Movement" › The held set's caps.
+
+**The state in C++.** L1's eight rule bools became the anim instance's own state: `StepState` (pure) takes one step an
+update along `GetStateTransitions`' 48 transitions, and the graph's ten states (Idle, TurnInPlace, Start, Cycle, Sprint,
+Stop, Jump, Fall, Land, Swim) follow it, each transition reading its target's bool (`bInStart` ...); the script builds
+the transitions from that list, so the two cannot drift (a test steps 20,000 random inputs from every state and finds no
+step off the list). Jump to Fall and Land to Idle moved from the graph's automatic rules to the step (the clip's
+length less the blend).
+
+**Starts, stops and turns, by time.** The packs have no distance curves (L0), so each plays by time from a clip the
+anim instance chooses as its state begins (`UVCLocomotionClipSet::ChooseStart`, `ChooseStop`, `ChooseTurn`) and
+evaluates at a time it keeps (sequence evaluators in the graph). §3.3 as planned: the sword sets' walk starts and stops
+are their jog's at the walk's rate, the run's stop is forward only (off forward, the jog's), Unarmed inertializes
+between the states and turns procedurally. Two choices the plan did not spell out:
+- *Starts in orient mode go forward.* The gait table turns the capsule instantly to the input (GASP's), so the body
+  starts forward and eases round (below); the packs' directional starts are for strafing, where they play by the
+  input's angle from the body.
+- *A stop is entered where its travel left is the braking distance* (`FindStopEntryTime`: the root's travel read from
+  the clip's root track, which the packs keep), so the feet land where the capsule stops without a distance curve.
+  `vox.Stop` from the run's 400: 0.22 s and 43 uu on both bodies, the table's 40 uu (400^2 / 2 / 2000) and a frame; the
+  bow's jog stop, 50 uu long, enters at 0.08 s of its 1.17.
+
+**The body's heading.** `RootYawOffset` is now the graph's root yaw (a Rotate Root Bone after the inertialization; the
+root's own rotation is locked with its translation). Standing, it grows as the capsule turns (the bow drawn: the view
+leads the capsule); past 60 degrees a turn plays (the 90, the 180 from 135) and its clip's root yaw, scaled to the
+offset it began with, unwinds it; a set without turns eases it out (the procedural turn). Moving, it eases out at
+`TurnInPlaceRecoverySpeed` after the capsule's instant yaw, up to a half turn under this graph (`TurnInPlaceMaxOffset`
+180; the other graphs keep 90): a pivot swings the body round instead of snapping it, the cycles step by the velocity's
+angle from the body (`CycleDirection`) and the aim layer aims from it (`AimYaw` less the offset).
+
+**The paces and the sprint (D91).** The Cycle's blend space keeps its samples at the authored speeds; the anim instance
+gives it a blend speed and a rate from a ladder of (cap, authored) points (`ComputePace`), so at a gait's cap its loops
+play whole at cap over authored (the packs' walk at 120 / 92 = 1.30, the jog at 400 / 302 = 1.32; Unarmed's at 200 / 300
+and 500 / 600, 0.67 and 0.83), between caps both interpolate, past the last the clips quicken. The sprint is a state
+playing `BS_VCSprint_<Set>` (a 1D blend space, Run_01 at its authored speed to Run_02 at 920), entered past the run's
+cap with the sprint gait, forward of the body; at 700 it blends the two runs at a rate of 1. Unarmed has no runs: its
+jog quickens (§3.3).
+
+**The caps.** The movement scales its walk, run and sprint rows to the held set's clip set's caps (120, 400, 700 on
+the packs; Unarmed 200, 500, 700), strafe and back in proportion, only while the player plays this graph: the caps
+come from the held item (replicated, set on every machine by `AVCCharacterBase::UpdateClipGaitCaps`), whether they
+apply travels in the saved move (`FLAG_Custom_3`), so a dedicated server, which plays the Blueprint's graph, applies
+the predicting client's. Motion matching, the Blueprint's graph and the NPCs are untouched (`ResolveGaitTable`; the
+mode-1 lane below matches L1's base).
+
+**In PIE** (`CharacterTest`, the weather clear and locked, the wind off, side views in slow motion,
+`Saved/QA/l2/*.png`): on the low-poly body and on Kellan, Bow, SwordShield, Tool and Unarmed each start (the packs'
+start leaning into the first step; Unarmed inertialized), stop (planted where the capsule stops; Unarmed inertialized)
+and turn in place (the bow drawn with the view turned 90 degrees; the other sets with the capsule put in strafe by hand,
+since only the bow's draw turns a standing capsule in play; Unarmed's procedural turn). The probe over a lane (the
+anim instance read every few frames): Start to Cycle at 0.24-0.3 s into the jog's start, pivots easing the body round
+in about 0.3 s, the strafe at the scaled cap (280).
+
+**The lane** (`Scripts/qa/lane_pass.py`, `Tuned`, the bow in hand, three runs each under `vc.Anim.Locomotion 2` and
+`1` in the same session, `Saved/QA/lane/l2_sm_r*` and `l2_mm_r*`; the mean, the range in brackets; uu/s, relative as
+C0's measure is):
+
+| Leg | Low-poly, 2 | Low-poly, 1 | Kellan, 2 | Kellan, 1 |
+|---|---|---|---|---|
+| run-up +X | 101 (51-193) | 122 (119-127) | 94 (89-97) | 166 (161-175) |
+| pivot 90 to +Y | 77 (56-101) | 145 (140-147) | 80 (70-98) | 127 (123-132) |
+| pivot 90 back to +X | 64 (42-94) | 138 (133-148) | 97 (57-126) | 67 (60-72) |
+| pivot 180 to -X | 178 (162-206) | 160 (160-160) | 227 (224-232) | 140 (136-143) |
+| pivot 180 back to +X | 145 (135-157) | 74 (74-74) | 199 (195-202) | 184 (176-188) |
+| strafe +Y, bow drawn | 136 (62-263) | 83 (83-83) | 79 (76-82) | 181 (179-184) |
+| released, -Y | 147 (122-180) | 231 (231-231) | 184 (180-187) | 204 (166-230) |
+| straight +X | 119 (58-234) | 137 (137-137) | 77 (72-82) | 128 (86-206) |
+| whole lane, walk bucket | 215 (196-240) | 82 (82-82) | 246 (242-252) | 134 (132-138) |
+| whole lane, run bucket | 88 (56-142) | 155 (154-157) | 78 (77-80) | 167 (164-170) |
+| `vox.Stop` | 0.22 s, 43 uu from 400 | 0.27 s, 67 uu from 500 | 0.22 s, 43 uu from 400 | 0.27 s, 67 uu from 500 |
+
+Motion matching's numbers are L1's base (`l1_base_mm_summary.txt`) within a few uu/s: unaffected. The state machine's
+run slides about half as much as motion matching's on both bodies, and its walk bucket (the slow parts: starts, stops,
+the reversals) has come down from L1's 258 and 289 to 215 and 246 but stays above motion matching's 82 and 134; the
+180 pivots are where it slides most (no pivot clips: the body swings round over a reversal), and the low-poly body's
+drawn strafe and last straight vary between runs (62-263, 58-234) where Kellan's do not.
+
+Each other set once, low-poly / Kellan (`l2_sm_ID_Weapon_*`, `l2_sm_none`; `l2_mm_none` for Unarmed under 1): every
+leg ran and every stop landed within the table's distance (43 uu from 400; Unarmed 67 from 500).
+
+| Set | run bucket | walk bucket | 180 pivots, there and back |
+|---|---|---|---|
+| SwordShield | 116 / 138 | 313 / 334 | 209, 208 / 224, 272 |
+| Tool (`2H`) | 85 / 115 | 313 / 320 | 196, 180 / 218, 272 |
+| Unarmed, 2 | 210 / 258 | 311 / 287 | 258, 309 / 298, 357 |
+| Unarmed, 1 | 174 / 168 | 68 / 130 | 160, 74 / 143, 190 |
+
+Unarmed is the weak set, as §7 expected: the template's loops are authored at 300 and 600 and played at 0.67 and 0.83,
+and their root speed varies about 13 % within a cycle (the jog's root covers 231 to 296 uu a quarter; the packs' are
+even), which a constant capsule speed cannot follow; its pack (§5) is the fix, not the graph.
+
+The gate (`Scripts/qa/README.md`, "Any code"): the editor build with no warning (`build_warnings.py` against L1's, 0
+and 0); the headless suite 904 of 904 (`Locomotion.States`, `.Pace`, `.Transitions`, `.Instance` and
+`Movement.GaitClipCaps` new, L1's `.Rules` folded into `.States`), no new warning kind (`logwarnings.py`: one more line of
+the `FPlayWorld` helper's `CleanupWorld ... missing call to EndPlay`, which `VCAimTurnWorld` already logs, under the new
+test's world); the non-unity build of `VoxelCharacterPlugin`, no error. No new finding.
+
+**Left for L3** (the tuning pass): the reversals (a stop then a start on an input past 135 degrees, or a faster body
+swing; the 180 pivots slide most), the turn's rate (`TurnPlayRate` 1.25) and angle (60), the start's hand-over (90 % of
+the cap) and the sprint's entry, as properties with `vc.Anim.SM.*` overrides. The look-at short of the view under hold
+`B` (L1) is unchanged.
 
 ### L3: Crouch and the tuning pass (M)
 

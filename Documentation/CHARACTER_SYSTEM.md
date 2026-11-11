@@ -285,6 +285,17 @@ re-mesh).
   runs (105-230 and 106-419 uu/s) as between any change tried, so `Tuned` is GASP's table verbatim and the preset is
   where the next pass's changes go. The numbers per leg: `CHARACTER_REFINEMENT_PLAN.md` §5, C4. Tests
   `VoxelCharacter.Movement.GaitTable`, `GaitTableApplied`.
+- **The held set's caps** (the locomotion state machine plan's L2, D91, 2026-11-10). Under the state machine
+  (`vc.Anim.Locomotion 2`) the packs' loops are authored at about 92 and 302 uu/s, so the walk, run and sprint rows
+  scale to the held set's `UVCLocomotionClipSet` (`WalkSpeed`, `RunSpeed`, `SprintSpeed`: 120, 400, 700 on the packs'
+  sets, 200, 500, 700 on the template Unarmed's), the strafe and backward caps in proportion
+  (`FVCMovementTable::WithForwardCaps`), the crouch, the accelerations, the braking and the rates as they are. The caps
+  come from the held item, replicated state: `AVCCharacterBase::UpdateClipGaitCaps` sets them on every machine
+  (`SetClipGaitCaps`, from `RefreshActionSet` and `ApplyLocomotionAnimClass`; the set whose loops play, its own or
+  Unarmed's). Whether they apply is the anim class this machine plays (`bWantsClipGaitCaps`), which travels in the saved
+  move (`FLAG_Custom_3`), so a server, whose graph is the Blueprint's, applies what the predicting client predicted.
+  Motion matching, the Blueprint's graph and the NPCs keep the table as it is (`ResolveGaitTable`). Test
+  `VoxelCharacter.Movement.GaitClipCaps`.
 - **The face-aim flip, eased** (C4). `AVCCharacterBase::SetFacesAim` (a bow's draw and release, the ranged ability on the
   server) used to flip `bOrientRotationToMovement` and `bUseControllerDesiredRotation` in one frame; with the table's
   instant ground yaw that would snap the capsule up to 180 degrees under the mesh. `UVCMovementComponent::SetFacesAim`
@@ -528,21 +539,39 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   2026-11-10; the default stays motion matching, 1, until its L4). `ABP_VCPlayerLocomotion`
   (`Scripts/setup_character_state_machine.py`, `UVCSettings::PlayerStateMachineAnimClass`) plays the held action set's
   full-body clips from the Essential Animation packs: each `UVCActionAnimSet` names a `UVCLocomotionClipSet`
-  (`LocomotionClips`: the idle, the walk, jog and run loops by direction with their authored speeds, the jump, fall and
-  landings, and the set's gait speeds, D91, data until L2), Bow on hold `B` (D92), SwordShield on `SSH`, TwoHand and
+  (`LocomotionClips`: the idle, the walk, jog and run loops by direction with their authored speeds, the fast run, the
+  starts and stops by direction, the run's stop, the turns in place, the jump, fall and landings, and the set's gait
+  caps, D91, which the movement scales to: "Movement"), Bow on hold `B` (D92), SwordShield on `SSH`, TwoHand and
   Tool on `2H`, Unarmed on the template Mannequin's loops. Its parent `UVCLocomotionAnimInstance` (a `UVCAnimInstance`,
   so the layers, the montages and the IK read the same values) takes each family from the held set, else from
   Unarmed's (D88, `ResolveClips`), gives the graph the idle and the Cycle (each set's loops in a 2D blend space by
   local direction and speed) in two slots that a set change flips with an inertialized blend (`ApplySetChange`),
-  computes each transition's rule as one bool (`ComputeRules`) and the cycle's play rate (above the set's fastest loop
-  the steps quicken), and gives the held stance a weight of 0 while the set plays its own locomotion
+  steps the state (`StepState`, below) and gives the cycle its pace, and gives the held stance a weight of 0 while the set plays its own locomotion
   (`ComputeStanceTarget`), so the clip's own arms show (D87); the bow's aim branch in its layer lays over them as
   before. While the character aims (raised or drawn) the Cycle plays the held set's aim cycle (`AimWalk`, `AimIdle`,
   `AimCycle`: the bow's hold `C`, side-on with the drawn shoulders, its walk under `B`'s jog; `UsesAimCycle`), so
-  the hips do not twist away from the aim as the carry's strafes turn them. The states: Idle, Cycle, Jump, Fall, Land (the moving landing when it touches down on the move), Swim; starts,
-  stops and turns are L2, crouch L3. After the state machine the graph zeroes the root bone's translation (the packs
-  carry their root motion in the root with the root-motion flag off, which would walk the mesh off the capsule), then
-  an Inertialization node and `ABP_VoxelCharacter`'s own chain, pasted (the layer, `UpperBodyAction`, the default
+  the hips do not twist away from the aim as the carry's strafes turn them.
+  The states (L2, 2026-11-10): Idle, TurnInPlace, Start, Cycle, Sprint, Stop, Jump, Fall, Land (the moving landing when
+  it touches down on the move), Swim; crouch is L3. The anim instance steps the state itself (`StepState`, one step an
+  update along `GetStateTransitions`' list) and the graph's state machine follows it, each transition reading its
+  target's bool (`bInIdle` ...), so the choices are C++ and tested. Each starts its clip as it begins and plays it by
+  time (the packs have no distance curves; the graph evaluates `StartClip` at `StartTime` and so on): the start for the
+  gait and the input's direction from the body (forward in orient mode, where the capsule turns to the input; by
+  direction in strafe), handing over to the cycle at 90 % of the cap or its clip's end; the stop for the gait and the
+  direction, entered where its root's travel left is the capsule's braking distance (`FindStopEntryTime`), so its feet
+  land where the capsule stops; a turn when the body stands 60 degrees or more off the facing (the 90, or the 180 from
+  135). `UVCLocomotionClipSet::ChooseStart`, `ChooseStop`, `ChooseTurn` hold §3.3's rules: the sword sets' walk starts
+  and stops are their jog's at the walk's rate, the run's stop is forward only, a set without a family inertializes
+  between the states, and a set without turns (Unarmed) eases the body round (the procedural turn). Each gait's loops
+  play whole at its cap at the cap over their authored speed (`ComputeCyclePace`: the Cycle's blend speed and play rate,
+  D91); the sprint plays the set's `Sprint` (Run_01 to Run_02 along speed, `ComputeSprintPace`) past the run's cap,
+  forward of the body. The body keeps its heading off the facing (`RootYawOffset`, up to a half turn under this graph):
+  standing, a turn in place unwinds it with its clip's root yaw scaled to the offset; moving, it eases out after the
+  capsule's instant ground yaw (the gait table's), so a pivot swings the body round rather than snapping it, and the
+  cycles step by the velocity's angle from the body (`CycleDirection`) and the aim layer aims from it (`AimYaw`). After
+  the state machine the graph zeroes the root bone's translation and rotation (the packs carry their root motion in the
+  root with the root-motion flag off, which would walk the mesh off the capsule; a turn's yaw comes back through the
+  offset), then an Inertialization node, the root turned by `RootYawOffset`, and `ABP_VoxelCharacter`'s own chain, pasted (the layer, `UpperBodyAction`, the default
   slot, foot placement, the foot-bone IK, look-at, off-hand IK), with one change: while the character moves the
   default slot's montages (attacks, digs, hit reacts) lay over the upper body on the stance's ramp
   (`ActionLegsWeight`), so a swing on the move keeps the legs running; standing they play over the whole body.
@@ -1015,7 +1044,9 @@ Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, World
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
 and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the sheaths'
 `EquipmentLoop.SheathSlots`, `SheathActionSet` (the set follows the drawn weapon, R and X, the snapshot's drawn state),
-`SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip` (the equipment sheathing plan's S2-S4). The feel is judged by hand on `/Game/PluginTesting/Tests/Character/CharacterTest`
+`SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip` (the equipment sheathing plan's S2-S4); the state
+machine's `Locomotion.ClipChoice`, `StanceWeight`, `SetChange` (L1), `States`, `Pace`, `Transitions`, `Instance` and
+`Movement.GaitClipCaps` (L2). The feel is judged by hand on `/Game/PluginTesting/Tests/Character/CharacterTest`
 (the plan's C0; `Scripts/setup_character_test.py` builds it: a flat floor with a measured lane, block steps and a ramp,
 a shooting range and a kit that hands out every held item): the game module's `vox.Lane` runs the lane hands-free with
 the foot slide per leg, `vox.Stop` measures a stop, `vox.FootSlide` the planted feet's drift; the QA rows are area F13.

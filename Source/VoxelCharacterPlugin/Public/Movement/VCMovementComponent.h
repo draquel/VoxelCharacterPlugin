@@ -103,11 +103,34 @@ struct VOXELCHARACTERPLUGIN_API FVCGaitSettings
 	 */
 	float MaxSpeedAtAngle(float AngleDegrees) const;
 
+	/**
+	 * The row with its forward speed set and its strafe and backward caps in proportion (the locomotion plan's L2, D91).
+	 * @param Forward The new forward cap (uu/s); 0 or less keeps the row
+	 * @return The scaled row
+	 */
+	FVCGaitSettings WithForwardSpeed(float Forward) const;
+
 	/** @return The row as a C++ initializer, "{ 500, 350, 300, 800, 500, 2000, 5, 1 }" (vc.Move.Print, to commit) */
 	FString ToString() const;
 
 	bool operator==(const FVCGaitSettings& Other) const;
 	bool operator!=(const FVCGaitSettings& Other) const { return !(*this == Other); }
+};
+
+/**
+ * The forward caps a held set's locomotion clips run at (UVCLocomotionClipSet's WalkSpeed, RunSpeed, SprintSpeed; the
+ * locomotion plan's D91, L2). 0 keeps the table's own row.
+ */
+struct FVCGaitCaps
+{
+	float Walk = 0.f;
+	float Run = 0.f;
+	float Sprint = 0.f;
+
+	/** @return Whether any cap is set */
+	bool IsSet() const { return Walk > 0.f || Run > 0.f || Sprint > 0.f; }
+
+	bool operator==(const FVCGaitCaps& Other) const { return Walk == Other.Walk && Run == Other.Run && Sprint == Other.Sprint; }
 };
 
 /**
@@ -177,6 +200,14 @@ struct VOXELCHARACTERPLUGIN_API FVCMovementTable
 
 	/** @return A preset's whole table */
 	static FVCMovementTable Preset(EVCMovePreset Preset);
+
+	/**
+	 * The table with the walk, run and sprint rows at a held set's caps (FVCGaitSettings::WithForwardSpeed); the crouch's
+	 * row, the rates and the ramps unchanged (the locomotion plan's L2).
+	 * @param Caps The caps; one of 0 keeps its row
+	 * @return The table
+	 */
+	FVCMovementTable WithForwardCaps(const FVCGaitCaps& Caps) const;
 
 	/** @return The table as the rows and rates vc.Move.Print logs, one line each */
 	FString ToString() const;
@@ -627,6 +658,34 @@ public:
 	/** Walk input state (saved-move flag FLAG_Custom_2). */
 	bool bWantsToWalk = false;
 
+	// --- The held set's gait caps (the locomotion state machine plan's L2, D91) ---
+	// Under the state machine (vc.Anim.Locomotion 2) the packs' loops are authored at about 92 and 302 uu/s, so the walk,
+	// run and sprint rows scale to the held set's clip set's caps (120, 400, 700 on the packs). The caps come from the
+	// held item, replicated state each machine holds (the character sets them); whether they apply is the predicting
+	// client's anim class, so it travels in the saved move and the server applies what the client predicted. Motion
+	// matching, the Blueprint's graph and the NPCs keep the table as it is.
+
+	/**
+	 * Set the caps the rows scale to while bWantsClipGaitCaps (the held set's clip set's, else the base set's).
+	 * @param Caps The caps
+	 */
+	void SetClipGaitCaps(const FVCGaitCaps& Caps) { ClipGaitCaps = Caps; }
+
+	/** @return The caps the character set */
+	const FVCGaitCaps& GetClipGaitCaps() const { return ClipGaitCaps; }
+
+	/** The player plays the state machine, so the clips' caps apply (saved-move flag FLAG_Custom_3). */
+	bool bWantsClipGaitCaps = false;
+
+	/**
+	 * Pure: the table one tick applies: the component's, at the clips' caps when they apply.
+	 * @param Table  The component's table
+	 * @param Caps   The held set's caps
+	 * @param bApply Whether the caps apply (bWantsClipGaitCaps)
+	 * @return The table in force
+	 */
+	static FVCMovementTable ResolveGaitTable(const FVCMovementTable& Table, const FVCGaitCaps& Caps, bool bApply);
+
 	/**
 	 * Set the engine's movement values from the gait table for this tick: the row's cap by the rotation mode and the
 	 * input's angle to the facing, the sprint's acceleration and friction by speed, the braking by whether there is
@@ -802,6 +861,9 @@ protected:
 
 	/** Base MaxWalkSpeed before GAS multiplier. Captured on BeginPlay. */
 	float BaseMaxWalkSpeed = 0.f;
+
+	/** The held set's gait caps (SetClipGaitCaps). */
+	FVCGaitCaps ClipGaitCaps;
 
 	/** The voxel world's bounds (WM-I5), cached once the chunk manager is found; unbounded until then. */
 	FVoxelWorldBounds CachedWorldBounds;

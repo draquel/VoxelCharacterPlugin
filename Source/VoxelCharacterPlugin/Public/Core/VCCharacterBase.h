@@ -985,6 +985,12 @@ protected:
 	/** Sets ActiveActionSet from the main-hand slot. */
 	void RefreshActionSet();
 
+	/**
+	 * Gives the movement the gait caps of the clips the state machine plays for the held set (its clip set's, else the
+	 * base set's; the locomotion plan's L2, D91). Held items are replicated state, so every machine sets the same caps.
+	 */
+	void UpdateClipGaitCaps();
+
 	/** Links the equipped items' anim layers again (after the mesh's anim class changed). */
 	void RelinkEquipmentAnimLayers();
 
