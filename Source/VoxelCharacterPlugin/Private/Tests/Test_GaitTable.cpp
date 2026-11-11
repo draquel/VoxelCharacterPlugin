@@ -284,6 +284,57 @@ bool FVCGaitTableAppliedTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
+// The held set's gait caps (the locomotion state machine plan's L2, D91): the walk, run and sprint rows at the clip set's
+// forward caps, the strafe and backward caps in proportion; only while the state machine plays (the saved-move flag);
+// and on a spawned player, the caps the character gives its movement and the row the tick applies.
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCGaitClipCapsTest, "VoxelCharacter.Movement.GaitClipCaps", VC_GAIT_TEST_FLAGS)
+
+bool FVCGaitClipCapsTest::RunTest(const FString& Parameters)
+{
+	const FVCMovementTable GASP = FVCMovementTable::Preset(EVCMovePreset::GASP);
+	FVCGaitCaps Caps;
+	Caps.Walk = 120.f;
+	Caps.Run = 400.f;
+	Caps.Sprint = 700.f;
+	const FVCMovementTable Packs = GASP.WithForwardCaps(Caps);
+	TestTrue(TEXT("The walk at 120, its strafe and back in proportion"),
+		Packs.Walk.MaxSpeedForward == 120.f && FMath::IsNearlyEqual(Packs.Walk.MaxSpeedStrafe, 108.f, 0.01f) && FMath::IsNearlyEqual(Packs.Walk.MaxSpeedBackward, 90.f, 0.01f));
+	TestTrue(TEXT("The run at 400"), Packs.Run.MaxSpeedForward == 400.f && FMath::IsNearlyEqual(Packs.Run.MaxSpeedStrafe, 280.f, 0.01f)
+		&& FMath::IsNearlyEqual(Packs.Run.MaxSpeedBackward, 240.f, 0.01f));
+	TestTrue(TEXT("The sprint at 700"), Packs.Sprint.MaxSpeedForward == 700.f && Packs.Sprint.MaxSpeedStrafe == 700.f);
+	TestTrue(TEXT("The crouch, the accelerations, the braking unchanged"), Packs.Crouch == GASP.Crouch
+		&& Packs.Run.MaxAcceleration == GASP.Run.MaxAcceleration && Packs.Run.BrakingDecelerationStopping == GASP.Run.BrakingDecelerationStopping);
+	FVCGaitCaps RunOnly;
+	RunOnly.Run = 450.f;
+	const FVCMovementTable Partial = GASP.WithForwardCaps(RunOnly);
+	TestTrue(TEXT("A cap of 0 keeps its row"), Partial.Walk == GASP.Walk && Partial.Sprint == GASP.Sprint && Partial.Run.MaxSpeedForward == 450.f);
+	TestTrue(TEXT("Not applied (motion matching, the Blueprint's graph): the table as it is"),
+		UVCMovementComponent::ResolveGaitTable(GASP, Caps, false).Run == GASP.Run);
+	TestTrue(TEXT("No caps: the table as it is"), UVCMovementComponent::ResolveGaitTable(GASP, FVCGaitCaps(), true).Run == GASP.Run);
+
+	VCTesting::FPlayWorld W(TEXT("VCGaitCapsWorld"), /*bDestroyActorsFirst=*/true);
+	AVCCharacterBase* Player = VCGaitTests::SpawnPlayer(W.World, FRotator::ZeroRotator);
+	UVCMovementComponent* Move = Player ? Cast<UVCMovementComponent>(Player->GetCharacterMovement()) : nullptr;
+	if (!TestNotNull(TEXT("The player has the voxel movement"), Move))
+	{
+		return false;
+	}
+	Move->SetMovementMode(MOVE_Walking);
+	Move->GaitTable = GASP;
+	TestFalse(TEXT("The tests' player plays the Blueprint's graph: the caps do not apply"), Move->bWantsClipGaitCaps);
+	Move->SetClipGaitCaps(Caps);
+	Move->ApplyGaitTable();
+	TestEqual(TEXT("Not applied: the run's 500"), Move->MaxWalkSpeed, 500.f);
+	Move->bWantsClipGaitCaps = true;
+	Move->ApplyGaitTable();
+	TestEqual(TEXT("Applied: the held set's 400"), Move->MaxWalkSpeed, 400.f);
+	Move->bWantsClipGaitCaps = false;
+	return true;
+}
+
+// ---------------------------------------------------------------------------
 // The eased face-aim flip: the flags change once the body has turned to within the tolerance of the view (or the time
 // is up), the capsule turning at AimTurnRate meanwhile; a release while moving turns back toward the movement; a flip
 // with nothing to turn through completes at once.

@@ -51,7 +51,30 @@ bool FVCGaitSettings::operator==(const FVCGaitSettings& Other) const
 		&& BrakingFrictionFactor == Other.BrakingFrictionFactor;
 }
 
+FVCGaitSettings FVCGaitSettings::WithForwardSpeed(float Forward) const
+{
+	FVCGaitSettings Out = *this;
+	if (Forward <= 0.f || MaxSpeedForward <= 0.f)
+	{
+		return Out;
+	}
+	const float Scale = Forward / MaxSpeedForward;
+	Out.MaxSpeedForward = Forward;
+	Out.MaxSpeedStrafe *= Scale;
+	Out.MaxSpeedBackward *= Scale;
+	return Out;
+}
+
 // ==================== FVCMovementTable ====================
+
+FVCMovementTable FVCMovementTable::WithForwardCaps(const FVCGaitCaps& Caps) const
+{
+	FVCMovementTable Out = *this;
+	Out.Walk = Walk.WithForwardSpeed(Caps.Walk);
+	Out.Run = Run.WithForwardSpeed(Caps.Run);
+	Out.Sprint = Sprint.WithForwardSpeed(Caps.Sprint);
+	return Out;
+}
 
 const FVCGaitSettings& FVCMovementTable::Row(EVCGait Gait) const
 {
@@ -411,13 +434,19 @@ FVCGaitValues UVCMovementComponent::ComputeGaitValues(const FVCMovementTable& Ta
 	return Out;
 }
 
+FVCMovementTable UVCMovementComponent::ResolveGaitTable(const FVCMovementTable& Table, const FVCGaitCaps& Caps, bool bApply)
+{
+	return bApply && Caps.IsSet() ? Table.WithForwardCaps(Caps) : Table;
+}
+
 void UVCMovementComponent::ApplyGaitTable()
 {
 	if (!bUseGaitTable || !UpdatedComponent)
 	{
 		return;
 	}
-	const FVCGaitValues Values = ComputeGaitValues(GaitTable, GetGait(), GetRotationMode(), IsMovingOnGround(), IsFalling(), Velocity,
+	const FVCMovementTable Table = ResolveGaitTable(GaitTable, ClipGaitCaps, bWantsClipGaitCaps);
+	const FVCGaitValues Values = ComputeGaitValues(Table, GetGait(), GetRotationMode(), IsMovingOnGround(), IsFalling(), Velocity,
 		Acceleration, UpdatedComponent->GetForwardVector(), FVCGravityFrame::GetUp(this), GASSpeedMultiplier, GroundFrictionScale);
 	RotationRate.Yaw = Values.RotationRate;
 	if (!Values.bRowApplies)

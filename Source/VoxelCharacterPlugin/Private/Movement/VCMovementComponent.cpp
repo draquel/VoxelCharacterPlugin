@@ -25,7 +25,10 @@
 
 namespace
 {
-	/** Saved move carrying the sprint, swim-rise and walk keys, so a client's predicted moves replay the same way (the gait table reads them, C4). */
+	/**
+	 * Saved move carrying the sprint, swim-rise and walk keys and whether the held set's gait caps apply, so a client's
+	 * predicted moves replay the same way (the gait table reads them, C4; the caps, the locomotion plan's L2).
+	 */
 	class FSavedMove_VC : public FSavedMove_Character
 	{
 	public:
@@ -34,6 +37,7 @@ namespace
 		uint8 bSavedWantsToSprint : 1;
 		uint8 bSavedWantsToAscend : 1;
 		uint8 bSavedWantsToWalk : 1;
+		uint8 bSavedWantsClipGaitCaps : 1;
 
 		virtual void Clear() override
 		{
@@ -41,6 +45,7 @@ namespace
 			bSavedWantsToSprint = 0;
 			bSavedWantsToAscend = 0;
 			bSavedWantsToWalk = 0;
+			bSavedWantsClipGaitCaps = 0;
 		}
 
 		virtual uint8 GetCompressedFlags() const override
@@ -58,6 +63,10 @@ namespace
 			{
 				Flags |= FLAG_Custom_2;
 			}
+			if (bSavedWantsClipGaitCaps)
+			{
+				Flags |= FLAG_Custom_3;
+			}
 			return Flags;
 		}
 
@@ -65,7 +74,7 @@ namespace
 		{
 			const FSavedMove_VC* Other = static_cast<const FSavedMove_VC*>(NewMove.Get());
 			if (bSavedWantsToSprint != Other->bSavedWantsToSprint || bSavedWantsToAscend != Other->bSavedWantsToAscend
-				|| bSavedWantsToWalk != Other->bSavedWantsToWalk)
+				|| bSavedWantsToWalk != Other->bSavedWantsToWalk || bSavedWantsClipGaitCaps != Other->bSavedWantsClipGaitCaps)
 			{
 				return false;
 			}
@@ -80,6 +89,7 @@ namespace
 				bSavedWantsToSprint = Movement->bWantsToSprint;
 				bSavedWantsToAscend = Movement->bWantsToAscend;
 				bSavedWantsToWalk = Movement->bWantsToWalk;
+				bSavedWantsClipGaitCaps = Movement->bWantsClipGaitCaps;
 			}
 		}
 
@@ -91,6 +101,7 @@ namespace
 				Movement->bWantsToSprint = bSavedWantsToSprint;
 				Movement->bWantsToAscend = bSavedWantsToAscend;
 				Movement->bWantsToWalk = bSavedWantsToWalk;
+				Movement->bWantsClipGaitCaps = bSavedWantsClipGaitCaps;
 			}
 		}
 	};
@@ -1124,6 +1135,7 @@ void UVCMovementComponent::UpdateFromCompressedFlags(uint8 Flags)
 	bWantsToSprint = (Flags & FSavedMove_Character::FLAG_Custom_0) != 0;
 	bWantsToAscend = (Flags & FSavedMove_Character::FLAG_Custom_1) != 0;
 	bWantsToWalk = (Flags & FSavedMove_Character::FLAG_Custom_2) != 0;
+	bWantsClipGaitCaps = (Flags & FSavedMove_Character::FLAG_Custom_3) != 0;
 }
 
 FNetworkPredictionData_Client* UVCMovementComponent::GetPredictionData_Client() const

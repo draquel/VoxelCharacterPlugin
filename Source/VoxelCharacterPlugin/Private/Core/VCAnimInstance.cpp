@@ -186,6 +186,8 @@ bool UVCAnimInstance::GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) co
 	OutInput.bCrouching = Movement->IsCrouching();
 	OutInput.bSwimming = Movement->IsSwimming();
 	OutInput.bFlying = Movement->IsFlying();
+	OutInput.MaxSpeed = Movement->GetMaxSpeed();
+	OutInput.bOrientToMovement = Movement->bOrientRotationToMovement;
 
 	// The head's target: an AI controller's focus (none when it has no focus), else the view's aim ahead.
 	OutInput.EyeLocation = Character->GetPawnViewLocation();
@@ -257,6 +259,7 @@ bool UVCAnimInstance::GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) co
 	if (const UVCMovementComponent* VCMovement = Cast<UVCMovementComponent>(Movement))
 	{
 		OutInput.bSprinting = VCMovement->IsSprinting();
+		OutInput.Gait = VCMovement->GetGait();
 		OutInput.SurfaceType = VCMovement->CurrentSurfaceType;
 		OutInput.WaterDepth = VCMovement->GetTerrainContext().WaterDepth;
 	}
@@ -343,6 +346,7 @@ void UVCAnimInstance::ComputeValues(const FVCAnimInput& Input)
 	{
 		Offset = FMath::FInterpTo(Offset, 0.0, DeltaSeconds, TurnInPlaceRecoverySpeed);
 	}
+	Offset = AdjustRootYawOffset(Input, Offset, bStanding);
 	Offset = FMath::Clamp(Offset, -double(TurnInPlaceMaxOffset), double(TurnInPlaceMaxOffset));
 	RootYawOffset = Offset;
 	BodyHeading = FQuat(Up, FMath::DegreesToRadians(Offset)).RotateVector(Forward);
@@ -380,6 +384,7 @@ void UVCAnimInstance::ComputeValues(const FVCAnimInput& Input)
 	const FRotator AimRelative = (FacingToWorld.Inverse() * Input.ControlRotation.Quaternion()).Rotator();
 	AimPitch = FMath::ClampAngle(AimRelative.Pitch, -90.f, 90.f);
 	AimYaw = FMath::ClampAngle(AimRelative.Yaw, -90.f, 90.f);
+	ViewYaw = FRotator::NormalizeAxis(AimRelative.Yaw);
 
 	// --- What the character is and holds ---
 	ViewMode = Input.ViewMode;

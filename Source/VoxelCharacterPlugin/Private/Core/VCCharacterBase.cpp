@@ -15,6 +15,8 @@
 #include "Animation/VCActionMontageComponent.h"
 #include "Animation/VCAppearanceComponent.h"
 #include "Animation/VCCharacterAppearance.h"
+#include "Animation/VCLocomotionClipSet.h"
+#include "Core/VCLocomotionAnimInstance.h"
 #include "Editing/VCBlockInteractionComponent.h"
 #include "Utilities/CGFCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
@@ -1776,6 +1778,29 @@ void AVCCharacterBase::RefreshActionSet()
 	}
 #endif
 	ActiveActionSet = PickActionSet(bHoldsItem, ItemActionSet);
+	UpdateClipGaitCaps();
+}
+
+void AVCCharacterBase::UpdateClipGaitCaps()
+{
+	UVCMovementComponent* VCMovement = Cast<UVCMovementComponent>(GetCharacterMovement());
+	if (!VCMovement || !ActionMontages)
+	{
+		return;
+	}
+	// The set whose loops play: the held set's own locomotion, else the base set's (UVCLocomotionAnimInstance::ResolveClips).
+	const UVCActionAnimSet* Held = ActionMontages->GetCurrentActionAnimSet();
+	const UVCActionAnimSet* Base = ActionMontages->FindActionAnimSet(VCGameplayTags::Equipment_AnimSet_Unarmed.GetTag());
+	const UVCLocomotionClipSet* Clips = Held && Held->LocomotionClips && Held->LocomotionClips->HasOwnLocomotion()
+		? Held->LocomotionClips.Get() : (Base ? Base->LocomotionClips.Get() : nullptr);
+	FVCGaitCaps Caps;
+	if (Clips)
+	{
+		Caps.Walk = Clips->WalkSpeed;
+		Caps.Run = Clips->RunSpeed;
+		Caps.Sprint = Clips->SprintSpeed;
+	}
+	VCMovement->SetClipGaitCaps(Caps);
 }
 
 void AVCCharacterBase::ApplyLocomotionAnimClass()
@@ -1819,6 +1844,13 @@ void AVCCharacterBase::ApplyLocomotionAnimClass()
 			WarnedModes.Add(Mode);
 		}
 	}
+	// The state machine's gait caps (D91) apply while this machine plays it; a server takes a remote player's from its
+	// saved moves (FLAG_Custom_3), so a dedicated server's Blueprint graph does not decide them
+	if (UVCMovementComponent* VCMovement = Cast<UVCMovementComponent>(GetCharacterMovement()))
+	{
+		VCMovement->bWantsClipGaitCaps = Wanted && Wanted->IsChildOf(UVCLocomotionAnimInstance::StaticClass());
+	}
+	UpdateClipGaitCaps();
 	if (!Wanted || MeshComponent->GetAnimClass() == Wanted)
 	{
 		return;

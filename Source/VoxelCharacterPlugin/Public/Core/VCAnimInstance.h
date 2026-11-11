@@ -14,6 +14,7 @@ class UVCActionMontageComponent;
 class UVCAppearanceComponent;
 class UVCLocomotionAnimSet;
 class UVCLocomotionClipSet;
+enum class EVCGait : uint8;
 
 /**
  * What UVCAnimInstance reads from its character on the game thread, every vector in world space. The rest of the update
@@ -50,6 +51,15 @@ struct FVCAnimInput
 	bool bCrouching = false;
 	bool bSwimming = false;
 	bool bSprinting = false;
+
+	/** The movement's gait (UVCMovementComponent::GetGait; the zero value, the walk, for another movement component). */
+	EVCGait Gait{};
+
+	/** The movement's speed cap this update (GetMaxSpeed: the gait table's row by direction, uu/s). */
+	float MaxSpeed = 0.f;
+
+	/** The capsule turns toward where it moves (else toward the view: the bow drawn, first person). */
+	bool bOrientToMovement = true;
 
 	/** The walking floor's surface normal; zero when there is no walkable floor. */
 	FVector FloorNormal = FVector::ZeroVector;
@@ -413,6 +423,19 @@ protected:
 	 * @return The target (0 to 1); BaseTarget here
 	 */
 	virtual float GetStanceTarget(const FVCAnimInput& Input, float BaseTarget) const { return BaseTarget; }
+
+	/**
+	 * The body's offset from the facing before it is clamped and kept, for a subclass to turn (UVCLocomotionAnimInstance:
+	 * a turn in place's clip, the procedural turn). Called once an update in ComputeValues.
+	 * @param Input     This update's input
+	 * @param Offset    The offset so far (degrees, positive to the right): kept while standing, easing to 0 otherwise
+	 * @param bStanding On the ground and slower than MovingSpeedThreshold
+	 * @return The offset; Offset here
+	 */
+	virtual double AdjustRootYawOffset(const FVCAnimInput& Input, double Offset, bool bStanding) { return Offset; }
+
+	/** The look direction's yaw from the facing before AimYaw's clamp (degrees, -180 to 180). */
+	float ViewYaw = 0.f;
 
 	/** @return The input NativeUpdateAnimation gathered this update; null when there was no character to read */
 	const FVCAnimInput* GetGatheredInput() const { return bHasGatheredInput ? &GatheredInput : nullptr; }
