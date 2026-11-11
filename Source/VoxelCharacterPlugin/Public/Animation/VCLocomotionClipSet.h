@@ -112,6 +112,24 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UBlendSpace> Cycle;
 
+	/**
+	 * The walk while aiming a ranged weapon (the bow's hold C, D92: side-on to the aim as an archer stands, so the hips
+	 * turn with the drawn shoulders), in the directions it has; empty for a set that aims no weapon.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Aim")
+	FVCLocomotionLoops AimWalk;
+
+	/** Standing while aiming (the bow's C idle); empty plays Idle at the aim cycle's speed 0. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Aim")
+	TObjectPtr<UAnimSequence> AimIdle;
+
+	/**
+	 * The cycle while aiming: GetCycleSamples(true), AimWalk in the walk's place and the Jog above it (a run while drawn
+	 * falls back to the jog, D88). Built by the script; empty for a set without AimWalk.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Aim")
+	TObjectPtr<UBlendSpace> AimCycle;
+
 	/** Leaving the ground upward. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UAnimSequenceBase> JumpStart;
@@ -180,12 +198,13 @@ public:
 	float GetCycleTopSpeed() const;
 
 	/**
-	 * The Cycle blend space's samples, so the script builds it from this asset's clips (the locomotion plan's L1): the idle
+	 * A cycle blend space's samples, so the script builds it from this asset's clips (the locomotion plan's L1): the idle
 	 * at speed 0 at every direction used, then each of Walk and Jog with an authored speed at (its direction's angle, that
 	 * speed); Backward is placed at both -180 and 180 so the axis wraps.
+	 * @param bAim         The aim cycle's: AimWalk in the walk's place and AimIdle as the idle, where the set has them
 	 * @param OutClips     The samples' clips
 	 * @param OutPositions Each sample's (direction, speed)
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Animation")
-	void GetCycleSamples(TArray<UAnimSequence*>& OutClips, TArray<FVector2D>& OutPositions) const;
+	void GetCycleSamples(bool bAim, TArray<UAnimSequence*>& OutClips, TArray<FVector2D>& OutPositions) const;
 };

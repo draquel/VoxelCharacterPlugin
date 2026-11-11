@@ -141,7 +141,7 @@ bool FVCLocomotion_ClipChoice::RunTest(const FString& Parameters)
 	// run stays out (the sprint is L2).
 	TArray<UAnimSequence*> Clips;
 	TArray<FVector2D> Positions;
-	Set->GetCycleSamples(Clips, Positions);
+	Set->GetCycleSamples(false, Clips, Positions);
 	TestEqual(TEXT("Two gaits of 7 samples, 7 idles"), Clips.Num(), 21);
 	TestEqual(TEXT("A position per clip"), Positions.Num(), Clips.Num());
 	TestTrue(TEXT("The walk forward at its speed"), Positions.Contains(FVector2D(0.0, 92.0)) && Clips[Positions.IndexOfByKey(FVector2D(0.0, 92.0))] == Set->Walk.Forward);
@@ -150,6 +150,22 @@ bool FVCLocomotion_ClipChoice::RunTest(const FString& Parameters)
 	TestTrue(TEXT("The idle at -180, speed 0"), Clips[Positions.IndexOfByKey(FVector2D(-180.0, 0.0))] == Set->Idle);
 	TestFalse(TEXT("No run sample"), Clips.Contains(Set->Run.Forward.Get()));
 	TestEqual(TEXT("The top speed is the jog's"), Set->GetCycleTopSpeed(), 302.f);
+	Set->GetCycleSamples(true, Clips, Positions);
+	TestEqual(TEXT("No aim walk: the aim cycle's samples are the cycle's"), Clips.Num(), 21);
+
+	// The aim cycle (the bow's hold C: side-on, no forward or backward loop): its walk and idle, the jog above them.
+	Set->AimWalk = SixWay(TEXT("Bow_C_Walk"), 91.5f);
+	Set->AimWalk.Forward = nullptr;
+	Set->AimWalk.Backward = nullptr;
+	Set->AimWalk.ForwardLeft = NewClip(TEXT("Bow_C_Walk_FL"));
+	Set->AimWalk.ForwardRight = NewClip(TEXT("Bow_C_Walk_FR"));
+	Set->AimIdle = NewClip(TEXT("Bow_C_Idle"));
+	Set->GetCycleSamples(true, Clips, Positions);
+	TestTrue(TEXT("The aim walk at its speed"), Clips[Positions.IndexOfByKey(FVector2D(45.0, 91.5))] == Set->AimWalk.ForwardRight);
+	TestFalse(TEXT("No carry walk in the aim cycle"), Clips.Contains(Set->Walk.Forward.Get()));
+	TestTrue(TEXT("The jog above it"), Clips[Positions.IndexOfByKey(FVector2D(0.0, 302.0))] == Set->Jog.Forward);
+	TestTrue(TEXT("The aim idle at speed 0"), Clips[Positions.IndexOfByKey(FVector2D(0.0, 0.0))] == Set->AimIdle);
+	TestEqual(TEXT("Six aim walks, seven jogs, nine idles"), Clips.Num(), 6 + 7 + 9);
 
 	// Each family from the held set, else the base set's.
 	UVCLocomotionClipSet* Base = NewSet(TEXT("Unarmed"));
@@ -159,6 +175,14 @@ bool FVCLocomotion_ClipChoice::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and its jump"), Resolved.JumpStart == Set->JumpStart && Resolved.FallLoop == Set->FallLoop);
 	TestTrue(TEXT("No moving landing: its standing one"), Resolved.LandMoving == Set->Land);
 	TestEqual(TEXT("The cycle's top speed"), Resolved.CycleTopSpeed, 302.f);
+	TestNull(TEXT("No aim cycle yet"), Resolved.AimCycle.Get());
+	Set->AimCycle = NewObject<UBlendSpace>(GetTransientPackage());
+	Resolved = UVCLocomotionAnimInstance::ResolveClips(Set, Base);
+	TestTrue(TEXT("The held set's aim cycle"), Resolved.AimCycle == Set->AimCycle);
+	TestTrue(TEXT("Aiming plays it"), UVCLocomotionAnimInstance::UsesAimCycle(true, Resolved));
+	TestFalse(TEXT("Not aiming does not"), UVCLocomotionAnimInstance::UsesAimCycle(false, Resolved));
+	Base->AimCycle = NewObject<UBlendSpace>(GetTransientPackage());
+	TestNull(TEXT("Never the base set's"), UVCLocomotionAnimInstance::ResolveClips(nullptr, Base).AimCycle.Get());
 
 	UVCLocomotionClipSet* JumpOnly = NewObject<UVCLocomotionClipSet>(GetTransientPackage());
 	JumpOnly->JumpStart = NewClip(TEXT("Partial_Jump"));

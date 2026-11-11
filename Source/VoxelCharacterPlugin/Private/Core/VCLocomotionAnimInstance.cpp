@@ -34,6 +34,7 @@ FVCLocomotionClips UVCLocomotionAnimInstance::ResolveClips(const UVCLocomotionCl
 		Clips.Cycle = Loops->Cycle;
 		Clips.CycleTopSpeed = Loops->GetCycleTopSpeed();
 	}
+	Clips.AimCycle = Clips.bOwnLocomotion ? Held->AimCycle.Get() : nullptr;
 	const auto Pick = [Held, Base](TObjectPtr<UAnimSequenceBase> UVCLocomotionClipSet::* Family) -> UAnimSequenceBase*
 	{
 		if (Held && Held->*Family)
@@ -53,6 +54,11 @@ FVCLocomotionClips UVCLocomotionAnimInstance::ResolveClips(const UVCLocomotionCl
 		Clips.LandMoving = Clips.Land;
 	}
 	return Clips;
+}
+
+bool UVCLocomotionAnimInstance::UsesAimCycle(bool bAiming, const FVCLocomotionClips& Clips)
+{
+	return bAiming && Clips.AimCycle != nullptr;
 }
 
 float UVCLocomotionAnimInstance::ComputeStanceTarget(float BaseTarget, bool bOwnLocomotion)
@@ -112,6 +118,8 @@ void UVCLocomotionAnimInstance::ComputeLocomotion(const FVCAnimInput& Input)
 	CycleB = Slots.CycleB;
 	bSlotB = Slots.bSlotB;
 	bOwnLocomotion = Clips.bOwnLocomotion;
+	AimCycleClip = Clips.AimCycle;
+	bAimCycle = UsesAimCycle(Input.bAiming && !Input.bDead && !Input.bDowned, Clips);
 	JumpStartClip = Clips.JumpStart;
 	FallLoopClip = Clips.FallLoop;
 

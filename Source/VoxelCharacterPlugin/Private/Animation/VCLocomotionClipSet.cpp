@@ -120,7 +120,7 @@ float UVCLocomotionClipSet::GetCycleTopSpeed() const
 	return Top;
 }
 
-void UVCLocomotionClipSet::GetCycleSamples(TArray<UAnimSequence*>& OutClips, TArray<FVector2D>& OutPositions) const
+void UVCLocomotionClipSet::GetCycleSamples(bool bAim, TArray<UAnimSequence*>& OutClips, TArray<FVector2D>& OutPositions) const
 {
 	OutClips.Reset();
 	OutPositions.Reset();
@@ -131,7 +131,9 @@ void UVCLocomotionClipSet::GetCycleSamples(TArray<UAnimSequence*>& OutClips, TAr
 		OutPositions.Add(FVector2D(Angle, Speed));
 		Angles.AddUnique(Angle);
 	};
-	for (const FVCLocomotionLoops* Loops : { &Walk, &Jog })
+	const FVCLocomotionLoops& WalkRow = bAim && AimWalk.HasAny() ? AimWalk : Walk;
+	UAnimSequence* IdleClip = bAim && AimIdle ? AimIdle.Get() : Idle.Get();
+	for (const FVCLocomotionLoops* Loops : { &WalkRow, &Jog })
 	{
 		if (!Loops->HasAny())
 		{
@@ -149,14 +151,14 @@ void UVCLocomotionClipSet::GetCycleSamples(TArray<UAnimSequence*>& OutClips, TAr
 			}
 		}
 	}
-	if (Idle && Angles.Num() > 0)
+	if (IdleClip && Angles.Num() > 0)
 	{
 		Angles.AddUnique(-180.f);
 		Angles.AddUnique(180.f);
 		Angles.Sort();
 		for (const float Angle : Angles)
 		{
-			OutClips.Add(Idle);
+			OutClips.Add(IdleClip);
 			OutPositions.Add(FVector2D(Angle, 0.0));
 		}
 	}

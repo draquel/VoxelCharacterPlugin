@@ -537,7 +537,9 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   computes each transition's rule as one bool (`ComputeRules`) and the cycle's play rate (above the set's fastest loop
   the steps quicken), and gives the held stance a weight of 0 while the set plays its own locomotion
   (`ComputeStanceTarget`), so the clip's own arms show (D87); the bow's aim branch in its layer lays over them as
-  before. The states: Idle, Cycle, Jump, Fall, Land (the moving landing when it touches down on the move), Swim; starts,
+  before. While the character aims (raised or drawn) the Cycle plays the held set's aim cycle (`AimWalk`, `AimIdle`,
+  `AimCycle`: the bow's hold `C`, side-on with the drawn shoulders, its walk under `B`'s jog; `UsesAimCycle`), so
+  the hips do not twist away from the aim as the carry's strafes turn them. The states: Idle, Cycle, Jump, Fall, Land (the moving landing when it touches down on the move), Swim; starts,
   stops and turns are L2, crouch L3. After the state machine the graph zeroes the root bone's translation (the packs
   carry their root motion in the root with the root-motion flag off, which would walk the mesh off the capsule), then
   an Inertialization node and `ABP_VoxelCharacter`'s own chain, pasted (the layer, `UpperBodyAction`, the default

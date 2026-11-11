@@ -15,6 +15,10 @@ struct FVCLocomotionClips
 {
 	TObjectPtr<UAnimSequenceBase> Idle;
 	TObjectPtr<UBlendSpace> Cycle;
+
+	/** The cycle while aiming (the held set's own only: the bow's hold C), or null. */
+	TObjectPtr<UBlendSpace> AimCycle;
+
 	TObjectPtr<UAnimSequenceBase> JumpStart;
 	TObjectPtr<UAnimSequenceBase> FallLoop;
 	TObjectPtr<UAnimSequenceBase> Land;
@@ -112,6 +116,15 @@ public:
 	static float ComputeStanceTarget(float BaseTarget, bool bOwnLocomotion);
 
 	/**
+	 * Pure: whether the cycle plays the aim cycle (D92: the bow's hold C while raised or drawn, side-on with the drawn
+	 * shoulders, so the hips do not twist away from them as the carry's strafes turn them).
+	 * @param bAiming The character aims a ranged weapon (raised or drawn)
+	 * @param Clips   This update's clips
+	 * @return True when it aims and the held set has an aim cycle
+	 */
+	static bool UsesAimCycle(bool bAiming, const FVCLocomotionClips& Clips);
+
+	/**
 	 * Pure: a set change (the locomotion plan's L1). The first call fills both slots; later, when the idle or the cycle
 	 * differs from the playing slot's, the new clips go into the other slot and it becomes the playing one.
 	 * @param Slots The slots, changed in place
@@ -148,6 +161,14 @@ public:
 	/** Slot B plays (else A); flips at a set change. */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
 	bool bSlotB = false;
+
+	/** The held set's cycle while aiming (UVCLocomotionClipSet::AimCycle), or null. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	TObjectPtr<UBlendSpace> AimCycleClip;
+
+	/** The Cycle state plays AimCycleClip (UsesAimCycle), else the slots' cycle; the switch is inertialized. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	bool bAimCycle = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
 	TObjectPtr<UAnimSequenceBase> JumpStartClip;
