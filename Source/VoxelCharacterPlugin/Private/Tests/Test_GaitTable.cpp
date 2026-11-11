@@ -304,8 +304,15 @@ bool FVCGaitClipCapsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("The run at 400"), Packs.Run.MaxSpeedForward == 400.f && FMath::IsNearlyEqual(Packs.Run.MaxSpeedStrafe, 280.f, 0.01f)
 		&& FMath::IsNearlyEqual(Packs.Run.MaxSpeedBackward, 240.f, 0.01f));
 	TestTrue(TEXT("The sprint at 700"), Packs.Sprint.MaxSpeedForward == 700.f && Packs.Sprint.MaxSpeedStrafe == 700.f);
-	TestTrue(TEXT("The crouch, the accelerations, the braking unchanged"), Packs.Crouch == GASP.Crouch
+	TestTrue(TEXT("No crouch cap: the crouch's row, the accelerations, the braking unchanged"), Packs.Crouch == GASP.Crouch
 		&& Packs.Run.MaxAcceleration == GASP.Run.MaxAcceleration && Packs.Run.BrakingDecelerationStopping == GASP.Run.BrakingDecelerationStopping);
+	FVCGaitCaps WithCrouch = Caps;
+	WithCrouch.Crouch = 250.f;
+	const FVCMovementTable Crouched = GASP.WithForwardCaps(WithCrouch);
+	TestTrue(TEXT("The crouch set's cap (L3): the crouch at 250, its strafe and back in proportion"),
+		Crouched.Crouch.MaxSpeedForward == 250.f && FMath::IsNearlyEqual(Crouched.Crouch.MaxSpeedStrafe, 200.f * 250.f / 225.f, 0.01f)
+		&& FMath::IsNearlyEqual(Crouched.Crouch.MaxSpeedBackward, 180.f * 250.f / 225.f, 0.01f)
+		&& Crouched.Crouch.MaxAcceleration == GASP.Crouch.MaxAcceleration);
 	FVCGaitCaps RunOnly;
 	RunOnly.Run = 450.f;
 	const FVCMovementTable Partial = GASP.WithForwardCaps(RunOnly);
@@ -330,6 +337,11 @@ bool FVCGaitClipCapsTest::RunTest(const FString& Parameters)
 	Move->bWantsClipGaitCaps = true;
 	Move->ApplyGaitTable();
 	TestEqual(TEXT("Applied: the held set's 400"), Move->MaxWalkSpeed, 400.f);
+	Move->SetClipGaitCaps(WithCrouch);
+	Player->bIsCrouched = true;
+	Move->ApplyGaitTable();
+	TestEqual(TEXT("Crouched: the crouch set's 250"), Move->MaxWalkSpeedCrouched, 250.f);
+	Player->bIsCrouched = false;
 	Move->bWantsClipGaitCaps = false;
 	return true;
 }

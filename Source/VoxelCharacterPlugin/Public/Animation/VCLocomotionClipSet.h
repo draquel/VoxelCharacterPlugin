@@ -218,6 +218,69 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Aim")
 	TObjectPtr<UBlendSpace> AimCycle;
 
+	/** Crouched at a stand (the bow's hold B: Crouch_Loop). With CrouchCycle, the set's own crouch (HasCrouch). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	TObjectPtr<UAnimSequence> CrouchIdle;
+
+	/** Into the crouch at a stand and back up (the pack's Crouch_Begin, Crouch_End). Empty: the idles blend (D88). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	TObjectPtr<UAnimSequence> CrouchBegin;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	TObjectPtr<UAnimSequence> CrouchEnd;
+
+	/** The slow crouch walk by direction (the pack's Crouch_Walk_Slow, 114 uu/s): the crouch's first gait. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	FVCLocomotionLoops CrouchWalkSlow;
+
+	/** The crouch walk by direction (the pack's Crouch_Walk, 302 uu/s): the crouch's second, at CrouchSpeed. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	FVCLocomotionLoops CrouchWalk;
+
+	/** Each crouch gait's starts and stops by direction (ChooseCrouchStart, ChooseCrouchStop). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	FVCLocomotionLoops CrouchWalkSlowStart;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	FVCLocomotionLoops CrouchWalkStart;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	FVCLocomotionLoops CrouchWalkSlowStop;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	FVCLocomotionLoops CrouchWalkStop;
+
+	/**
+	 * Crouched while aiming (the bow's hold C, side-on, D92): its slow crouch walk, starts and stops in the directions it
+	 * has, and its crouch idle; empty: the crouch's own.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	FVCLocomotionLoops AimCrouchWalk;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	FVCLocomotionLoops AimCrouchWalkStart;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	FVCLocomotionLoops AimCrouchWalkStop;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	TObjectPtr<UAnimSequence> AimCrouchIdle;
+
+	/** The crouch's loops by local direction and speed: GetCrouchCycleSamples(false). Built by the script. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	TObjectPtr<UBlendSpace> CrouchCycle;
+
+	/** The same while aiming: GetCrouchCycleSamples(true), AimCrouchWalk in the slow walk's place. Built by the script. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	TObjectPtr<UBlendSpace> AimCrouchCycle;
+
+	/**
+	 * A set with no crouch of its own crouches on this set's (§3.3: the borrowed set's crouch on the legs, the graph laying
+	 * this set's idle over the upper body on the stance's ramp); empty: the crouch plays the walk's loops.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Crouch")
+	TObjectPtr<UVCLocomotionClipSet> BorrowedCrouch;
+
 	/** Leaving the ground upward. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UAnimSequenceBase> JumpStart;
@@ -248,6 +311,17 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Speeds", meta = (ClampMin = "0"))
 	float SprintSpeed = 700.f;
+
+	/**
+	 * The crouch's cap (uu/s; the locomotion plan's L3): the movement's crouch row scales to the crouch set's
+	 * (GetCrouchSet), and the crouch walk plays whole at it. CrouchSlowSpeed is where the slow crouch walk plays whole;
+	 * between them the two blend (ComputeCrouchPace).
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Speeds", meta = (ClampMin = "0"))
+	float CrouchSpeed = 250.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Speeds", meta = (ClampMin = "0"))
+	float CrouchSlowSpeed = 150.f;
 
 	/**
 	 * The direction of a loop for a local direction.
@@ -401,4 +475,64 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Animation")
 	void GetCycleSamples(bool bAim, TArray<UAnimSequence*>& OutClips, TArray<FVector2D>& OutPositions) const;
+
+	// ==================== The crouch (the locomotion plan's L3) ====================
+
+	/** @return Whether the set has its own crouch: a crouch idle and a CrouchCycle */
+	bool HasCrouch() const { return CrouchIdle != nullptr && CrouchCycle != nullptr; }
+
+	/**
+	 * The set whose crouch plays for this one (§3.3): its own, else BorrowedCrouch's when that has one.
+	 * @param bBorrow Whether a borrowed crouch counts (vc.Anim.SM.BorrowCrouch)
+	 * @return The set, or null when the crouch plays the walk's loops
+	 */
+	const UVCLocomotionClipSet* GetCrouchSet(bool bBorrow = true) const;
+
+	/**
+	 * The crouch's pace: ComputePace over the slow crouch walk at CrouchSlowSpeed and the crouch walk at CrouchSpeed (the
+	 * aim crouch walk in the slow walk's place with bAim), from rest.
+	 * @param Speed The speed across local up (uu/s)
+	 * @param bAim  The aim crouch cycle's
+	 * @return The pace
+	 */
+	FVCLocomotionPace ComputeCrouchPace(float Speed, bool bAim) const;
+
+	/**
+	 * The crouch start for a direction: the family of the crouch gait that plays at CrouchSpeed (the slow walk's when the
+	 * pace there is nearer its authored speed; the aim crouch walk's with bAim on the slow walk), else the other, at the
+	 * crouch's rate at its cap; none for a set without.
+	 * @param Degrees The input's angle from the body's heading (positive to the right)
+	 * @param bAim    The character aims
+	 * @return The clip and its rate
+	 */
+	FVCLocomotionPick ChooseCrouchStart(float Degrees, bool bAim) const;
+
+	/**
+	 * The crouch stop for a direction, as ChooseCrouchStart.
+	 * @param Degrees The velocity's angle from the body's heading (positive to the right)
+	 * @param bAim    The character aims
+	 * @return The clip and its rate
+	 */
+	FVCLocomotionPick ChooseCrouchStop(float Degrees, bool bAim) const;
+
+	/**
+	 * The crouch cycle's samples (the locomotion plan's L3), as GetCycleSamples: the crouch idle at speed 0, the slow
+	 * crouch walk and the crouch walk at their authored speeds.
+	 * @param bAim         The aim crouch cycle's: AimCrouchWalk in the slow walk's place and AimCrouchIdle as the idle
+	 * @param OutClips     The samples' clips
+	 * @param OutPositions Each sample's (direction, speed)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Animation")
+	void GetCrouchCycleSamples(bool bAim, TArray<UAnimSequence*>& OutClips, TArray<FVector2D>& OutPositions) const;
+
+private:
+	/** The crouch's slow row (the aim crouch walk with bAim when the set has it). */
+	const FVCLocomotionLoops& CrouchSlowRow(bool bAim) const;
+
+	/** Whether the crouch plays its slow walk at CrouchSpeed (the pace there nearer the slow walk's authored speed). */
+	bool PlaysSlowCrouchAtCap(bool bAim) const;
+
+	/** A cycle's samples: each row with an authored speed at (its direction's angle, that speed), the idle at 0. */
+	static void BuildCycleSamples(UAnimSequence* IdleClip, std::initializer_list<const FVCLocomotionLoops*> Rows,
+		TArray<UAnimSequence*>& OutClips, TArray<FVector2D>& OutPositions);
 };

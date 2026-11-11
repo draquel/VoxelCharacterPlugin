@@ -175,6 +175,7 @@ bool UVCAnimInstance::GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) co
 	OutInput.Acceleration = Movement->GetCurrentAcceleration();
 	OutInput.MaxAcceleration = Movement->GetMaxAcceleration();
 	OutInput.MaxBrakingDeceleration = Movement->GetMaxBrakingDeceleration();
+	OutInput.GroundFriction = Movement->GroundFriction;
 	OutInput.ActorRotation = Character->GetActorQuat();
 
 	// A remote character has no controller here: its base aim rotation carries the replicated view pitch.
@@ -342,9 +343,10 @@ void UVCAnimInstance::ComputeValues(const FVCAnimInput& Input)
 		Offset = 0.0;
 	}
 	const bool bStanding = Input.bOnGround && Speed < MovingSpeedThreshold;
-	if (!bStanding)
+	const float RecoverySpeed = GetTurnInPlaceRecoverySpeed(Input);
+	if (!bStanding && RecoverySpeed >= 0.f)
 	{
-		Offset = FMath::FInterpTo(Offset, 0.0, DeltaSeconds, TurnInPlaceRecoverySpeed);
+		Offset = FMath::FInterpTo(Offset, 0.0, DeltaSeconds, RecoverySpeed);
 	}
 	Offset = AdjustRootYawOffset(Input, Offset, bStanding);
 	Offset = FMath::Clamp(Offset, -double(TurnInPlaceMaxOffset), double(TurnInPlaceMaxOffset));

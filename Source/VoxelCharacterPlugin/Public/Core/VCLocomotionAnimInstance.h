@@ -35,6 +35,15 @@ struct FVCLocomotionClips
 
 	/** The held set has its own locomotion (an idle and a Cycle): its stance layer gives way to its clips. */
 	bool bOwnLocomotion = false;
+
+	/**
+	 * The set whose crouch plays (the locomotion plan's L3): Loops' own, else the one it borrows (§3.3), else null (the
+	 * crouch plays the walk's loops); its crouch idle, cycles, starts, stops, begin and end go with it.
+	 */
+	const UVCLocomotionClipSet* Crouch = nullptr;
+
+	/** The crouch is borrowed: the graph lays Loops' idle over the upper body on the stance's ramp while crouched. */
+	bool bBorrowedCrouch = false;
 };
 
 /**
@@ -67,6 +76,8 @@ enum class EVCLocomotionState : uint8
 	Cycle,
 	/** The run (the set's Run to RunFast by speed). */
 	Sprint,
+	/** Into the crouch or up from it at a stand (the set's crouch begin or end; the locomotion plan's L3). */
+	CrouchChange,
 	/** From the cycle to a stand, the set's stop for the gait and direction. */
 	Stop,
 	Jump,
@@ -98,10 +109,21 @@ struct FVCLocomotionStepInput
 	/** The sprint applies: the sprint gait, the set has a sprint, fast enough and running forward of the body. */
 	bool bWantsSprint = false;
 
+	/** Standing, the crouch changed and the crouch set has the begin or end for it (the locomotion plan's L3). */
+	bool bWantsCrouchChange = false;
+
+	/**
+	 * A reversal: on the move, the input ReversalAngle or more from the velocity and a stop to play, so the cycle stops
+	 * and starts again the other way (L3); bReversalStop: the playing stop began as one.
+	 */
+	bool bReversal = false;
+	bool bReversalStop = false;
+
 	/** The playing start, stop or turn has ended (its clip at its end), or the start is done another way. */
 	bool bStartDone = false;
 	bool bStopDone = false;
 	bool bTurnDone = false;
+	bool bCrouchChangeDone = false;
 
 	/** Below it (uu/s, without input) the character stands. */
 	float MovingSpeedThreshold = 10.f;
@@ -145,11 +167,13 @@ public:
 	/**
 	 * Pure: the clips for a held set (the locomotion plan's L1, D88): each family from the held set when it has it, else
 	 * from the base set (Unarmed's); a set with no clip set plays the base set's whole.
-	 * @param Held The held action set's clip set, or null
-	 * @param Base The base set's clip set, or null
+	 * The crouch goes with the loops (L3): their set's own, else the one it borrows.
+	 * @param Held          The held action set's clip set, or null
+	 * @param Base          The base set's clip set, or null
+	 * @param bBorrowCrouch Whether a borrowed crouch counts (vc.Anim.SM.BorrowCrouch)
 	 * @return The clips; bOwnLocomotion when the held set has its own idle and Cycle
 	 */
-	static FVCLocomotionClips ResolveClips(const UVCLocomotionClipSet* Held, const UVCLocomotionClipSet* Base);
+	static FVCLocomotionClips ResolveClips(const UVCLocomotionClipSet* Held, const UVCLocomotionClipSet* Base, bool bBorrowCrouch = true);
 
 	/**
 	 * Pure: the held stance's weight under this graph (D87): none while the set plays its own locomotion, else the base
@@ -204,8 +228,8 @@ public:
 	static bool IsStateTransition(EVCLocomotionState From, EVCLocomotionState To);
 
 	/**
-	 * Pure: the locomotion gait of the movement's gait (the walk's loops for the walk and the crouch until the crouch's
-	 * clips, L3; the jog's for the run; the run's for the sprint).
+	 * Pure: the locomotion gait of the movement's gait (the walk's loops for the walk, and for the crouch of a set with no
+	 * crouch set; the jog's for the run; the run's for the sprint).
 	 * @param Gait The movement's gait
 	 * @return The clips' gait
 	 */
@@ -220,6 +244,32 @@ public:
 	 * @return The gait
 	 */
 	static EVCLocomotionGait StopGaitAt(const UVCLocomotionClipSet* Set, float Speed, bool bSprinting);
+
+	/**
+	 * Pure: a tunable's value (the locomotion plan's L3): a vc.Anim.SM.* override of 0 or more, else the property.
+	 * @param Override The cvar's value (negative: none)
+	 * @param Property The anim instance's property
+	 * @return The value in force
+	 */
+	static float ResolveTunable(float Override, float Property);
+
+	/**
+	 * Pure: the angle between the input and the velocity across local up (degrees, 0 to 180), for a reversal.
+	 * @param LocalInput    The input's acceleration in the facing's frame
+	 * @param LocalVelocity The velocity in the facing's frame
+	 * @return The angle; 0 when either is nearly zero
+	 */
+	static float InputAngleToVelocity(const FVector& LocalInput, const FVector& LocalVelocity);
+
+	/**
+	 * Pure: how far the capsule travels from a reversal to its stop (the locomotion plan's L3): the movement turns the
+	 * velocity toward an input straight against it at twice the friction's rate and adds the input's acceleration.
+	 * @param Speed        The speed across local up (uu/s)
+	 * @param Acceleration The input's acceleration (uu/s^2)
+	 * @param Friction     The ground friction
+	 * @return The distance (uu)
+	 */
+	static float ReversalStopDistance(float Speed, float Acceleration, float Friction);
 
 	/** @return The locomotion's state as of the last update */
 	EVCLocomotionState GetLocomotionState() const { return LocomotionState; }
@@ -314,6 +364,57 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
 	TObjectPtr<UAnimSequenceBase> LandClip;
 
+	// ==================== The crouch (the locomotion plan's L3) ====================
+
+	/** The idle and the cycle play the crouch's (crouched, with a crouch set); the graph's blends follow it, inertialized. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	bool bCrouchPose = false;
+
+	/** The cycle that plays: 0 the slots' cycle, 1 the aim cycle, 2 the crouch cycle, 3 the aim crouch cycle (inertialized). */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	int32 CycleChoice = 0;
+
+	/** The crouch set's crouch idle, crouch cycle and aim crouch cycle. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	TObjectPtr<UAnimSequenceBase> CrouchIdleClip;
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	TObjectPtr<UBlendSpace> CrouchCycleClip;
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	TObjectPtr<UBlendSpace> AimCrouchCycleClip;
+
+	/** The crouch cycles' paces (UVCLocomotionClipSet::ComputeCrouchPace). */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	float CrouchCycleBlendSpeed = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	float CrouchCyclePlayRate = 1.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	float AimCrouchCycleBlendSpeed = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	float AimCrouchCyclePlayRate = 1.f;
+
+	/** The crouch's begin or end playing (chosen as CrouchChange begins) and where in it (s). */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	TObjectPtr<UAnimSequenceBase> CrouchChangeClip;
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	float CrouchChangeTime = 0.f;
+
+	/**
+	 * The borrowed crouch (§3.3): the idle of the set whose loops play, laid over the upper body on the stance's ramp at
+	 * BorrowedCrouchWeight (1 crouched on a borrowed crouch, else 0, eased over TransitionBlendSeconds), so the borrowed
+	 * set's crouch carries the legs and this set's own arms stay.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	TObjectPtr<UAnimSequenceBase> BorrowedUpperClip;
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	float BorrowedCrouchWeight = 0.f;
+
 	/** The held set plays its own locomotion (its stance layer at weight 0). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
 	bool bOwnLocomotion = false;
@@ -347,6 +448,9 @@ public:
 	bool bInSprint = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
+	bool bInCrouchChange = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
 	bool bInStop = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Animation|Locomotion")
@@ -362,6 +466,9 @@ public:
 	bool bInSwim = false;
 
 	// ==================== Tuning ====================
+	// Each of TransitionBlendSeconds, TurnInPlaceAngle, BodyMaxOffset, TurnPlayRate, StartExitSpeedFraction,
+	// SprintEnterMargin, SprintMaxAngle, ReversalAngle and the body's recovery on the move (TurnInPlaceRecoverySpeed) has a
+	// vc.Anim.SM.* override (the locomotion plan's L3; negative: the property).
 
 	/** Seconds a landing on the move holds before the cycle takes over (the landing into the jog shows). */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0"))
@@ -402,11 +509,37 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0", ClampMax = "180"))
 	float SprintMaxAngle = 60.f;
 
+	/**
+	 * A reversal on the move (in orient mode, the input this far or more from the velocity, degrees) plays the set's stop
+	 * with the body held to its heading, then a start the new way (L3; the packs have no pivots); 0: off, the cycle steps
+	 * on while the body eases round.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0", ClampMax = "180"))
+	float ReversalAngle = 0.f;
+
 protected:
 	virtual float GetStanceTarget(const FVCAnimInput& Input, float BaseTarget) const override;
 	virtual double AdjustRootYawOffset(const FVCAnimInput& Input, double Offset, bool bStanding) override;
+	virtual float GetTurnInPlaceRecoverySpeed(const FVCAnimInput& Input) const override;
 
 private:
+	/** The tunables in force this update (the properties, each overridden by its vc.Anim.SM.* cvar when set). */
+	struct FTuning
+	{
+		float TransitionBlendSeconds = 0.f;
+		float TurnInPlaceAngle = 0.f;
+		float BodyMaxOffset = 0.f;
+		float TurnPlayRate = 1.f;
+		float StartExitSpeedFraction = 0.f;
+		float SprintEnterMargin = 0.f;
+		float SprintMaxAngle = 0.f;
+		float ReversalAngle = 0.f;
+		float RecoverySpeed = 0.f;
+	};
+
+	/** @return The tunables in force (the cvars read on any thread: the update runs on a worker) */
+	FTuning GetTuning() const;
+
 	/**
 	 * The turn in place's step of the body (its clip's root yaw), or the procedural turn's, before the clamp.
 	 * @param Input     This update's input
@@ -440,4 +573,10 @@ private:
 
 	/** A set without turns eases the body round to the facing (D88) until it is within a degree. */
 	bool bProceduralTurn = false;
+
+	/** The crouch pose of the last update (a change at a stand plays the crouch's begin or end). */
+	bool bWasCrouchPose = false;
+
+	/** The playing stop began as a reversal: the body holds its heading through it. */
+	bool bReversalStop = false;
 };

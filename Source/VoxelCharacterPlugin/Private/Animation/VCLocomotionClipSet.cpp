@@ -150,6 +150,20 @@ float UVCLocomotionClipSet::GetCycleTopSpeed() const
 
 void UVCLocomotionClipSet::GetCycleSamples(bool bAim, TArray<UAnimSequence*>& OutClips, TArray<FVector2D>& OutPositions) const
 {
+	const FVCLocomotionLoops& WalkRow = bAim && AimWalk.HasAny() ? AimWalk : Walk;
+	UAnimSequence* IdleClip = bAim && AimIdle ? AimIdle.Get() : Idle.Get();
+	BuildCycleSamples(IdleClip, { &WalkRow, &Jog }, OutClips, OutPositions);
+}
+
+void UVCLocomotionClipSet::GetCrouchCycleSamples(bool bAim, TArray<UAnimSequence*>& OutClips, TArray<FVector2D>& OutPositions) const
+{
+	UAnimSequence* IdleClip = bAim && AimCrouchIdle ? AimCrouchIdle.Get() : CrouchIdle.Get();
+	BuildCycleSamples(IdleClip, { &CrouchSlowRow(bAim), &CrouchWalk }, OutClips, OutPositions);
+}
+
+void UVCLocomotionClipSet::BuildCycleSamples(UAnimSequence* IdleClip, std::initializer_list<const FVCLocomotionLoops*> Rows,
+	TArray<UAnimSequence*>& OutClips, TArray<FVector2D>& OutPositions)
+{
 	OutClips.Reset();
 	OutPositions.Reset();
 	TArray<float> Angles;
@@ -159,9 +173,7 @@ void UVCLocomotionClipSet::GetCycleSamples(bool bAim, TArray<UAnimSequence*>& Ou
 		OutPositions.Add(FVector2D(Angle, Speed));
 		Angles.AddUnique(Angle);
 	};
-	const FVCLocomotionLoops& WalkRow = bAim && AimWalk.HasAny() ? AimWalk : Walk;
-	UAnimSequence* IdleClip = bAim && AimIdle ? AimIdle.Get() : Idle.Get();
-	for (const FVCLocomotionLoops* Loops : { &WalkRow, &Jog })
+	for (const FVCLocomotionLoops* Loops : Rows)
 	{
 		if (!Loops->HasAny())
 		{
@@ -384,4 +396,60 @@ float UVCLocomotionClipSet::FindStopEntryTime(TFunctionRef<float(float)> Distanc
 		}
 	}
 	return High;
+}
+
+const UVCLocomotionClipSet* UVCLocomotionClipSet::GetCrouchSet(bool bBorrow) const
+{
+	if (HasCrouch())
+	{
+		return this;
+	}
+	return bBorrow && BorrowedCrouch && BorrowedCrouch->HasCrouch() ? BorrowedCrouch.Get() : nullptr;
+}
+
+const FVCLocomotionLoops& UVCLocomotionClipSet::CrouchSlowRow(bool bAim) const
+{
+	return bAim && AimCrouchWalk.HasAny() ? AimCrouchWalk : CrouchWalkSlow;
+}
+
+FVCLocomotionPace UVCLocomotionClipSet::ComputeCrouchPace(float Speed, bool bAim) const
+{
+	TArray<FVector2f, TInlineAllocator<2>> Points;
+	const FVCLocomotionLoops& SlowRow = CrouchSlowRow(bAim);
+	if (SlowRow.HasAny() && CrouchSlowSpeed > 0.f)
+	{
+		Points.Add(FVector2f(CrouchSlowSpeed, SlowRow.AuthoredSpeed));
+	}
+	if (CrouchWalk.HasAny() && CrouchSpeed > 0.f && (Points.Num() == 0 || CrouchSpeed > Points[0].X))
+	{
+		Points.Add(FVector2f(CrouchSpeed, CrouchWalk.AuthoredSpeed));
+	}
+	return ComputePace(Speed, Points, true);
+}
+
+bool UVCLocomotionClipSet::PlaysSlowCrouchAtCap(bool bAim) const
+{
+	const FVCLocomotionLoops& SlowRow = CrouchSlowRow(bAim);
+	if (!SlowRow.HasAny() || !CrouchWalk.HasAny())
+	{
+		return SlowRow.HasAny();
+	}
+	const float Blend = ComputeCrouchPace(CrouchSpeed, bAim).BlendSpeed;
+	return FMath::Abs(Blend - SlowRow.AuthoredSpeed) < FMath::Abs(Blend - CrouchWalk.AuthoredSpeed);
+}
+
+FVCLocomotionPick UVCLocomotionClipSet::ChooseCrouchStart(float Degrees, bool bAim) const
+{
+	const float Rate = ComputeCrouchPace(CrouchSpeed, bAim).PlayRate;
+	const FVCLocomotionLoops* Slow = bAim && AimCrouchWalkStart.HasAny() ? &AimCrouchWalkStart : &CrouchWalkSlowStart;
+	return PlaysSlowCrouchAtCap(bAim) ? PickFirst({ Slow, &CrouchWalkStart }, Degrees, Rate)
+		: PickFirst({ &CrouchWalkStart, Slow }, Degrees, Rate);
+}
+
+FVCLocomotionPick UVCLocomotionClipSet::ChooseCrouchStop(float Degrees, bool bAim) const
+{
+	const float Rate = ComputeCrouchPace(CrouchSpeed, bAim).PlayRate;
+	const FVCLocomotionLoops* Slow = bAim && AimCrouchWalkStop.HasAny() ? &AimCrouchWalkStop : &CrouchWalkSlowStop;
+	return PlaysSlowCrouchAtCap(bAim) ? PickFirst({ Slow, &CrouchWalkStop }, Degrees, Rate)
+		: PickFirst({ &CrouchWalkStop, Slow }, Degrees, Rate);
 }

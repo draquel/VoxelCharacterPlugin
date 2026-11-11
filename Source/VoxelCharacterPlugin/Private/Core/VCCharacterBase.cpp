@@ -1799,6 +1799,11 @@ void AVCCharacterBase::UpdateClipGaitCaps()
 		Caps.Walk = Clips->WalkSpeed;
 		Caps.Run = Clips->RunSpeed;
 		Caps.Sprint = Clips->SprintSpeed;
+		// The crouch's from the set whose crouch plays (its own or the one it borrows, L3); none: the table's row.
+		if (const UVCLocomotionClipSet* Crouch = Clips->GetCrouchSet())
+		{
+			Caps.Crouch = Crouch->CrouchSpeed;
+		}
 	}
 	VCMovement->SetClipGaitCaps(Caps);
 }
