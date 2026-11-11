@@ -4,6 +4,10 @@
 #include "AnimationGraph.h"
 #include "AnimationGraphSchema.h"
 #include "AnimGraphNode_Base.h"
+#include "AnimStateEntryNode.h"
+#include "AnimStateNode.h"
+#include "AnimStateTransitionNode.h"
+#include "AnimationStateMachineGraph.h"
 #include "Animation/AnimBlueprint.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimSequence.h"
@@ -921,4 +925,151 @@ bool UVCAnimAuthoringLibrary::SetBlendSpaceSamples(UBlendSpace* BlendSpace, cons
 	BlendSpace->PostEditChange();
 	BlendSpace->MarkPackageDirty();
 	return bAll;
+}
+
+bool UVCAnimAuthoringLibrary::SetBlendSpaceSamples2D(UBlendSpace* BlendSpace, const FString& XName, float XMin, float XMax, bool bWrapX,
+	const FString& YName, float YMin, float YMax, const TArray<UAnimSequence*>& Sequences, const TArray<FVector2D>& Positions,
+	float SmoothingTime)
+{
+	if (!BlendSpace || Sequences.Num() != Positions.Num() || XMax <= XMin || YMax <= YMin)
+	{
+		return false;
+	}
+	// The axes and the input's smoothing are protected: their properties reach them
+	const FStructProperty* Axes = FindFProperty<FStructProperty>(UBlendSpace::StaticClass(), TEXT("BlendParameters"));
+	const FStructProperty* Smoothing = FindFProperty<FStructProperty>(UBlendSpace::StaticClass(), TEXT("InterpolationParam"));
+	if (!Axes || Axes->Struct != FBlendParameter::StaticStruct() || Axes->ArrayDim < 2
+		|| !Smoothing || Smoothing->Struct != FInterpolationParameter::StaticStruct() || Smoothing->ArrayDim < 2)
+	{
+		return false;
+	}
+	BlendSpace->Modify();
+	FBlendParameter* X = Axes->ContainerPtrToValuePtr<FBlendParameter>(BlendSpace, 0);
+	FBlendParameter* Y = Axes->ContainerPtrToValuePtr<FBlendParameter>(BlendSpace, 1);
+	X->DisplayName = XName;
+	X->Min = XMin;
+	X->Max = XMax;
+	X->GridNum = 8;
+	X->bWrapInput = bWrapX;
+	Y->DisplayName = YName;
+	Y->Min = YMin;
+	Y->Max = YMax;
+	Y->GridNum = 4;
+	for (int32 Axis = 0; Axis < 2; ++Axis)
+	{
+		Smoothing->ContainerPtrToValuePtr<FInterpolationParameter>(BlendSpace, Axis)->InterpolationTime = FMath::Max(SmoothingTime, 0.f);
+	}
+	for (int32 Index = BlendSpace->GetNumberOfBlendSamples() - 1; Index >= 0; --Index)
+	{
+		BlendSpace->DeleteSample(Index);
+	}
+	bool bAll = true;
+	for (int32 Index = 0; Index < Sequences.Num(); ++Index)
+	{
+		bAll &= Sequences[Index] && BlendSpace->AddSample(Sequences[Index], FVector(Positions[Index].X, Positions[Index].Y, 0.0)) != INDEX_NONE;
+	}
+	BlendSpace->ValidateSampleData();
+	BlendSpace->ResampleData();
+	BlendSpace->PostEditChange();
+	BlendSpace->MarkPackageDirty();
+	return bAll;
+}
+
+namespace VCAnimAuthoring
+{
+	/** A state machine graph's state (not a transition) by its name. */
+	UAnimStateNodeBase* FindState(UEdGraph* Graph, const FString& StateName)
+	{
+		if (!Graph)
+		{
+			return nullptr;
+		}
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			UAnimStateNodeBase* State = Cast<UAnimStateNodeBase>(Node);
+			if (State && !State->IsA<UAnimStateTransitionNode>() && State->GetStateName() == StateName)
+			{
+				return State;
+			}
+		}
+		return nullptr;
+	}
+}
+
+FString UVCAnimAuthoringLibrary::AddState(UBlueprint* Blueprint, FName StateMachineGraph, const FString& StateName, int32 X, int32 Y)
+{
+	using namespace VCAnimAuthoring;
+	UAnimationStateMachineGraph* Graph = Cast<UAnimationStateMachineGraph>(FindGraph(Blueprint, StateMachineGraph));
+	if (!Graph || StateName.IsEmpty())
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AddState: no state machine graph %s in %s"), *StateMachineGraph.ToString(), *GetNameSafe(Blueprint));
+		return FString();
+	}
+	UAnimStateNode* State = Cast<UAnimStateNode>(AddNode(Graph, UAnimStateNode::StaticClass(), X, Y));
+	if (!State || !State->BoundGraph)
+	{
+		return FString();
+	}
+	// Through the base: the state classes export no rename of their own (a virtual call needs none).
+	static_cast<UEdGraphNode*>(State)->OnRenameNode(StateName);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return State->BoundGraph->GetName();
+}
+
+bool UVCAnimAuthoringLibrary::SetEntryState(UBlueprint* Blueprint, FName StateMachineGraph, const FString& StateName)
+{
+	using namespace VCAnimAuthoring;
+	UAnimationStateMachineGraph* Graph = Cast<UAnimationStateMachineGraph>(FindGraph(Blueprint, StateMachineGraph));
+	UAnimStateNodeBase* State = FindState(Graph, StateName);
+	UEdGraphPin* Entry = Graph && Graph->EntryNode ? Graph->EntryNode->GetOutputPin() : nullptr;
+	if (!State || !Entry || !State->GetInputPin())
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetEntryState: no state %s or no entry in %s.%s"), *StateName, *GetNameSafe(Blueprint),
+			*StateMachineGraph.ToString());
+		return false;
+	}
+	Entry->BreakAllPinLinks();
+	Entry->MakeLinkTo(State->GetInputPin());
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
+}
+
+FString UVCAnimAuthoringLibrary::AddStateTransition(UBlueprint* Blueprint, FName StateMachineGraph, const FString& FromState, const FString& ToState,
+	const FString& RuleGraphName)
+{
+	using namespace VCAnimAuthoring;
+	UAnimationStateMachineGraph* Graph = Cast<UAnimationStateMachineGraph>(FindGraph(Blueprint, StateMachineGraph));
+	UAnimStateNodeBase* From = FindState(Graph, FromState);
+	UAnimStateNodeBase* To = FindState(Graph, ToState);
+	if (!From || !To || RuleGraphName.IsEmpty() || FindGraph(Blueprint, FName(*RuleGraphName)))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AddStateTransition: no state %s or %s in %s.%s, or %s is taken"), *FromState, *ToState,
+			*GetNameSafe(Blueprint), *StateMachineGraph.ToString(), *RuleGraphName);
+		return FString();
+	}
+	UAnimStateTransitionNode* Transition = Cast<UAnimStateTransitionNode>(AddNode(Graph, UAnimStateTransitionNode::StaticClass(),
+		(From->NodePosX + To->NodePosX) / 2, (From->NodePosY + To->NodePosY) / 2));
+	if (!Transition || !Transition->BoundGraph)
+	{
+		return FString();
+	}
+	Transition->CreateConnections(From, To);
+	FBlueprintEditorUtils::RenameGraph(Transition->BoundGraph, RuleGraphName);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return Transition->GetName();
+}
+
+bool UVCAnimAuthoringLibrary::RenameGraphNode(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, const FString& NewName)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraphNode* Node = FindNode(FindGraph(Blueprint, GraphName), NodeName);
+	if (!Node || !Node->GetCanRenameNode() || NewName.IsEmpty())
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("RenameGraphNode: no renamable node %s in %s.%s"), *NodeName, *GetNameSafe(Blueprint),
+			*GraphName.ToString());
+		return false;
+	}
+	Node->OnRenameNode(NewName);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
 }

@@ -316,4 +316,73 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
 	static bool SetBlendSpaceSamples(UBlendSpace* BlendSpace, const FString& AxisName, float Min, float Max,
 		const TArray<UAnimSequence*>& Sequences, const TArray<float>& Positions);
+
+	/**
+	 * Sets a 2D blend space's two axes and replaces its samples (the locomotion state machine plan's L1: a set's Cycle, the
+	 * loops by direction and speed). Python reaches neither the axes nor the samples.
+	 * @param BlendSpace     The blend space (a 2D one)
+	 * @param XName          The first axis' name (Direction)
+	 * @param XMin           Its minimum
+	 * @param XMax           Its maximum (more than XMin)
+	 * @param bWrapX         Whether the first axis wraps (a direction: -180 meets 180)
+	 * @param YName          The second axis' name (Speed)
+	 * @param YMin           Its minimum
+	 * @param YMax           Its maximum (more than YMin)
+	 * @param Sequences      The samples' sequences, of the blend space's skeleton
+	 * @param Positions      Each sample's place (X, Y), one per sequence
+	 * @param SmoothingTime  Seconds the input takes to reach a new value on both axes (0: none), so a turn blends
+	 * @return True when the axes were set and every sample added
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static bool SetBlendSpaceSamples2D(UBlendSpace* BlendSpace, const FString& XName, float XMin, float XMax, bool bWrapX,
+		const FString& YName, float YMin, float YMax, const TArray<UAnimSequence*>& Sequences, const TArray<FVector2D>& Positions,
+		float SmoothingTime);
+
+	/**
+	 * Adds a state to a state machine (the locomotion plan's L1; L0 found a state renamed in pasted text does not
+	 * survive the paste). Its pose graph is named after it, with a number when the blueprint has a graph of that name.
+	 * @param Blueprint         The anim blueprint
+	 * @param StateMachineGraph The state machine's graph (the state machine node's name)
+	 * @param StateName         The state's name
+	 * @param X                 Where it sits
+	 * @param Y                 Where it sits
+	 * @return The state's graph name (its pose graph), or empty when it could not be added
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static FString AddState(UBlueprint* Blueprint, FName StateMachineGraph, const FString& StateName, int32 X, int32 Y);
+
+	/**
+	 * Makes a state the state machine's entry.
+	 * @param Blueprint         The anim blueprint
+	 * @param StateMachineGraph The state machine's graph
+	 * @param StateName         The state (its name)
+	 * @return True when the entry links to it
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static bool SetEntryState(UBlueprint* Blueprint, FName StateMachineGraph, const FString& StateName);
+
+	/**
+	 * Adds a transition between two states of a state machine and names its rule graph, so a script finds the graph to
+	 * put the rule in (each transition's is "Transition" otherwise).
+	 * @param Blueprint         The anim blueprint
+	 * @param StateMachineGraph The state machine's graph
+	 * @param FromState         The state it leaves (its name)
+	 * @param ToState           The state it enters
+	 * @param RuleGraphName     The name for its rule graph (unique in the blueprint)
+	 * @return The transition node's name (its properties: CrossfadeDuration, LogicType, ...), or empty
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static FString AddStateTransition(UBlueprint* Blueprint, FName StateMachineGraph, const FString& FromState, const FString& ToState,
+		const FString& RuleGraphName);
+
+	/**
+	 * Renames a node as the editor's rename does (a state machine node, which renames its graph).
+	 * @param Blueprint The anim blueprint
+	 * @param GraphName The graph the node is in
+	 * @param NodeName  The node
+	 * @param NewName   Its new name
+	 * @return True when the node took the name
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static bool RenameGraphNode(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, const FString& NewName);
 };

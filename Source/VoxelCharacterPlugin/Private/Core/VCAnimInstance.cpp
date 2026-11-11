@@ -7,6 +7,7 @@
 #include "Animation/VCActionMontageComponent.h"
 #include "Animation/VCAppearanceComponent.h"
 #include "Animation/VCLocomotionAnimSet.h"
+#include "Animation/VCLocomotionClipSet.h"
 #include "Combat/VCCombatComponent.h"
 #include "Interfaces/CGFDamageableInterface.h"
 #include "Movement/VCMovementComponent.h"
@@ -207,6 +208,12 @@ bool UVCAnimInstance::GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) co
 	{
 		OutInput.bOffHandIK = Set->bOffHandIK;
 		OutInput.OffHandGrip = Set->OffHandGrip;
+		OutInput.LocomotionClips = Set->LocomotionClips;
+	}
+	if (const UVCActionAnimSet* Base = CachedMontages.IsValid()
+		? CachedMontages->FindActionAnimSet(VCGameplayTags::Equipment_AnimSet_Unarmed.GetTag()) : nullptr)
+	{
+		OutInput.BaseLocomotionClips = Base->LocomotionClips;
 	}
 
 	if (!CachedAppearance.IsValid())
@@ -399,7 +406,7 @@ void UVCAnimInstance::ComputeValues(const FVCAnimInput& Input)
 	// dead or downed, or switched off; eased so a jump or a sprint never snaps the arms.
 	StanceMode = Input.StanceMode;
 	const bool bStanceOn = Input.StanceMode != 0 && bAble && Input.bOnGround && !Input.bSwimming && !Input.bFlying;
-	const float StanceTarget = !bStanceOn ? 0.f : (Input.bSprinting ? StanceSprintWeight : 1.f);
+	const float StanceTarget = GetStanceTarget(Input, !bStanceOn ? 0.f : (Input.bSprinting ? StanceSprintWeight : 1.f));
 	StanceWeight = FMath::FInterpConstantTo(StanceWeight, StanceTarget, DeltaSeconds, IKBlendSpeed);
 	// The aim raises the bow over AimRaiseTime and lowers it as fast (the user's flow: aim raises, the draw pulls).
 	AimRaiseWeight = FMath::FInterpConstantTo(AimRaiseWeight, Input.bAiming && bAble ? 1.f : 0.f, DeltaSeconds, 1.f / AimRaiseTime);

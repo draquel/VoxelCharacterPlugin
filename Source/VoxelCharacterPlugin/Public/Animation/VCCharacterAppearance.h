@@ -48,7 +48,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Appearance")
 	TArray<FName> PartsWithOwnAnimation = { TEXT("Face") };
 
-	/** The anim class this body plays. Empty: UVCSettings::PlayerLocomotionAnimClass, else the character Blueprint's own. */
+	/**
+	 * The anim class this body plays under vc.Anim.Locomotion 1 or 2. Empty: the class the switch names
+	 * (UVCSettings::PlayerLocomotionAnimClass or PlayerStateMachineAnimClass), else the character Blueprint's own.
+	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Appearance")
 	TSoftClassPtr<UAnimInstance> AnimClass;
 

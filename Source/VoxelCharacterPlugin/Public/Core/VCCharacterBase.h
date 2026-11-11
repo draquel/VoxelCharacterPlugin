@@ -87,9 +87,11 @@ public:
 	static FGameplayTag PickActionSet(bool bHoldsItem, const FGameplayTag& ItemActionSet);
 
 	/**
-	 * Gives the mesh the locomotion vc.Anim.MotionMatching names (character animation P5): the motion-matching AnimBP of
-	 * UVCSettings::PlayerLocomotionAnimClass when it is on and loads, else the Blueprint's own anim class; a dedicated
-	 * server and the automation tests keep the Blueprint's. Re-links the equipped items' layers after a change.
+	 * Gives the mesh the locomotion vc.Anim.Locomotion names: 1 the motion-matching AnimBP of
+	 * UVCSettings::PlayerLocomotionAnimClass (character animation P5), 2 the state machine of PlayerStateMachineAnimClass
+	 * (the locomotion state machine plan), the worn appearance's AnimClass over either; 0, or a class that does not load,
+	 * the Blueprint's own anim class. A dedicated server and the automation tests keep the Blueprint's. Re-links the
+	 * equipped items' layers after a change.
 	 */
 	void ApplyLocomotionAnimClass();
 
@@ -999,7 +1001,7 @@ protected:
 	/** Whether ApplyPlayerAppearance has dressed the mesh once (the first time applies even the class's own body). */
 	bool bAppearanceApplied = false;
 
-	/** The mesh's anim class from the Blueprint, before ApplyLocomotionAnimClass first ran (vc.Anim.MotionMatching 0 plays it). */
+	/** The mesh's anim class from the Blueprint, before ApplyLocomotionAnimClass first ran (vc.Anim.Locomotion 0 plays it). */
 	UPROPERTY(Transient)
 	TSubclassOf<UAnimInstance> BlueprintAnimClass;
 
