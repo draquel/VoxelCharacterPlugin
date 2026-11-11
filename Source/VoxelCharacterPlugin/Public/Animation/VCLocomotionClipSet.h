@@ -324,6 +324,15 @@ public:
 	float CrouchSlowSpeed = 150.f;
 
 	/**
+	 * The speed ceiling while the character aims (uu/s; 0: none): the movement caps every gait at it while the player
+	 * plays the state machine and aims (FVCGaitCaps::Aim), and the aim cycle plays the aim walk alone, whole at it
+	 * (ComputeCyclePace). The bow's is 150: its aim walk (hold C) and the jog above it step differently toward the
+	 * character's back, so a blend of the two crossed the legs on a strafe left (the user after the plan's L4).
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Speeds", meta = (ClampMin = "0"))
+	float AimSpeed = 0.f;
+
+	/**
 	 * The direction of a loop for a local direction.
 	 * @param Degrees The velocity's angle from the facing (positive to the right), any range
 	 * @return The nearest of the eight directions
@@ -363,6 +372,9 @@ public:
 	/** @return Whether the set has a sprint of its own (a Sprint blend space) */
 	bool HasSprint() const { return Sprint != nullptr; }
 
+	/** @return Whether aiming paces the set at AimSpeed: a ceiling set and an aim walk to play there */
+	bool PacesAim() const { return AimSpeed > 0.f && AimWalk.HasAny(); }
+
 	/**
 	 * Pure: the pace at a speed from a ladder of (cap, authored speed) points ascending by cap (the locomotion plan's L2,
 	 * D91). At a point the blend space reads the authored speed and the clips play at cap over authored; between two
@@ -378,7 +390,8 @@ public:
 
 	/**
 	 * The Cycle's pace (or the aim cycle's): ComputePace over the walk at WalkSpeed and the jog at RunSpeed, each at its
-	 * loops' authored speed (the aim walk's in the walk's place with bAim), from rest.
+	 * loops' authored speed (the aim walk's in the walk's place with bAim), from rest. With bAim on a set that PacesAim,
+	 * the aim walk alone at AimSpeed: the jog above it never blends in.
 	 * @param Speed The speed across local up (uu/s)
 	 * @param bAim  The aim cycle's
 	 * @return The pace
@@ -395,7 +408,7 @@ public:
 	/**
 	 * The rate a gait's loops play at at its cap, which its starts and stops play at.
 	 * @param Gait The gait: Walk at WalkSpeed, Jog at RunSpeed, Run (the sprint) at SprintSpeed
-	 * @param bAim The aim walk's for the walk
+	 * @param bAim The aim walk's for the walk; on a set that PacesAim, the aim walk's at AimSpeed for every gait
 	 * @return The rate; 1 when the set has no loops for it
 	 */
 	float GetGaitPlayRate(EVCLocomotionGait Gait, bool bAim) const;
@@ -529,8 +542,11 @@ private:
 	/** The crouch's slow row (the aim crouch walk with bAim when the set has it). */
 	const FVCLocomotionLoops& CrouchSlowRow(bool bAim) const;
 
-	/** Whether the crouch plays its slow walk at CrouchSpeed (the pace there nearer the slow walk's authored speed). */
+	/** Whether the crouch plays its slow walk at its cap (the pace there nearer the slow walk's authored speed). */
 	bool PlaysSlowCrouchAtCap(bool bAim) const;
+
+	/** The crouch's cap: CrouchSpeed, or AimSpeed under it while aiming (the movement's ceiling covers the crouch too). */
+	float CrouchCap(bool bAim) const;
 
 	/** A cycle's samples: each row with an authored speed at (its direction's angle, that speed), the idle at 0. */
 	static void BuildCycleSamples(UAnimSequence* IdleClip, std::initializer_list<const FVCLocomotionLoops*> Rows,

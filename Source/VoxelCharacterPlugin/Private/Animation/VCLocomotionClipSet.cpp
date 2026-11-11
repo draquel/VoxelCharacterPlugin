@@ -250,6 +250,12 @@ FVCLocomotionPace UVCLocomotionClipSet::ComputePace(float Speed, TConstArrayView
 FVCLocomotionPace UVCLocomotionClipSet::ComputeCyclePace(float Speed, bool bAim) const
 {
 	TArray<FVector2f, TInlineAllocator<2>> Points;
+	if (bAim && PacesAim())
+	{
+		// The aim walk alone: the jog above it steps differently on some sides, and the movement holds the speed here.
+		Points.Add(FVector2f(AimSpeed, AimWalk.AuthoredSpeed));
+		return ComputePace(Speed, Points, true);
+	}
 	const FVCLocomotionLoops& WalkRow = bAim && AimWalk.HasAny() ? AimWalk : Walk;
 	if (WalkRow.HasAny() && WalkSpeed > 0.f)
 	{
@@ -278,6 +284,10 @@ FVCLocomotionPace UVCLocomotionClipSet::ComputeSprintPace(float Speed) const
 
 float UVCLocomotionClipSet::GetGaitPlayRate(EVCLocomotionGait Gait, bool bAim) const
 {
+	if (bAim && PacesAim())
+	{
+		return ComputeCyclePace(AimSpeed, true).PlayRate;
+	}
 	switch (Gait)
 	{
 	case EVCLocomotionGait::Walk: return ComputeCyclePace(WalkSpeed, bAim).PlayRate;
@@ -289,7 +299,8 @@ float UVCLocomotionClipSet::GetGaitPlayRate(EVCLocomotionGait Gait, bool bAim) c
 
 FVCLocomotionPick UVCLocomotionClipSet::ChooseStart(EVCLocomotionGait Gait, float Degrees, bool bAim) const
 {
-	if (Gait == EVCLocomotionGait::Walk)
+	// Aiming at AimSpeed, every gait starts as the aim walk does.
+	if (Gait == EVCLocomotionGait::Walk || (bAim && PacesAim()))
 	{
 		// The jog's start for a set without walk starts (SSH, 2H), at the walk's rate (§3.3).
 		return PickFirst({ bAim ? &AimWalkStart : nullptr, &WalkStart, &JogStart }, Degrees, GetGaitPlayRate(Gait, bAim));
@@ -300,7 +311,7 @@ FVCLocomotionPick UVCLocomotionClipSet::ChooseStart(EVCLocomotionGait Gait, floa
 
 FVCLocomotionPick UVCLocomotionClipSet::ChooseStop(EVCLocomotionGait Gait, float Degrees, bool bAim) const
 {
-	if (Gait == EVCLocomotionGait::Walk)
+	if (Gait == EVCLocomotionGait::Walk || (bAim && PacesAim()))
 	{
 		return PickFirst({ bAim ? &AimWalkStop : nullptr, &WalkStop, &JogStop }, Degrees, GetGaitPlayRate(Gait, bAim));
 	}
@@ -434,13 +445,18 @@ bool UVCLocomotionClipSet::PlaysSlowCrouchAtCap(bool bAim) const
 	{
 		return SlowRow.HasAny();
 	}
-	const float Blend = ComputeCrouchPace(CrouchSpeed, bAim).BlendSpeed;
+	const float Blend = ComputeCrouchPace(CrouchCap(bAim), bAim).BlendSpeed;
 	return FMath::Abs(Blend - SlowRow.AuthoredSpeed) < FMath::Abs(Blend - CrouchWalk.AuthoredSpeed);
+}
+
+float UVCLocomotionClipSet::CrouchCap(bool bAim) const
+{
+	return bAim && AimSpeed > 0.f ? FMath::Min(CrouchSpeed, AimSpeed) : CrouchSpeed;
 }
 
 FVCLocomotionPick UVCLocomotionClipSet::ChooseCrouchStart(float Degrees, bool bAim) const
 {
-	const float Rate = ComputeCrouchPace(CrouchSpeed, bAim).PlayRate;
+	const float Rate = ComputeCrouchPace(CrouchCap(bAim), bAim).PlayRate;
 	const FVCLocomotionLoops* Slow = bAim && AimCrouchWalkStart.HasAny() ? &AimCrouchWalkStart : &CrouchWalkSlowStart;
 	return PlaysSlowCrouchAtCap(bAim) ? PickFirst({ Slow, &CrouchWalkStart }, Degrees, Rate)
 		: PickFirst({ &CrouchWalkStart, Slow }, Degrees, Rate);
@@ -448,7 +464,7 @@ FVCLocomotionPick UVCLocomotionClipSet::ChooseCrouchStart(float Degrees, bool bA
 
 FVCLocomotionPick UVCLocomotionClipSet::ChooseCrouchStop(float Degrees, bool bAim) const
 {
-	const float Rate = ComputeCrouchPace(CrouchSpeed, bAim).PlayRate;
+	const float Rate = ComputeCrouchPace(CrouchCap(bAim), bAim).PlayRate;
 	const FVCLocomotionLoops* Slow = bAim && AimCrouchWalkStop.HasAny() ? &AimCrouchWalkStop : &CrouchWalkSlowStop;
 	return PlaysSlowCrouchAtCap(bAim) ? PickFirst({ Slow, &CrouchWalkStop }, Degrees, Rate)
 		: PickFirst({ &CrouchWalkStop, Slow }, Degrees, Rate);

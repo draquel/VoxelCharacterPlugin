@@ -291,7 +291,11 @@ re-mesh).
   sets, 200, 500, 700 on the template Unarmed's), the strafe and backward caps in proportion
   (`FVCMovementTable::WithForwardCaps`), and since L3 the crouch row to the crouch set's `CrouchSpeed` (250: the set's
   own crouch, else the one it borrows, `GetCrouchSet`; FVCGaitCaps' `Crouch`), the accelerations, the braking and the
-  rates as they are. The caps
+  rates as they are. **The aim's ceiling** (G173, 2026-11-11): while the character aims, a set with an `AimSpeed` (the
+  bow's 150) caps every gait at every angle at it (FVCGaitCaps' `Aim`, `ResolveSpeedCeiling`, `ComputeGaitValues`'
+  `SpeedCeiling`): aiming walks, crouched too, and the aim cycle plays the aim walk alone (below, "Animation"). Whether
+  the character aims is `bAimingForGait`, set on every machine by `AVCCharacterBase::ApplyAimState` (the owner at its
+  input, the server from its `bIsAiming`), the aim state that already turns the capsule to the view. The caps
   come from the held item, replicated state: `AVCCharacterBase::UpdateClipGaitCaps` sets them on every machine
   (`SetClipGaitCaps`, from `RefreshActionSet` and `ApplyLocomotionAnimClass`; the set whose loops play, its own or
   Unarmed's). Whether they apply is the anim class this machine plays (`bWantsClipGaitCaps`), which travels in the saved
@@ -556,7 +560,12 @@ L4: D44 is reversed, and motion matching stays selectable for comparison.
   (`ComputeStanceTarget`), so the clip's own arms show (D87); the bow's aim branch in its layer lays over them as
   before. While the character aims (raised or drawn) the Cycle plays the held set's aim cycle (`AimWalk`, `AimIdle`,
   `AimCycle`: the bow's hold `C`, side-on with the drawn shoulders, its walk under `B`'s jog; `UsesAimCycle`), so
-  the hips do not twist away from the aim as the carry's strafes turn them.
+  the hips do not twist away from the aim as the carry's strafes turn them. A set with an `AimSpeed` (the bow's 150, G173)
+  plays its aim walk alone while aiming, whole at that speed (1.6 for hold `C`; `ComputeCyclePace`), and every gait's
+  start and stop is the aim walk's (`ChooseStart`, `ChooseStop`; the aimed crouch's slow walk at it, `CrouchCap`): the
+  movement holds the speed there. Without it the aim cycle blended `C`'s walk (92 uu/s) with `B`'s jog (302) at the
+  run's strafe (266), and toward the character's back the two step differently, so a strafe left crossed the legs (the
+  feet 2-6 cm apart across the travel, 25-33 with the ceiling).
   The states (L2, 2026-11-10; L3 2026-11-11): Idle, TurnInPlace, Start, Cycle, Sprint, CrouchChange, Stop, Jump, Fall,
   Land (the moving landing when it touches down on the move), Swim. The anim instance steps the state itself (`StepState`, one step an
   update along `GetStateTransitions`' list) and the graph's state machine follows it, each transition reading its

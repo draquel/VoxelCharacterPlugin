@@ -467,6 +467,25 @@ bool FVCLocomotion_Pace::RunTest(const FString& Parameters)
 	Bow->AimWalk = SixWay(TEXT("Bow_C_Walk"), 80.f);
 	Pace = Bow->ComputeCyclePace(120.f, true);
 	TestTrue(TEXT("The aim cycle's walk is the aim walk's"), Near(Pace.BlendSpeed, 80.f) && Near(Pace.PlayRate, 1.5f));
+	Pace = Bow->ComputeCyclePace(266.f, true);
+	TestTrue(TEXT("No aim ceiling: past the walk the aim cycle blends toward the jog"), Pace.BlendSpeed > 150.f);
+
+	// The aim's ceiling (after L4): the aim walk alone, whole at AimSpeed, and every gait's start is the aim walk's.
+	Bow->AimSpeed = 150.f;
+	TestTrue(TEXT("A ceiling and an aim walk: the set paces the aim"), Bow->PacesAim());
+	Pace = Bow->ComputeCyclePace(150.f, true);
+	TestTrue(TEXT("At the ceiling: the aim walk whole at 150 / 80"), Near(Pace.BlendSpeed, 80.f) && Near(Pace.PlayRate, 150.f / 80.f));
+	Pace = Bow->ComputeCyclePace(266.f, true);
+	TestTrue(TEXT("Past it (pushed): the aim walk quickens, the jog never blends in"), Near(Pace.BlendSpeed, 80.f) && Near(Pace.PlayRate, 266.f / 80.f));
+	Pace = Bow->ComputeCyclePace(266.f, false);
+	TestTrue(TEXT("Not aiming: the Cycle's pace as before"), Pace.BlendSpeed > 150.f);
+	TestTrue(TEXT("Every gait's rate aiming is the aim walk's at the ceiling"),
+		Near(Bow->GetGaitPlayRate(EVCLocomotionGait::Jog, true), 150.f / 80.f) && Near(Bow->GetGaitPlayRate(EVCLocomotionGait::Walk, true), 150.f / 80.f));
+	Bow->AimWalkStart = SixWay(TEXT("Bow_C_Start"), 80.f);
+	const FVCLocomotionPick AimStart = Bow->ChooseStart(EVCLocomotionGait::Jog, 0.f, true);
+	TestTrue(TEXT("The run's start aiming is the aim walk's"), AimStart.Clip == Bow->AimWalkStart.Forward && Near(AimStart.PlayRate, 150.f / 80.f));
+	Bow->AimWalkStart = FVCLocomotionLoops();
+	Bow->AimSpeed = 0.f;
 
 	// The sprint: Run_01 to Run_02 by speed, at 1 between them.
 	Bow->Run.Forward = NewClip(TEXT("Bow_Run_01"));

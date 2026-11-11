@@ -1067,6 +1067,11 @@ void AVCCharacterBase::OnRep_IsAiming()
 void AVCCharacterBase::ApplyAimState()
 {
 	const bool bAiming = IsAiming();
+	// The held set's aim ceiling (in first person too: the server does not know the owner's view mode).
+	if (UVCMovementComponent* VCMovement = Cast<UVCMovementComponent>(GetCharacterMovement()))
+	{
+		VCMovement->bAimingForGait = bAiming;
+	}
 	// The body toward the view while aiming (third person; the movement eases the flip), back to its heading after.
 	SetFacesAim(bAiming);
 	if (bAimStateApplied == bAiming)
@@ -1804,6 +1809,8 @@ void AVCCharacterBase::UpdateClipGaitCaps()
 		{
 			Caps.Crouch = Crouch->CrouchSpeed;
 		}
+		// The held set's aim ceiling: aiming walks it in its aim walk alone (the bow's hold C).
+		Caps.Aim = Clips->PacesAim() ? Clips->AimSpeed : 0.f;
 	}
 	VCMovement->SetClipGaitCaps(Caps);
 }

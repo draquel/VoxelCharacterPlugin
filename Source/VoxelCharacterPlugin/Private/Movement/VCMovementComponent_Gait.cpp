@@ -401,7 +401,7 @@ float UVCMovementComponent::MovementAngleToFacing(const FVector& Velocity, const
 
 FVCGaitValues UVCMovementComponent::ComputeGaitValues(const FVCMovementTable& Table, EVCGait Gait, EVCRotationMode Mode, bool bOnGround,
 	bool bInAir, const FVector& Velocity, const FVector& InAcceleration, const FVector& Forward, const FVector& Up, float SpeedMultiplier,
-	float FrictionScale)
+	float FrictionScale, float SpeedCeiling)
 {
 	FVCGaitValues Out;
 	// The yaw rate by mode: instant on the ground (the graph turns the body), slow in the air, the old rate in the water.
@@ -416,8 +416,10 @@ FVCGaitValues UVCMovementComponent::ComputeGaitValues(const FVCMovementTable& Ta
 
 	const FVCGaitSettings& Row = Table.Row(Gait);
 	// The cap: forward in orient mode (the body turns to where it goes), by the angle to the facing in strafe mode.
-	const float Cap = Mode == EVCRotationMode::OrientToMovement
+	const float RowCap = Mode == EVCRotationMode::OrientToMovement
 		? Row.MaxSpeedForward : Row.MaxSpeedAtAngle(MovementAngleToFacing(Velocity, InAcceleration, Forward, Up));
+	// The aim's ceiling holds every angle at one speed: the aim walk's loops have one authored speed in each direction.
+	const float Cap = SpeedCeiling > 0.f ? FMath::Min(RowCap, SpeedCeiling) : RowCap;
 	Out.MaxSpeed = Cap * SpeedMultiplier;
 
 	// The sprint's acceleration and friction fall with speed (GASP's ramps); the friction keeps the surface and wet scale.
@@ -440,6 +442,11 @@ FVCMovementTable UVCMovementComponent::ResolveGaitTable(const FVCMovementTable& 
 	return bApply && Caps.IsSet() ? Table.WithForwardCaps(Caps) : Table;
 }
 
+float UVCMovementComponent::ResolveSpeedCeiling(const FVCGaitCaps& Caps, bool bApply, bool bAiming)
+{
+	return bApply && bAiming && Caps.Aim > 0.f ? Caps.Aim : 0.f;
+}
+
 void UVCMovementComponent::ApplyGaitTable()
 {
 	if (!bUseGaitTable || !UpdatedComponent)
@@ -448,7 +455,8 @@ void UVCMovementComponent::ApplyGaitTable()
 	}
 	const FVCMovementTable Table = ResolveGaitTable(GaitTable, ClipGaitCaps, bWantsClipGaitCaps);
 	const FVCGaitValues Values = ComputeGaitValues(Table, GetGait(), GetRotationMode(), IsMovingOnGround(), IsFalling(), Velocity,
-		Acceleration, UpdatedComponent->GetForwardVector(), FVCGravityFrame::GetUp(this), GASSpeedMultiplier, GroundFrictionScale);
+		Acceleration, UpdatedComponent->GetForwardVector(), FVCGravityFrame::GetUp(this), GASSpeedMultiplier, GroundFrictionScale,
+		ResolveSpeedCeiling(ClipGaitCaps, bWantsClipGaitCaps, bAimingForGait));
 	RotationRate.Yaw = Values.RotationRate;
 	if (!Values.bRowApplies)
 	{
