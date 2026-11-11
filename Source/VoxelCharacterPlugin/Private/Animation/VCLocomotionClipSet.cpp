@@ -340,7 +340,7 @@ void UVCLocomotionClipSet::GetSprintSamples(TArray<UAnimSequence*>& OutClips, TA
 
 float UVCLocomotionClipSet::RootYawAt(const UAnimSequenceBase* Clip, float Time)
 {
-	if (!Clip)
+	if (!Clip || Clip->GetPlayLength() <= 0.f)
 	{
 		return 0.f;
 	}
@@ -350,7 +350,7 @@ float UVCLocomotionClipSet::RootYawAt(const UAnimSequenceBase* Clip, float Time)
 
 float UVCLocomotionClipSet::RootDistanceAt(const UAnimSequenceBase* Clip, float Time)
 {
-	if (!Clip)
+	if (!Clip || Clip->GetPlayLength() <= 0.f)
 	{
 		return 0.f;
 	}

@@ -289,15 +289,30 @@ float UVCLocomotionAnimInstance::GetStanceTarget(const FVCAnimInput& Input, floa
 
 double UVCLocomotionAnimInstance::AdjustRootYawOffset(const FVCAnimInput& Input, double Offset, bool bStanding)
 {
+	// While the body faces the view (aiming), the legs never fall further behind the torso than BodyMaxOffset (dragged
+	// round past it). Toward where it goes the capsule turns at once to the input, a start backward included, so there
+	// the body may lag a half turn and ease round.
+	const double Limit = Input.bOrientToMovement ? 180.0 : static_cast<double>(BodyMaxOffset);
+	return FMath::Clamp(TurnBody(Input, Offset, bStanding), -Limit, Limit);
+}
+
+double UVCLocomotionAnimInstance::TurnBody(const FVCAnimInput& Input, double Offset, bool bStanding)
+{
 	// A turn in place: its clip's root yaw turns the body, scaled to the offset the turn began with (the graph locks the
 	// clip's own root, so the body turns once).
 	if (LocomotionState == EVCLocomotionState::TurnInPlace && TurnClip && bStanding)
 	{
+		bProceduralTurn = false;
+		// The view came back past the body: turning on would turn away from it, so the turn ends (StepState's bTurnDone).
+		if (Offset * TurnSign > 1.0)
+		{
+			TurnTime = TurnClip->GetPlayLength();
+			return Offset;
+		}
 		TurnTime = FMath::Min(TurnTime + Input.DeltaSeconds * TurnPlayRate, TurnClip->GetPlayLength());
 		const float Yaw = FMath::Abs(UVCLocomotionClipSet::RootYawAt(TurnClip, TurnTime));
 		Offset += TurnSign * (Yaw - TurnLastYaw) * TurnScale;
 		TurnLastYaw = Yaw;
-		bProceduralTurn = false;
 		return Offset;
 	}
 	// A set without turns (D88): past the angle the body eases round to the facing, as it does on the move.
