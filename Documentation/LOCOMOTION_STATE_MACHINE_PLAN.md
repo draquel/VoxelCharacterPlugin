@@ -1,11 +1,15 @@
 # Locomotion State Machine Plan: the player's locomotion from the animation packs
 
-> **Agreed 2026-11-10.** Proposed and revised the same day; the user approved D86-D91 (§6) as recommended. L0 done
-> 2026-11-10 (§4 "L0 results": the bow carries hold `B`, D92; D91 revised and agreed); L1 built 2026-11-10 (§4 "L1
-> results": the graph under `vc.Anim.Locomotion 2`, the bow's `C` as the walk while aiming, motion matching
-> unchanged); L2 built 2026-11-10 (§4 "L2 results": starts, stops, turns, the sprint, the held set's gait caps); L3
-> built 2026-11-11 (§4 "L3 results": the crouch, the borrowed crouch, the crouch's cap, the tunables' cvars, the
-> reversals tried and left off); L4 next. Scope:
+> **Frozen 2026-11-11.** This plan is history: agreed 2026-11-10, D86-D91 (§6) as recommended and D92 after L0; L0-L4
+> built 2026-11-10 to 11-11, each phase in its own session (§4's results). Built: `UVCLocomotionAnimInstance` and
+> `UVCLocomotionClipSet`, `ABP_VCPlayerLocomotion` by `Scripts/setup_character_state_machine.py` (graph `sm-v5`), every
+> set in its pack's clips (Bow on hold `B`, its `C` as the walk while aiming; SwordShield, TwoHand and Tool, Unarmed on
+> the template's loops), starts, stops, turns, the sprint, the crouch and the borrowed crouch, the held set's gait caps
+> (D91), the `vc.Anim.SM.*` tunables. Since L4 the state machine is the player's default locomotion
+> (`vc.Anim.Locomotion 2`): D44 is reversed, and motion matching stays selectable under 1 for comparison. As it is now:
+> `CHARACTER_SYSTEM.md` "Animation" › The state machine and "Movement" › The held set's caps; the console guide §4.
+> Left: the backlog (§5); the NPCs' and the dedicated server's graph is the open decision D93
+> (`Documentation/FINDINGS.md`). Scope as planned:
 > the player's locomotion played from the Essential Animation packs' clips through a state machine of our own, built up
 > one feature at a time as the content and the need arrive, with Game Animation Sample's motion matching kept selectable
 > beside it for comparison. The user's words: GASP is "a difficult system to tune for reliable smooth character behavior
@@ -601,13 +605,54 @@ The default flips to 2 (D44 reversed), motion matching stays selectable; the pla
 `CHARACTER_SYSTEM.md` "Animation" and the console guide. NPCs and the server staying on `ABP_VoxelCharacter` or moving to
 the new graph is recorded as a follow-up.
 
+#### L4 results (2026-11-11)
+
+Built on `claude/locomotion-l4` (issue draquel/UE5_PluginDev#406).
+
+**The default.** `vc.Anim.Locomotion` and its old name `vc.Anim.MotionMatching` default to 2 (`VCCharacterBase.cpp`), so
+the player plays `ABP_VCPlayerLocomotion` with nothing set (read in PIE: "LastSetBy: Constructor", the mesh's instance
+`ABP_VCPlayerLocomotion_C`; the NPCs unchanged). Nothing else read the old default: no `.ini` sets the switch, the
+automation tests and a dedicated server keep the Blueprint's graph whatever it says, and `Scripts/qa/lane_pass.py` sets
+nothing, so a lane now runs the state machine and `--cvars=vc.Anim.Locomotion=1` runs motion matching. D44's reversal is
+recorded in its row (`Documentation/FINDINGS.md`, D43-D51) and in `CHARACTER_ANIMATION_PLAN.md` §6.
+
+**The pass by hand** (the user, on `CharacterTest` and at `PlanetTest`'s equator, `vox.TPLatLon 0 30`, against motion
+matching under 1; the weather clear and locked, the wind off). One note, fixed: aiming, a turn of the view turned the
+torso faster than the view, so the character looked away from the aim until the feet caught up. Since L2 the state
+machine measured `AimYaw` from the body (`ViewYaw` less `RootYawOffset`), but the bow layer's aim branch, the raised bow
+and the drawn aim offset, is laid over the upper body in mesh space (G160), so it starts from the capsule, which faces
+the view, not from the turned root: the legs' lag was counted twice. `AimYaw` is the base class's again, from the
+facing, as in the other two graphs. Measured with a probe (`Saved/claudius_l4_aim_turn.py`: the bow raised, the view
+turned at a steady rate, then held; `Saved/QA/l4/aim_turn_*.jsonl`), the shoulder line's angle off the view on the
+low-poly body:
+
+| | During a 90 deg/s turn | Held after it |
+|---|---|---|
+| Before | 76 to 149 | 122 (the legs 52 behind) |
+| After, 90 and 180 deg/s | 68 to 75 | 72, whatever the legs' lag (up to 90) |
+| Motion matching | 21 to 93 | 86 |
+
+The raised bow arm holds 16 to 18 degrees right of the view through the turn (motion matching's swings from -34 to 39
+and settles at -4). That 17 degrees is hold `B`'s base pose, the same with the feet square, as is L1's head short of the
+view: left in the backlog (§5). At the equator the user had no notes.
+
+**The follow-up.** Whether the NPCs and the dedicated server stay on `ABP_VoxelCharacter` or move to the new graph is
+the open decision D93 in `Documentation/FINDINGS.md` (recommended: both stay until an NPC carries a set the packs
+animate).
+
+The gate (`Scripts/qa/README.md`, "Any code"): the editor build with no warning (`build_warnings.py` against L3's: 0); the
+headless suite 906 of 906, no new warning kind (`logwarnings.py` against L3's: only the dungeon search's line count
+moves, 19 to 21, as between runs); no non-unity build (one line removed, no code or include moved). No new finding.
+
 ## 5. Backlog (features as they are wanted)
 
 Each is a later piece of work on the same graph, taken when the content or the need arrives: the unarmed pack's clip
 set (and Unarmed's turns, starts, stops, crouch); the two-handed pack's, if it differs from the sword pack's `2H`; a
 staff set (`Equipment.AnimSet.Staff`, its pack's clip set, an item tagged); the bow's holds as states (`A`/`B`/`C` and
 the pack's transitions: `A` with no arrows, `B` with them; `C`'s walk while aiming is in since L1, D92); the SSH guard variants while blocking; a nocked
-arrow on `hand_r` in the bow's carry; distance matching (if root motion); pivots; idle breaks; NPCs on the graph.
+arrow on `hand_r` in the bow's carry; distance matching (if root motion); pivots; idle breaks; NPCs on the graph (D93);
+the raised bow under hold `B`'s base pose, the bow arm about 17 degrees right of the view and the head short of it (L1,
+L4).
 
 ## 6. Decisions (agreed 2026-11-10, each as recommended)
 

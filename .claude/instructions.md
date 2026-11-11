@@ -23,7 +23,9 @@ editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the 
    now in `CHARACTER_SYSTEM.md` "The bow") and `CHARACTER_ANIMATION_PLAN.md` (animation, IK and bodies, D43-D51, done
    2026-11-07, now in `CHARACTER_SYSTEM.md` "Animation", "Appearance" and "NPCs") and `CHARACTER_REFINEMENT_PLAN.md`
    (holding, the upper body, aiming, handling, D70-D75, done 2026-11-08, now in `CHARACTER_SYSTEM.md` "The bow",
-   "Movement", "Animation", "Camera", "HUD and widgets" and "Tests"), all frozen;
+   "Movement", "Animation", "Camera", "HUD and widgets" and "Tests") and `LOCOMOTION_STATE_MACHINE_PLAN.md` (the
+   player's locomotion as a state machine over the Essential Animation packs, D86-D92, done 2026-11-11, now in
+   `CHARACTER_SYSTEM.md` "Animation" › The state machine and "Movement"), all frozen;
    `Documentation/Archive/ImplementationPlan.md`.
 
 Across plugins: `Plugins/CommonGameFramework/Documentation/ARCHITECTURE.md`; VoxelWorlds'

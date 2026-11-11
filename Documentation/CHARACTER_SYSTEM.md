@@ -27,7 +27,7 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Core | `UVCAnimLayerInstance` | The parent of a stance layer that aims or plays montages of its own (the bow's): the body's montages in the layer's slots, the body's aim and upper-body montage weight copied each update |
 | Animation | `UVCActionMontageComponent`, `UVCActionAnimSet`, `UVCAnimNotify_ActionHit` | The action montages of both character classes: the owner's at input, everyone else's by multicast, hit reacts, deaths and get-ups from the combat events; a set's montages per action; the moment an action lands |
 | Animation | `UVCCharacterAppearance`, `UVCAppearanceComponent` | A body as data (a mesh, or a MetaHuman's Blueprint whose parts dress it) and the component that dresses both character classes in one (Appearance, below) |
-| Animation | `UVCLocomotionAnimInstance`, `UVCLocomotionClipSet` | The player's locomotion as a state machine of our own over the Essential Animation packs (`vc.Anim.Locomotion 2`; the locomotion state machine plan): the anim instance that resolves the held set's clips and computes the rules, and a set's full-body clips (Animation, below) |
+| Animation | `UVCLocomotionAnimInstance`, `UVCLocomotionClipSet` | The player's locomotion as a state machine of our own over the Essential Animation packs (`vc.Anim.Locomotion 2`, the default; the locomotion state machine plan): the anim instance that resolves the held set's clips and computes the rules, and a set's full-body clips (Animation, below) |
 | Animation | `UVCLocomotionAnimSet` | An animal's locomotion for the creature template AnimBP: its blend space by speed, the run's own speed, its idle variant (NPCs, below) |
 | Animation | `FVCAnimNode_FootBoneIK` (its graph node `UVCAnimGraphNode_FootBoneIK` in `VoxelCharacterEditor`) | Foot placement on the foot bones, for a body without the Mannequin's `ik_foot` bones (a MetaHuman's) |
 | Animation | `UVCMotionMatchingAnimInstance`, `UVCGravityTrajectoryPredictor` (`VoxelCharacterAnimation`) | The player's motion matching: the parent of the Game Animation Sample's CMC AnimBP, which fills it from our pawn and does its world-Z arithmetic in the gravity frame; the trajectory predictor that turns about local up (Animation, below) |
@@ -377,7 +377,10 @@ skeletons compatible). The animation content is built by scripts into content pa
 (`Documentation/FINDINGS.md`); G147 (VanillaLoop's clips) and G148 (the correctives near the camera only) closed after it. The character refinement plan (2026-11-08, D70-D75; `CHARACTER_REFINEMENT_PLAN.md`, frozen) then took what the two
 plans left rough once they met in play: the bow's two grips and per-body attach corrections ("The bow", "Appearance"),
 the moving stance over the upper body ("Layers" below), the aim state with its camera and reticle ("The bow" › Aiming,
-"Camera", "HUD and widgets"), GASP's gait table ("Movement"), all judged on the `CharacterTest` level ("Tests").
+"Camera", "HUD and widgets"), GASP's gait table ("Movement"), all judged on the `CharacterTest` level ("Tests"). The
+locomotion state machine plan (2026-11-10 to 11-11, D86-D92; `LOCOMOTION_STATE_MACHINE_PLAN.md`, frozen) then gave the
+player a locomotion of our own over the Essential Animation packs ("The state machine" below), the default since its
+L4: D44 is reversed, and motion matching stays selectable for comparison.
 
 - **Two halves.** `NativeUpdateAnimation` gathers an `FVCAnimInput` on the game thread (the character's state in world
   space, and a line trace along gravity for the ground under a falling character, on the movement's channel, up to
@@ -506,7 +509,8 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   - `vc.Anim.FootIK`, `vc.Anim.SprintPace`, `vc.Anim.LookAt` and `vc.Anim.HandIK` switch each off for an A/B;
     `vc.Anim.Debug 1` draws each character's look-at target and weights and turns on the engine's foot placement draw.
     `Scripts/setup_character_ik.py` builds the chain and the play rate; a crouched character has no pose yet (G140).
-- **Motion matching** (the player; the plan's P5). The player's mesh plays `ABP_VCPlayerMotionMatching`, the Game
+- **Motion matching** (the player under `vc.Anim.Locomotion 1`: its default until the locomotion state machine plan's
+  L4, kept since for comparison; the plan's P5). The player's mesh plays `ABP_VCPlayerMotionMatching`, the Game
   Animation Sample's CMC AnimBP that `Scripts/setup_character_locomotion.py` copies with its choosers
   (`UVCSettings::PlayerLocomotionAnimClass`). `AVCCharacterBase::ApplyLocomotionAnimClass` gives it to the mesh at
   BeginPlay on every machine that draws the player; a dedicated server and the automation tests keep the Blueprint's
@@ -537,8 +541,8 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
     `RootRelativeAcceleration` in the copy (`UVCAnimInstance` has one of that name).
   - Cost for one running player (the CSV profiler): 0.50 ms of animation on the game thread and 1.39 ms on the animation
     worker, against 0.22 and 0.33 ms for `ABP_VoxelCharacter`.
-- **The state machine** (the player under `vc.Anim.Locomotion 2`; `LOCOMOTION_STATE_MACHINE_PLAN.md`, D86-D92, L1 built
-  2026-11-10; the default stays motion matching, 1, until its L4). `ABP_VCPlayerLocomotion`
+- **The state machine** (the player's locomotion, `vc.Anim.Locomotion 2`, the default since 2026-11-11, D86 reversing D44;
+  `LOCOMOTION_STATE_MACHINE_PLAN.md`, D86-D92, L0-L4 2026-11-10 to 11-11, frozen). `ABP_VCPlayerLocomotion`
   (`Scripts/setup_character_state_machine.py`, `UVCSettings::PlayerStateMachineAnimClass`) plays the held action set's
   full-body clips from the Essential Animation packs: each `UVCActionAnimSet` names a `UVCLocomotionClipSet`
   (`LocomotionClips`: the idle, the walk, jog and run loops by direction with their authored speeds, the fast run, the
@@ -572,7 +576,9 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   capsule's instant ground yaw (the gait table's), so a pivot swings the body round rather than snapping it; while the
   body faces the view (aiming) the legs stay within `BodyMaxOffset` (90 degrees) of the torso, dragged round past it,
   and a turn ends if the view swings back past the body; and the
-  cycles step by the velocity's angle from the body (`CycleDirection`) and the aim layer aims from it (`AimYaw`). After
+  cycles step by the velocity's angle from the body (`CycleDirection`). The aim layer aims from the facing, as in the
+  other graphs (`AimYaw`): its raised bow is laid in mesh space, so it starts from the capsule, and measured from the
+  body it overshot the view by the legs' lag until the feet caught up (fixed in L4's pass). After
   the state machine the graph zeroes the root bone's translation and rotation (the packs carry their root motion in the
   root with the root-motion flag off, which would walk the mesh off the capsule; a turn's yaw comes back through the
   offset), then an Inertialization node, the root turned by `RootYawOffset`, and `ABP_VoxelCharacter`'s own chain, pasted (the layer, `UpperBodyAction`, the default
@@ -595,7 +601,13 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   `TransitionBlendSeconds`, `TurnInPlaceAngle`, `TurnPlayRate`, `BodyMaxOffset`, `StartExitSpeedFraction`,
   `SprintEnterMargin`, `SprintMaxAngle`, `ReversalAngle` and the body's recovery each have a `vc.Anim.SM.*` override
   (`Documentation/EDITOR_CONSOLE_GUIDE.md` §4). `ReversalAngle` (a stop the way the body went, the body held, then a
-  start the new way, on an input that far against the velocity) is off by default (the plan's L3 results).
+  start the new way, on an input that far against the velocity) is off by default (the plan's L3 results). **The
+  cost** (L3's lane, the CSV profiler): about `ABP_VoxelCharacter`'s, half of motion matching's game thread and a
+  third of its worker on the low-poly body. **What is left** (the plan's §5): the packs the project does not own
+  (Unarmed's own starts, stops, turns and crouch; a staff), the bow's holds `A` and `C` as states, pivot clips (the 180
+  reversals slide most), distance matching, and hold `B`'s raised bow about 17 degrees right of the view with the head
+  short of it (the base pose). The NPCs, the dedicated server and the tests play `ABP_VoxelCharacter`; whether they
+  move to this graph is the open decision D93 (`Documentation/FINDINGS.md`).
 - **The content.** `Scripts/setup_character_layers.py` builds the interface, the layers, the montages (from the
   template mannequin's, Sword & Shield's, Bow and Arrow's, GASP's and VanillaLoop's sequences, a hit notify at the
   strike; the bow's draw a raise, a pull and a held loop in sections, `UVCAnimAuthoringLibrary::AppendMontageSegment`;
