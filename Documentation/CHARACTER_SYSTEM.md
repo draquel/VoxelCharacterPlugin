@@ -567,7 +567,9 @@ the moving stance over the upper body ("Layers" below), the aim state with its c
   D91); the sprint plays the set's `Sprint` (Run_01 to Run_02 along speed, `ComputeSprintPace`) past the run's cap,
   forward of the body. The body keeps its heading off the facing (`RootYawOffset`, up to a half turn under this graph):
   standing, a turn in place unwinds it with its clip's root yaw scaled to the offset; moving, it eases out after the
-  capsule's instant ground yaw (the gait table's), so a pivot swings the body round rather than snapping it, and the
+  capsule's instant ground yaw (the gait table's), so a pivot swings the body round rather than snapping it; while the
+  body faces the view (aiming) the legs stay within `BodyMaxOffset` (90 degrees) of the torso, dragged round past it,
+  and a turn ends if the view swings back past the body; and the
   cycles step by the velocity's angle from the body (`CycleDirection`) and the aim layer aims from it (`AimYaw`). After
   the state machine the graph zeroes the root bone's translation and rotation (the packs carry their root motion in the
   root with the root-motion flag off, which would walk the mesh off the capsule; a turn's yaw comes back through the

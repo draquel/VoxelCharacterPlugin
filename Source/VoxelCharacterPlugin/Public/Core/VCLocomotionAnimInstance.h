@@ -375,6 +375,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0", ClampMax = "180"))
 	float TurnInPlaceAngle = 60.f;
 
+	/**
+	 * While the body faces the view (aiming), the legs stay within this of the torso (degrees): past it the body is
+	 * dragged round with the facing, so a quick turn of the view never leaves them far enough behind to catch up the
+	 * other way round. Facing where it goes the body may lag up to a half turn (a pivot, a start backward).
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0", ClampMax = "180"))
+	float BodyMaxOffset = 90.f;
+
 	/** The turn clips' play rate (the packs' turn in 1.33 s). */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Animation|Tuning", meta = (ClampMin = "0.1"))
 	float TurnPlayRate = 1.25f;
@@ -399,6 +407,15 @@ protected:
 	virtual double AdjustRootYawOffset(const FVCAnimInput& Input, double Offset, bool bStanding) override;
 
 private:
+	/**
+	 * The turn in place's step of the body (its clip's root yaw), or the procedural turn's, before the clamp.
+	 * @param Input     This update's input
+	 * @param Offset    The body's offset from the facing (degrees)
+	 * @param bStanding On the ground and slower than MovingSpeedThreshold
+	 * @return The offset
+	 */
+	double TurnBody(const FVCAnimInput& Input, double Offset, bool bStanding);
+
 	FVCLocomotionSlots Slots;
 
 	/** The set whose loops play has turns in place (else the procedural turn), as of the last update. */

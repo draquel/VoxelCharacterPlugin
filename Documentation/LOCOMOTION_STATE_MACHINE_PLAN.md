@@ -474,6 +474,20 @@ and 0); the headless suite 904 of 904 (`Locomotion.States`, `.Pace`, `.Transitio
 the `FPlayWorld` helper's `CleanupWorld ... missing call to EndPlay`, which `VCAimTurnWorld` already logs, under the new
 test's world); the non-unity build of `VoxelCharacterPlugin`, no error. No new finding.
 
+**After the merge (2026-11-11, the user in play).** Two reports, one cause. The sprint "ran away" from the camera: in
+the Sprint state the root bone drifted up to 460 uu ahead of the capsule and snapped back each stride. And aiming, a
+quick turn of the view made the legs turn round the other way to catch up. The graph's root lock (L1) was set in
+`BCS_BoneSpace`, which the engine takes as relative to the bone's own transform, so its zero changed nothing: the
+cycles held still only because the packs' loops, starts and stops carry `bForceRootLock`, and the clips without it (the
+bow's `Run_01` / `Run_02`, its run stop, every turn in place) kept their root motion. So the bow's sprint walked off
+the capsule, and a turn's clip turned the body by its own root yaw on top of the offset it unwound, overshooting and
+swinging back as the turn ended. The lock is in component space now (`sm-v4`): the sprint's root stays at the capsule
+(probed through a sprint at 700 uu/s), and a 150-degree flick of the view while drawn unwinds the offset one way (-63,
+-38, -14, 0 over the turn). Asked for as well: while the body faces the view the legs stay within `BodyMaxOffset` (90
+degrees) of the torso, dragged round past it, and a turn ends when the view swings back past the body. Crouch under
+mode 2 is L3's, as planned (the crouch gait plays the walk's loops until then). The lane after (one run, low-poly /
+Kellan): run bucket 55 / 74, walk bucket 179 / 253, the stop 43 uu from 400; the suite 904 of 904.
+
 **Left for L3** (the tuning pass): the reversals (a stop then a start on an input past 135 degrees, or a faster body
 swing; the 180 pivots slide most), the turn's rate (`TurnPlayRate` 1.25) and angle (60), the start's hand-over (90 % of
 the cap) and the sprint's entry, as properties with `vc.Anim.SM.*` overrides. The look-at short of the view under hold

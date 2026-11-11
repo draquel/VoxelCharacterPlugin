@@ -613,6 +613,19 @@ bool FVCLocomotion_Instance::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("and the body eases round to the facing"), FMath::Abs(Frame->RootYawOffset) < 5.f && FMath::Abs(Frame->CycleDirection) < 5.f);
 
+	// Aiming (the body faces the view), a quick turn of the view drags the legs: never more than BodyMaxOffset behind.
+	UVCLocomotionAnimInstance* Aim = NewAnimInstance();
+	FVCAnimInput Drawn = Standing(Bow, Base);
+	Drawn.bOrientToMovement = false;
+	Update(Aim, Drawn);
+	Drawn.ActorRotation = FRotator(0.0, 40.0, 0.0).Quaternion();
+	Update(Aim, Drawn);
+	TestTrue(TEXT("Aiming, the view 40 right: the legs keep their heading"), FMath::IsNearlyEqual(Aim->RootYawOffset, -40.f, 0.5f));
+	Drawn.ActorRotation = FRotator(0.0, 170.0, 0.0).Quaternion();
+	Update(Aim, Drawn);
+	TestTrue(TEXT("A flick to 170: the legs dragged to within 90 of the torso"), FMath::Abs(Aim->RootYawOffset) <= Aim->BodyMaxOffset + 0.01f);
+	TestTrue(TEXT("still behind it on the same side (no wrap the other way round)"), Aim->RootYawOffset < 0.f);
+
 	// The procedural turn: a set without turns eases the body round once it is past the angle.
 	UVCLocomotionAnimInstance* Plain = NewAnimInstance();
 	FVCAnimInput Still = Standing(nullptr, Base);

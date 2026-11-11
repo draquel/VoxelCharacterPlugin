@@ -368,7 +368,7 @@ public:
 	 * The root bone's turn about up in a clip since its start (the packs keep a turn's whole yaw in the root, L0).
 	 * @param Clip The clip
 	 * @param Time Seconds into it
-	 * @return Degrees, positive to the right; 0 without a clip
+	 * @return Degrees, positive to the right; 0 without a clip (or an empty one)
 	 */
 	static float RootYawAt(const UAnimSequenceBase* Clip, float Time);
 
@@ -376,7 +376,7 @@ public:
 	 * The root bone's travel across up in a clip since its start (the packs keep their root motion in the root, L0).
 	 * @param Clip The clip
 	 * @param Time Seconds into it
-	 * @return Distance (uu); 0 without a clip
+	 * @return Distance (uu); 0 without a clip (or an empty one)
 	 */
 	static float RootDistanceAt(const UAnimSequenceBase* Clip, float Time);
 
