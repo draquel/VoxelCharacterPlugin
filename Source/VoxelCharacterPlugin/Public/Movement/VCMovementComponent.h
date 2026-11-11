@@ -119,7 +119,8 @@ struct VOXELCHARACTERPLUGIN_API FVCGaitSettings
 
 /**
  * The forward caps a held set's locomotion clips run at (UVCLocomotionClipSet's WalkSpeed, RunSpeed, SprintSpeed; the
- * locomotion plan's D91, L2; and the crouch set's CrouchSpeed, L3). 0 keeps the table's own row.
+ * locomotion plan's D91, L2; and the crouch set's CrouchSpeed, L3). 0 keeps the table's own row. Aim is a ceiling on
+ * every gait and angle while the character aims (the held set's AimSpeed), not a row's forward cap.
  */
 struct FVCGaitCaps
 {
@@ -127,13 +128,14 @@ struct FVCGaitCaps
 	float Run = 0.f;
 	float Sprint = 0.f;
 	float Crouch = 0.f;
+	float Aim = 0.f;
 
 	/** @return Whether any cap is set */
-	bool IsSet() const { return Walk > 0.f || Run > 0.f || Sprint > 0.f || Crouch > 0.f; }
+	bool IsSet() const { return Walk > 0.f || Run > 0.f || Sprint > 0.f || Crouch > 0.f || Aim > 0.f; }
 
 	bool operator==(const FVCGaitCaps& Other) const
 	{
-		return Walk == Other.Walk && Run == Other.Run && Sprint == Other.Sprint && Crouch == Other.Crouch;
+		return Walk == Other.Walk && Run == Other.Run && Sprint == Other.Sprint && Crouch == Other.Crouch && Aim == Other.Aim;
 	}
 };
 
@@ -682,6 +684,22 @@ public:
 	bool bWantsClipGaitCaps = false;
 
 	/**
+	 * The character aims: the held set's aim ceiling (FVCGaitCaps::Aim) applies while the clips' caps do. Set on every
+	 * machine by AVCCharacterBase::ApplyAimState (the owner at its input, the server from its bIsAiming), the same aim
+	 * state that turns the capsule to the view, which the table already reads as the rotation mode.
+	 */
+	bool bAimingForGait = false;
+
+	/**
+	 * Pure: the speed ceiling one tick applies: the held set's aim ceiling while the caps apply and the character aims.
+	 * @param Caps    The held set's caps
+	 * @param bApply  Whether the caps apply (bWantsClipGaitCaps)
+	 * @param bAiming Whether the character aims (bAimingForGait)
+	 * @return The ceiling (uu/s), 0 for none
+	 */
+	static float ResolveSpeedCeiling(const FVCGaitCaps& Caps, bool bApply, bool bAiming);
+
+	/**
 	 * Pure: the table one tick applies: the component's, at the clips' caps when they apply.
 	 * @param Table  The component's table
 	 * @param Caps   The held set's caps
@@ -716,10 +734,12 @@ public:
 	 * @param Up              Local up
 	 * @param SpeedMultiplier The GAS move speed multiplier
 	 * @param FrictionScale   The surface and wetness scale on the friction
+	 * @param SpeedCeiling    A ceiling on the cap at every angle before the multiplier (ResolveSpeedCeiling), 0 for none
 	 * @return The values
 	 */
 	static FVCGaitValues ComputeGaitValues(const FVCMovementTable& Table, EVCGait Gait, EVCRotationMode Mode, bool bOnGround, bool bInAir,
-		const FVector& Velocity, const FVector& InAcceleration, const FVector& Forward, const FVector& Up, float SpeedMultiplier, float FrictionScale);
+		const FVector& Velocity, const FVector& InAcceleration, const FVector& Forward, const FVector& Up, float SpeedMultiplier, float FrictionScale,
+		float SpeedCeiling = 0.f);
 
 	/**
 	 * Pure: the angle the strafe speed map reads: the velocity's angle to the forward about up when moving, the input's

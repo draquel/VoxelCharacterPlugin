@@ -320,6 +320,29 @@ bool FVCGaitClipCapsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Not applied (motion matching, the Blueprint's graph): the table as it is"),
 		UVCMovementComponent::ResolveGaitTable(GASP, Caps, false).Run == GASP.Run);
 	TestTrue(TEXT("No caps: the table as it is"), UVCMovementComponent::ResolveGaitTable(GASP, FVCGaitCaps(), true).Run == GASP.Run);
+	FVCGaitCaps WithAim = Caps;
+	WithAim.Aim = 150.f;
+	TestEqual(TEXT("The aim ceiling while aiming with the caps applied"), UVCMovementComponent::ResolveSpeedCeiling(WithAim, true, true), 150.f);
+	TestEqual(TEXT("Not aiming: no ceiling"), UVCMovementComponent::ResolveSpeedCeiling(WithAim, true, false), 0.f);
+	TestEqual(TEXT("Caps not applied (motion matching): no ceiling"), UVCMovementComponent::ResolveSpeedCeiling(WithAim, false, true), 0.f);
+	TestEqual(TEXT("A set without one: no ceiling"), UVCMovementComponent::ResolveSpeedCeiling(Caps, true, true), 0.f);
+	TestTrue(TEXT("The ceiling is not a row's cap"), GASP.WithForwardCaps(WithAim).Run == GASP.WithForwardCaps(Caps).Run
+		&& GASP.WithForwardCaps(WithAim).Walk == GASP.WithForwardCaps(Caps).Walk);
+	{
+		const FVector Fwd = FVector::ForwardVector;
+		const FVector Up = FVector::UpVector;
+		const FVector Left = -FVector::RightVector;
+		const FVCGaitValues Strafe = UVCMovementComponent::ComputeGaitValues(Packs, EVCGait::Run, EVCRotationMode::Strafe, true, false,
+			Left * 200.f, Left * 100.f, Fwd, Up, 1.f, 1.f, 150.f);
+		const FVCGaitValues Ahead = UVCMovementComponent::ComputeGaitValues(Packs, EVCGait::Sprint, EVCRotationMode::Strafe, true, false,
+			Fwd * 200.f, Fwd * 100.f, Fwd, Up, 1.f, 1.f, 150.f);
+		const FVCGaitValues Slow = UVCMovementComponent::ComputeGaitValues(Packs, EVCGait::Walk, EVCRotationMode::Strafe, true, false,
+			Left * 50.f, Left * 100.f, Fwd, Up, 1.f, 1.f, 150.f);
+		const FVCGaitValues Halved = UVCMovementComponent::ComputeGaitValues(Packs, EVCGait::Run, EVCRotationMode::Strafe, true, false,
+			Left * 200.f, Left * 100.f, Fwd, Up, 0.5f, 1.f, 150.f);
+		TestTrue(TEXT("The ceiling holds the run's strafe and the sprint ahead at 150, a slower row as it is, the GAS multiplier after it"),
+			Strafe.MaxSpeed == 150.f && Ahead.MaxSpeed == 150.f && FMath::IsNearlyEqual(Slow.MaxSpeed, 108.f, 0.01f) && Halved.MaxSpeed == 75.f);
+	}
 
 	VCTesting::FPlayWorld W(TEXT("VCGaitCapsWorld"), /*bDestroyActorsFirst=*/true);
 	AVCCharacterBase* Player = VCGaitTests::SpawnPlayer(W.World, FRotator::ZeroRotator);
@@ -341,7 +364,17 @@ bool FVCGaitClipCapsTest::RunTest(const FString& Parameters)
 	Player->bIsCrouched = true;
 	Move->ApplyGaitTable();
 	TestEqual(TEXT("Crouched: the crouch set's 250"), Move->MaxWalkSpeedCrouched, 250.f);
+	WithCrouch.Aim = 150.f;
+	Move->SetClipGaitCaps(WithCrouch);
+	Move->bAimingForGait = true;
+	Move->ApplyGaitTable();
+	TestEqual(TEXT("Crouched and aiming: the aim ceiling's 150"), Move->MaxWalkSpeedCrouched, 150.f);
 	Player->bIsCrouched = false;
+	Move->ApplyGaitTable();
+	TestEqual(TEXT("Aiming: the aim ceiling's 150"), Move->MaxWalkSpeed, 150.f);
+	Move->bAimingForGait = false;
+	Move->ApplyGaitTable();
+	TestEqual(TEXT("Not aiming: the run's 400 again"), Move->MaxWalkSpeed, 400.f);
 	Move->bWantsClipGaitCaps = false;
 	return true;
 }
