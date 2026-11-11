@@ -11,6 +11,7 @@
 #include "Combat/VCCombatComponent.h"
 #include "Combat/VCMeleeAttackAbility.h"
 #include "Combat/VCRangedAttackAbility.h"
+#include "Combat/VCBlockAbility.h"
 #include "Animation/VCActionAnimSet.h"
 #include "Animation/VCActionMontageComponent.h"
 #include "Animation/VCAppearanceComponent.h"
@@ -222,19 +223,24 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 
 		// The sheaths (the equipment sheathing plan, D78), in the cycle's order: a weapon carried on the body, drawn into
 		// the main hand. Each item's SheathOffset fits it on the bone; the slot's correction stays the identity.
-		auto AddSheath = [this](const FGameplayTag& Tag, const FText& Name, FName Bone)
+		auto AddSheath = [this](const FGameplayTag& Tag, const FText& Name, FName Bone,
+			const FGameplayTag& Hand = CGFGameplayTags::Equipment_Slot_MainHand, bool bDrawWhenFree = false)
 		{
 			FEquipmentSlotDefinition Sheath;
 			Sheath.SlotTag = Tag;
 			Sheath.SlotDisplayName = Name;
 			Sheath.AttachSocket = Bone;
-			Sheath.DrawSlotTag = CGFGameplayTags::Equipment_Slot_MainHand;
+			Sheath.DrawSlotTag = Hand;
+			Sheath.bDrawWhenFree = bDrawWhenFree;
 			Sheath.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Weapon")));
 			EquipmentManager->AvailableSlots.Add(Sheath);
 		};
 		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_Belt, NSLOCTEXT("VoxelCharacter", "SheathBelt", "Belt"), FName("pelvis"));
 		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_HipLeft, NSLOCTEXT("VoxelCharacter", "SheathHipLeft", "Left Hip"), FName("pelvis"));
 		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_Back, NSLOCTEXT("VoxelCharacter", "SheathBack", "Back"), FName("spine_05"));
+		// The shield's: on the off hand whenever nothing blocks it, on the back while a bow or a two-hander is held (G175).
+		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_ShieldBack, NSLOCTEXT("VoxelCharacter", "SheathShieldBack", "Shield"), FName("spine_03"),
+			CGFGameplayTags::Equipment_Slot_OffHand, /*bDrawWhenFree*/ true);
 	}
 #endif
 
@@ -824,6 +830,10 @@ void AVCCharacterBase::GrantDefaultAbilities(UAbilitySystemComponent* ASC)
 	if (PS->RangedAttackAbilityClass)
 	{
 		ASC->GiveAbility(FGameplayAbilitySpec(PS->RangedAttackAbilityClass, 1, INDEX_NONE, this));
+	}
+	if (PS->BlockAbilityClass)
+	{
+		ASC->GiveAbility(FGameplayAbilitySpec(PS->BlockAbilityClass, 1, INDEX_NONE, this));
 	}
 }
 
@@ -2329,7 +2339,8 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 void AVCCharacterBase::PressPrimaryAction()
 {
 	// Priority chain: GAS ability -> [edit mode only] equipped item action -> voxel dig -> fallback
-	if (IsIncapacitated())
+	// Behind a raised guard nothing else happens (D94): lower it first.
+	if (IsIncapacitated() || bBlocking)
 	{
 		return;
 	}
@@ -2413,7 +2424,12 @@ void AVCCharacterBase::ReleasePrimaryAction()
 
 void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 {
-	// Priority chain: aim a ranged weapon (held) -> GAS ability -> [edit mode only] equipped item alt -> voxel place -> fallback
+	PressSecondaryAction();
+}
+
+void AVCCharacterBase::PressSecondaryAction()
+{
+	// Priority chain: aim a ranged weapon (held) -> raise a shield (held) -> [edit mode only] voxel place
 	if (IsIncapacitated())
 	{
 		return;
@@ -2422,6 +2438,11 @@ void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 	if (!bEditModeEnabled && UVCRangedAttackAbility::HoldsRangedWeapon(this))
 	{
 		SetWantsToAim(true);
+		return;
+	}
+	// A shield in the off hand raises the guard while the button is held (D94); edit mode keeps placing.
+	if (!bEditModeEnabled && StartBlock())
+	{
 		return;
 	}
 
@@ -2445,7 +2466,60 @@ void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 
 void AVCCharacterBase::Input_StopSecondaryAction(const FInputActionValue& Value)
 {
+	ReleaseSecondaryAction();
+}
+
+void AVCCharacterBase::ReleaseSecondaryAction()
+{
 	SetWantsToAim(false);
+	StopBlock();
+}
+
+bool AVCCharacterBase::StartBlock()
+{
+	if (bBlocking)
+	{
+		return true;
+	}
+	// The hands are busy while a weapon comes out or goes back (D79).
+	if (!UVCBlockAbility::CanStartBlock(this) || (ActionMontages && ActionMontages->IsSheathActionPlaying()))
+	{
+		return false;
+	}
+	UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	if (!ASC)
+	{
+		return false;
+	}
+	// The owner raises its guard at once; the server's activation plays it for everyone else and holds State.Blocking.
+	PlayOwnAction(EVCAnimAction::Block);
+	if (!ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(VCGameplayTags::Ability_Block)))
+	{
+		if (ActionMontages && IsLocallyControlled())
+		{
+			ActionMontages->StopActionLocal(EVCAnimAction::Block);
+		}
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s: the guard did not go up"), *GetName());
+		return false;
+	}
+	bBlocking = true;
+	return true;
+}
+
+void AVCCharacterBase::StopBlock()
+{
+	if (!bBlocking)
+	{
+		return;
+	}
+	bBlocking = false;
+	// The guard still up on this machine comes down; one a hit broke staggers already.
+	if (ActionMontages && IsLocallyControlled()
+		&& (ActionMontages->IsActionPlaying(EVCAnimAction::Block) || ActionMontages->IsActionPlaying(EVCAnimAction::BlockHit)))
+	{
+		ActionMontages->PlayActionLocal(EVCAnimAction::BlockEnd);
+	}
+	UVCBlockAbility::ReleaseBlock(GetAbilitySystemComponent());
 }
 
 void AVCCharacterBase::Input_OpenInventory(const FInputActionValue& Value)

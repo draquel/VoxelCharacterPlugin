@@ -96,6 +96,13 @@ public:
 	bool StopActionLocal(EVCAnimAction Action);
 
 	/**
+	 * Whether an action's montage plays on this machine (the current set's).
+	 * @param Action The action
+	 * @return True while its montage plays
+	 */
+	bool IsActionPlaying(EVCAnimAction Action) const;
+
+	/**
 	 * Authority: stops an action on every machine that draws the character, through one reliable multicast (a lost stop
 	 * would leave a looping draw playing).
 	 * @param Action          The action

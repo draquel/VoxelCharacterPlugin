@@ -34,6 +34,14 @@ enum class EVCAnimAction : uint8
 	Unsheathe,
 	/** Putting the weapon in the hand back in its sheath. */
 	Sheathe,
+	/** Raising the shield and holding the guard (D94): its montage loops until the guard is lowered or broken. */
+	Block,
+	/** Lowering the guard. */
+	BlockEnd,
+	/** A hit taken on the guard, then the guard held again (its last section loops, as Block's). */
+	BlockHit,
+	/** The guard broken by a hit the stamina could not pay for: a stagger. */
+	GuardBreak,
 };
 
 /** The side a hit came from, in the victim's gravity frame (the variant of a hit react or a death). */
@@ -206,6 +214,22 @@ public:
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UVCLocomotionClipSet> LocomotionClips;
+
+	/** Raising the shield and holding the guard (D94): the raise, then a hold that loops until the guard comes down. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Block")
+	TObjectPtr<UAnimMontage> Block;
+
+	/** Lowering the guard. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Block")
+	TObjectPtr<UAnimMontage> BlockEnd;
+
+	/** A hit on the guard, then the hold again (looping, as Block's). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Block")
+	TObjectPtr<UAnimMontage> BlockHit;
+
+	/** The guard broken: a stagger. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Block")
+	TObjectPtr<UAnimMontage> GuardBreak;
 
 	/** Taking this set's weapon from a sheath and putting it back, per sheath (the equipment sheathing plan, D79). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")

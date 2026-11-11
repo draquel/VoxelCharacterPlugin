@@ -41,6 +41,10 @@ UAnimMontage* UVCActionAnimSet::GetMontage(EVCAnimAction Action, int32 Variant) 
 	case EVCAnimAction::Revive:   return Revive;
 	case EVCAnimAction::Draw:     return Draw;
 	case EVCAnimAction::Release:  return Release;
+	case EVCAnimAction::Block:      return Block;
+	case EVCAnimAction::BlockEnd:   return BlockEnd;
+	case EVCAnimAction::BlockHit:   return BlockHit;
+	case EVCAnimAction::GuardBreak: return GuardBreak;
 	case EVCAnimAction::Unsheathe:
 	case EVCAnimAction::Sheathe:  return GetSheathMontage(Action, FGameplayTag());
 	}

@@ -108,13 +108,29 @@ attacker builds FCGFDamageContext
 - Equipment stats go through `UVCEquipmentStatEffect` (SetByCaller keys `SetByCaller.Stat.*` in `VCGameplayTags.h`;
   configured under `EquipmentGASSettings` in `Config/DefaultGame.ini`). A new modifiable attribute is one tag and one
   `AddStatModifier` line.
-- **The sword and the shield** (G174, 2026-11-11). The demo's swords (`ID_Weapon_WoodenSword`, `ID_Weapon_IronSword`,
-  and `ID_Weapon_Longsword`, LowPolyRPGWeapons' `SM_Sword_03`) carry the SwordShield action set; the primary action
-  swings them at a target or at the air ("The primary action" below). `Scripts/configure_melee_items.py` builds the
-  longsword and `ID_Weapon_Shield` (`SM_Shield_01` in the off hand, worn on the forearm: `AttachBoneOverride` `lowerarm_l`,
-  upright and facing forward in the pack's guard; +3 `Defense` while worn, through the stat effect above); both are in
-  `CharacterTest`'s kit. The shield has no use yet: there is no block (the pack's `Guard` clips are unused), and nothing
-  takes it off the arm when a bow or a two-handed item is held (G175, D94 in `Documentation/FINDINGS.md`).
+- **The sword and the shield** (G174, G175, D94, 2026-11-11). The demo's swords (`ID_Weapon_WoodenSword`,
+  `ID_Weapon_IronSword`, and `ID_Weapon_Longsword`, LowPolyRPGWeapons' `SM_Sword_03`) carry the SwordShield action set;
+  the primary action swings them at a target or at the air ("The primary action" below). `Scripts/configure_melee_items.py`
+  builds the longsword and `ID_Weapon_Shield` (`SM_Shield_01`, worn on the forearm: `AttachBoneOverride` `lowerarm_l`,
+  upright and facing forward in the guard; +3 `Defense` while on the arm; a Shield fragment); both are in
+  `CharacterTest`'s kit. The shield lives in the character's `Equipment.Slot.Sheath.ShieldBack` (on `spine_03`, drawn into
+  the off hand, `bDrawWhenFree`): on the arm whenever the off hand is free, on the back while the bow or a pickaxe is out
+  (their `BlockedSlotTags`; EquipmentPlugin's "Sheaths" › Blocked hands). The weapon cycle and the sheathe key ignore it
+  (`GetCarriedWeaponSlots` lists the main hand's sheaths only).
+- **Block** (D94). Held with the secondary action while a shield is in the off hand (`UVCBlockAbility::CanStartBlock`):
+  the owner raises its guard at once (`StartBlock`: the set's `Block` montage, the pack's `Guard_Begin` then `Guard_Idle`
+  looping, in the `UpperBodyAction` slot so the legs keep walking) and asks for `UVCBlockAbility` (Ability.Block,
+  ServerOnly, granted through `AVCPlayerState::BlockAbilityClass`), which holds `State.Blocking` while it runs and plays
+  the guard for everyone else; the release lowers it (`BlockEnd`, `Guard_End`) through `ReleaseBlock`, as the bow's draw
+  is released. On the server `UVCCombatComponent::ApplyDamage` hands every hit to `UVCBlockAbility::ApplyGuard` first: a
+  hit from within the shield's arc (`BlockHalfAngle` either side of the facing, about the gravity frame's up) while
+  `State.Blocking` is held loses the shield's `BlockDamageReduction` (0.8) and costs `StaminaPerBlockedDamage` stamina per
+  point taken; the context carries `Damage.Blocked` and the body plays `BlockHit` (`Guard_Hit_01`, then the hold) instead
+  of a hit react. A hit the stamina cannot pay for lands what it could not pay for and breaks the guard (`BreakGuard`):
+  the block is cancelled, `State.GuardBroken` (replicated) refuses a new guard for `GuardBreakSeconds` (1.5), and everyone
+  sees `GuardBreak` (`Guard_Break`). Pure damage and a hit with no source are not blocked; a body without stamina (an NPC)
+  never breaks. While the guard is up the primary action does nothing and stamina does not regenerate. Not done: the
+  guard does not slow the walk, NPCs do not block, and the shield's swap has no montage.
 
 ### The bow (ranged combat plan, 2026-11-06 to 11-07)
 
@@ -745,12 +761,14 @@ Enhanced Input only. `UVCInputConfig` holds the actions (`IA_Move`, `IA_Look`, `
 (Ctrl), `IA_Pause` (P)) and two mapping contexts: `IMC_Gameplay` at priority 0, always on, and `IMC_UI` at 1 while an
 inventory or menu is open (cursor shown). The asset is the controller's `InputConfig`; the character binds the actions,
 the controller adds the contexts. The secondary action is bound on its release too (C3): held with a ranged weapon in
-hand it aims ("The bow" › Aiming), in edit mode it places.
+hand it aims ("The bow" › Aiming), held with a shield in the off hand it guards ("GAS" › Damage pipeline, Block), in edit
+mode it places. `PressSecondaryAction` / `ReleaseSecondaryAction` run it for scripts.
 
 ### The primary action
 
 Primary and secondary actions (LMB / RMB) go through one chain; new action types insert into it, they do not replace
-it. Dead or downed characters ignore both; the primary action waits while a weapon is being unsheathed or sheathed.
+it. Dead or downed characters ignore both; the primary action waits while a weapon is being unsheathed or sheathed, and
+does nothing while the guard is up (D94).
 "The main hand" below is the held item: the hand slot's own or a weapon drawn from a sheath.
 
 1. A ranged weapon in the main hand (the code's step 0): `TryStartRangedAttack` on the press, arrows or not ("No
@@ -1097,7 +1115,8 @@ Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, World
 `Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
-and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83), the swing at the air's `Combat.Melee.HoldsMeleeWeapon` (G174), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the sheaths'
+and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83), the swing at the air's `Combat.Melee.HoldsMeleeWeapon` (G174), the guard's `Combat.Block.Rules` and
+`Combat.Block.GuardTakesFrontHits` (D94), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the sheaths'
 `EquipmentLoop.SheathSlots`, `SheathActionSet` (the set follows the drawn weapon, R and X, the snapshot's drawn state),
 `SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip` (the equipment sheathing plan's S2-S4); the state
 machine's `Locomotion.ClipChoice`, `StanceWeight`, `SetChange` (L1), `States`, `Pace`, `Transitions`, `Instance` and

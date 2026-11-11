@@ -39,7 +39,8 @@ TArray<FGameplayTag> AVCCharacterBase::GetCarriedWeaponSlots() const
 	{
 		for (const FEquipmentSlot& Slot : EquipmentManager->EquipmentSlots)
 		{
-			if (Slot.DrawSlotTag.IsValid() && Slot.bIsOccupied)
+			// The main hand's sheaths: the shield's (drawn into the off hand) comes and goes on its own (G175).
+			if (Slot.DrawSlotTag == CGFGameplayTags::Equipment_Slot_MainHand && Slot.bIsOccupied)
 			{
 				Carried.Add(Slot.SlotTag);
 			}
@@ -75,8 +76,7 @@ bool AVCCharacterBase::CanSheathAction(FGameplayTag SheathSlotTag) const
 	{
 		return GetDrawnSheath().IsValid();
 	}
-	return EquipmentManager->IsSheathSlot(SheathSlotTag) && EquipmentManager->IsSlotOccupied(SheathSlotTag)
-		&& !EquipmentManager->IsDrawn(SheathSlotTag);
+	return GetCarriedWeaponSlots().Contains(SheathSlotTag) && !EquipmentManager->IsDrawn(SheathSlotTag);
 #else
 	return false;
 #endif
@@ -317,7 +317,7 @@ void AVCCharacterBase::UpdateSheathHandOff()
 
 void AVCCharacterBase::HandleEquipmentDrawnChanged(FGameplayTag SlotTag, bool bDrawn)
 {
-	if (bDrawn)
+	if (bDrawn && GetCarriedWeaponSlots().Contains(SlotTag))
 	{
 		LastDrawnSheath = SlotTag;
 	}
