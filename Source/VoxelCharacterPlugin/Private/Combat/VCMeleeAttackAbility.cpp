@@ -18,6 +18,7 @@
 #include "Subsystems/ItemDatabaseSubsystem.h"
 #include "Data/ItemDefinition.h"
 #include "Data/Fragments/ItemFragment_Weapon.h"
+#include "Data/Fragments/ItemFragment_RangedWeapon.h"
 #include "Data/Fragments/ItemFragment_Durability.h"
 #include "Types/ItemInstanceFragments.h"
 #include "Engine/GameInstance.h"
@@ -100,6 +101,25 @@ UVCMeleeAttackAbility::FAttackParameters UVCMeleeAttackAbility::ResolveAttackPar
 float UVCMeleeAttackAbility::GetAttackSpeed(const AActor* Avatar) const
 {
 	return ResolveAttackParameters(Avatar).AttackSpeed;
+}
+
+bool UVCMeleeAttackAbility::HoldsMeleeWeapon(const AActor* Avatar)
+{
+#if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
+	const UEquipmentManagerComponent* Equipment = Avatar ? Avatar->FindComponentByClass<UEquipmentManagerComponent>() : nullptr;
+	const FItemInstance MainHand = Equipment ? Equipment->GetHeldItem(CGFGameplayTags::Equipment_Slot_MainHand) : FItemInstance();
+	if (!MainHand.IsValid())
+	{
+		return false;
+	}
+	const UWorld* World = Avatar->GetWorld();
+	const UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+	const UItemDatabaseSubsystem* ItemDB = GameInstance ? GameInstance->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
+	const UItemDefinition* Definition = ItemDB ? ItemDB->GetDefinition(MainHand.ItemDefinitionId) : nullptr;
+	return Definition && Definition->FindFragment<UItemFragment_Weapon>() && !Definition->FindFragment<UItemFragment_RangedWeapon>();
+#else
+	return false;
+#endif
 }
 
 void UVCMeleeAttackAbility::ApplyWeaponWear(AActor* Avatar) const

@@ -9,6 +9,7 @@
 #include "UI/VCReticleWidget.h"
 #include "Combat/VCArrowProjectile.h"
 #include "Combat/VCCombatComponent.h"
+#include "Combat/VCMeleeAttackAbility.h"
 #include "Combat/VCRangedAttackAbility.h"
 #include "Core/VCCharacterBase.h"
 #include "Core/VCGameplayTags.h"
@@ -466,6 +467,49 @@ bool FVCRanged_LaunchAlongAimRay::RunTest(const FString& Parameters)
 	Ability->ComputeShot(Shooter.NPC, FaceStart, FaceDirection);
 	const double Along = FVector::DotProduct(FaceStart - Eyes, View.Vector());
 	TestTrue(*FString::Printf(TEXT("A wall at the face: starts before it (%.1f uu out)"), Along), Along > 0.0 && Along <= 40.0 + 1.0e-3);
+	return true;
+}
+
+// The primary action's swing at the air (G174) asks whether the main hand holds a melee weapon: a Weapon fragment and no
+// Ranged Weapon fragment. A bow draws instead, and an item without a Weapon fragment (a shield, a torch) is no weapon.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCMelee_HoldsMeleeWeapon, "VoxelCharacter.Combat.Melee.HoldsMeleeWeapon", VC_RANGED_FLAGS)
+bool FVCMelee_HoldsMeleeWeapon::RunTest(const FString& Parameters)
+{
+	FRangedWorld W;
+	if (!TestNotNull(TEXT("The item database"), W.Database))
+	{
+		return false;
+	}
+	UItemDefinition* Bow = DefineBow(W);
+	UItemDefinition* Sword = W.Define(TEXT("MeleeTestSword"), 1, FGameplayTagContainer(CGFGameplayTags::Item_Category_Weapon));
+	{
+		UItemFragment_Equipment* Equip = NewObject<UItemFragment_Equipment>(Sword);
+		Equip->EquipmentSlotTag = CGFGameplayTags::Equipment_Slot_MainHand;
+		Sword->Fragments = { Equip, NewObject<UItemFragment_Weapon>(Sword) };
+	}
+	UItemDefinition* Plank = W.Define(TEXT("MeleeTestPlank"), 1, FGameplayTagContainer(CGFGameplayTags::Item_Category_Weapon));
+	{
+		UItemFragment_Equipment* Equip = NewObject<UItemFragment_Equipment>(Plank);
+		Equip->EquipmentSlotTag = CGFGameplayTags::Equipment_Slot_MainHand;
+		Plank->Fragments = { Equip };
+	}
+	FShooter S = SpawnShooter(W.World, FVector(0, 0, 1000));
+	if (!S.NPC || !S.Equipment) { AddError(TEXT("Spawn failed")); return false; }
+
+	TestFalse(TEXT("Empty hands: no melee weapon"), UVCMeleeAttackAbility::HoldsMeleeWeapon(S.NPC));
+	const FGameplayTag MainHand = CGFGameplayTags::Equipment_Slot_MainHand;
+	const auto Hold = [&](const UItemDefinition* Definition)
+	{
+		FItemInstance Old;
+		S.Equipment->TryUnequip(MainHand, Old);
+		return S.Equipment->TryEquipToSlot(W.Database->CreateItemInstance(Definition->GetPrimaryAssetId()), MainHand) == EEquipmentResult::Success;
+	};
+	TestTrue(TEXT("The sword equips"), Hold(Sword));
+	TestTrue(TEXT("A sword in hand is a melee weapon"), UVCMeleeAttackAbility::HoldsMeleeWeapon(S.NPC));
+	TestTrue(TEXT("The bow equips"), Hold(Bow));
+	TestFalse(TEXT("A bow in hand draws, it does not swing"), UVCMeleeAttackAbility::HoldsMeleeWeapon(S.NPC));
+	TestTrue(TEXT("The plank equips"), Hold(Plank));
+	TestFalse(TEXT("An item without a Weapon fragment is no melee weapon"), UVCMeleeAttackAbility::HoldsMeleeWeapon(S.NPC));
 	return true;
 }
 

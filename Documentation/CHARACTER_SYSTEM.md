@@ -108,6 +108,13 @@ attacker builds FCGFDamageContext
 - Equipment stats go through `UVCEquipmentStatEffect` (SetByCaller keys `SetByCaller.Stat.*` in `VCGameplayTags.h`;
   configured under `EquipmentGASSettings` in `Config/DefaultGame.ini`). A new modifiable attribute is one tag and one
   `AddStatModifier` line.
+- **The sword and the shield** (G174, 2026-11-11). The demo's swords (`ID_Weapon_WoodenSword`, `ID_Weapon_IronSword`,
+  and `ID_Weapon_Longsword`, LowPolyRPGWeapons' `SM_Sword_03`) carry the SwordShield action set; the primary action
+  swings them at a target or at the air ("The primary action" below). `Scripts/configure_melee_items.py` builds the
+  longsword and `ID_Weapon_Shield` (`SM_Shield_01` in the off hand, worn on the forearm: `AttachBoneOverride` `lowerarm_l`,
+  upright and facing forward in the pack's guard; +3 `Defense` while worn, through the stat effect above); both are in
+  `CharacterTest`'s kit. The shield has no use yet: there is no block (the pack's `Guard` clips are unused), and nothing
+  takes it off the arm when a bow or a two-handed item is held (G175, D94 in `Documentation/FINDINGS.md`).
 
 ### The bow (ranged combat plan, 2026-11-06 to 11-07)
 
@@ -469,8 +476,8 @@ L4: D44 is reversed, and motion matching stays selectable for comparison.
   and, for an action it played at input, the owning player skip (D49). On the server it answers the combat component: a
   hit react from the side the hit came from (`DirectionOfHit`, about local up), a death montage for a body with no
   physics asset (one with a physics asset ragdolls), a get-up on revive.
-- **What plays when.** The melee attack: the owner plays its swing at once (`TryStartMeleeAttack`, the server's rate
-  limit mirrored); the server's ability sends it to the others and lands the sweep and the damage at the montage's hit
+- **What plays when.** The melee attack: the owner plays its swing at once (`StartMeleeSwing`, from
+  `TryStartMeleeAttack` or a swing at the air; the server's rate limit mirrored); the server's ability sends it to the others and lands the sweep and the damage at the montage's hit
   time, the first `UVCAnimNotify_ActionHit` (`GetHitTime`; 40% of the length without one), and at once with no montage.
   Dig, place and chop: the owner at input, the others once the server accepted the edit or the chop. Use and placing an
   item: everyone, from the server, since the server may refuse. The bow's draw and release: as the melee attack (ranged
@@ -752,8 +759,14 @@ it. Dead or downed characters ignore both; the primary action waits while a weap
 2. A hostile damageable under the crosshair within `AttackTargetRange`: `TryStartMeleeAttack`.
 3. Chop: a harvestable scatter tree near `GetChopAimPoint()` (`TryChopScatter`), then, in a cubic world outside edit
    mode, a trunk block of a standing voxel tree (`TryChopVoxelTree`).
-4. Dig or place: with edit mode on, or a digging tool in the main hand for a dig (`HasDiggingTool`: `GetMiningSpeed() >
+4. Outside edit mode with no digging tool, a melee weapon in the main hand (`UVCMeleeAttackAbility::HoldsMeleeWeapon`: a
+   Weapon fragment and no Ranged Weapon fragment) swings at the air (`StartMeleeSwing`, G174): the same swing as step 2,
+   and the server's sweep at the hit time lands on whatever is in reach then. Bare hands do nothing here.
+5. Dig or place: with edit mode on, or a digging tool in the main hand for a dig (`HasDiggingTool`: `GetMiningSpeed() >
    1`). Unarmed digging and placing need edit mode.
+
+The input handlers call `PressPrimaryAction` and `ReleasePrimaryAction` (BlueprintCallable), which a script can call on
+the local player's pawn too: Enhanced Input injected from the editor's Python does not reach a PIE player.
 
 Edit mode (`bEditModeEnabled`, off by default) is local input state: B, `SetEditModeEnabled`, or the game module's
 `vox.EditMode`. It drives the `EDIT` cue on the vitals widget and mirrors into VoxelWorlds' `voxel.Edit.PlayerInputs`
@@ -1084,7 +1097,7 @@ Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, World
 `Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
-and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the sheaths'
+and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83), the swing at the air's `Combat.Melee.HoldsMeleeWeapon` (G174), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the sheaths'
 `EquipmentLoop.SheathSlots`, `SheathActionSet` (the set follows the drawn weapon, R and X, the snapshot's drawn state),
 `SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip` (the equipment sheathing plan's S2-S4); the state
 machine's `Locomotion.ClipChoice`, `StanceWeight`, `SetChange` (L1), `States`, `Pace`, `Transitions`, `Instance` and
