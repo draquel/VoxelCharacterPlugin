@@ -687,7 +687,7 @@ D44 is (a); S4 found a cheaper way than D50's (a), and the user took it: (a')).
 | ID | Decision | Options | Decided |
 |---|---|---|---|
 | D43 | MetaHumans' role | (a) every humanoid; (b) one supported body type, the default look decided after S2; (c) stylised only | **(b)**: the architecture does not bet on it; the art direction is yours once S2 shows one in the world. The default look (the user, 2026-11-07): a MetaHuman in smooth worlds and the low-poly body in cubic ones for this project's demos; for the plugins the project's data (P6) |
-| D44 | Player locomotion | (a) motion matching (GASP); (b) state machine with blend spaces | **(a) if S1 passes**, else (b); NPCs (b) either way |
+| D44 | Player locomotion | (a) motion matching (GASP); (b) state machine with blend spaces | **(a) if S1 passes**, else (b); NPCs (b) either way. **Reversed 2026-11-11** (the locomotion state machine plan's D86, at its L4): the player's default is a state machine over the Essential Animation packs, motion matching selectable under `vc.Anim.Locomotion 1` |
 | D45 | Code placement | (a) a new module `VoxelCharacterAnimation`; (b) the deps in the core module | **(a)** |
 | D46 | Content home | (a) untracked pack folders in `content_packs.txt` (`CharacterAnimation`, GASP's content, `MetaHumans`; the names as D50 left them); (b) tracked under LFS | **(a)**, the existing policy |
 | D47 | Quadruped source | (a) PROTOFACTOR's Animal Variety Pack (wolf, deer, fox, pig, crow); (b) the Blender pipeline (rig and actions as scripts); (c) static meshes for now | **(a)**: it has both animals the game spawns, with their clips; its look (realistic low poly) is checked beside the stylised nature packs when it is imported |

@@ -132,8 +132,8 @@ namespace
 	}
 
 	TAutoConsoleVariable<int32> CVarAnimLocomotion(
-		TEXT("vc.Anim.Locomotion"), 1,
-		TEXT("The player's locomotion: 0 the player Blueprint's own anim class (ABP_VoxelCharacter), 1 motion matching (UVCSettings::PlayerLocomotionAnimClass, character animation P5), 2 the state machine over the packs' clips (UVCSettings::PlayerStateMachineAnimClass, the locomotion state machine plan); a class that does not load plays the Blueprint's. Applies at once to every player in play."),
+		TEXT("vc.Anim.Locomotion"), 2,
+		TEXT("The player's locomotion: 0 the player Blueprint's own anim class (ABP_VoxelCharacter), 1 motion matching (UVCSettings::PlayerLocomotionAnimClass, character animation P5, kept for comparison), 2 the state machine over the packs' clips (UVCSettings::PlayerStateMachineAnimClass, the locomotion state machine plan; the default since its L4, D86 reversing D44); a class that does not load plays the Blueprint's. Applies at once to every player in play."),
 		FConsoleVariableDelegate::CreateStatic(&OnLocomotionChanged),
 		ECVF_Default);
 
@@ -144,7 +144,7 @@ namespace
 	}
 
 	TAutoConsoleVariable<int32> CVarAnimMotionMatching(
-		TEXT("vc.Anim.MotionMatching"), 1,
+		TEXT("vc.Anim.MotionMatching"), 2,
 		TEXT("The old name of vc.Anim.Locomotion (0 the Blueprint's anim class, 1 motion matching, 2 the state machine): setting it sets that switch. Read vc.Anim.Locomotion for the locomotion in force."),
 		FConsoleVariableDelegate::CreateStatic(&OnMotionMatchingAliasChanged),
 		ECVF_Default);

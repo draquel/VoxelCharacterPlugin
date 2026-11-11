@@ -522,9 +522,10 @@ void UVCLocomotionAnimInstance::ComputeLocomotion(const FVCAnimInput& Input)
 	bWasFallingForLand = Input.bFalling;
 
 	// The body's frame: the facing turned by the offset the graph turns the root by. The cycles step by the velocity's
-	// angle from the body, and the aim layer aims from the body.
+	// angle from the body. AimYaw stays the base class's, from the facing: the aim layer's raised bow is laid over the
+	// upper body in mesh space, so it already starts from the capsule, not from the turned root (measured from the body,
+	// the torso overshot the view by the legs' lag until the feet caught up, L4's hand pass).
 	CycleDirection = Speed > 1.f ? FRotator::NormalizeAxis(Direction - RootYawOffset) : 0.f;
-	AimYaw = FMath::ClampAngle(FRotator::NormalizeAxis(ViewYaw - RootYawOffset), -90.f, 90.f);
 
 	// The paces (D91): each gait's loops whole at its cap, at the cap over their authored speed.
 	const bool bPace = Input.bSprintPaceEnabled && Input.bOnGround && Set;
