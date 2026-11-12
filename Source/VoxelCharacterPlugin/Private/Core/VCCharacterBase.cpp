@@ -872,7 +872,15 @@ bool AVCCharacterBase::TryStartMeleeAttack()
 	{
 		return false;
 	}
+	return StartMeleeSwing();
+}
 
+bool AVCCharacterBase::StartMeleeSwing()
+{
+	if (!CombatComponent || IsIncapacitated())
+	{
+		return false;
+	}
 	UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
 	if (!ASC)
 	{
@@ -2315,6 +2323,11 @@ void AVCCharacterBase::Input_ToggleView(const FInputActionValue& Value)
 
 void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 {
+	PressPrimaryAction();
+}
+
+void AVCCharacterBase::PressPrimaryAction()
+{
 	// Priority chain: GAS ability -> [edit mode only] equipped item action -> voxel dig -> fallback
 	if (IsIncapacitated())
 	{
@@ -2355,6 +2368,12 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 	// interacting with neither must never touch voxels.
 	if (!bEditModeEnabled && !HasDiggingTool())
 	{
+		// Step 1d: a melee weapon in hand swings with nothing hostile under the crosshair too, and the server's sweep
+		// lands on whatever is there at the hit time (G174: before, a sword did nothing until an enemy was in reach).
+		if (UVCMeleeAttackAbility::HoldsMeleeWeapon(this))
+		{
+			StartMeleeSwing();
+		}
 		return;
 	}
 
@@ -2379,6 +2398,11 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 }
 
 void AVCCharacterBase::Input_StopPrimaryAction(const FInputActionValue& Value)
+{
+	ReleasePrimaryAction();
+}
+
+void AVCCharacterBase::ReleasePrimaryAction()
 {
 	ReleaseRangedAttack();
 	if (BlockInteraction)

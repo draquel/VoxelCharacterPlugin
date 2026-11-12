@@ -280,6 +280,18 @@ public:
 	bool TryStartMeleeAttack();
 
 	/**
+	 * Press the primary action, as IA_PrimaryAction's press does: the whole chain (draw a bow, attack, chop, dig; G174's
+	 * swing at the air with a melee weapon). For scripts and QA on the local player's pawn (Claudius call_actor_function,
+	 * where injected Enhanced Input does not reach a PIE player).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
+	void PressPrimaryAction();
+
+	/** Release the primary action, as IA_PrimaryAction's release does: a bow's draw looses, a timed break stops. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
+	void ReleasePrimaryAction();
+
+	/**
 	 * Start drawing the main hand's ranged weapon (ranged combat plan B3): the owner's check that there is an arrow
 	 * (UVCRangedAttackAbility::CanStartDraw; a toast says none), its own draw montage, and the ability's activation on the
 	 * server. Step 0 of the primary-action chain: a ranged weapon in hand takes the press, arrows or not; also callable
@@ -1017,6 +1029,14 @@ protected:
 
 	/** Last reported carried-light lit state (prompt text depends on it; fuel ticks alone do not refresh). */
 	bool bLastCarriedLightLit = false;
+
+	/**
+	 * Swing: the owner's montage at once (rate limited as the server's) and the melee ability's activation, which sweeps
+	 * on the server at the hit time. TryStartMeleeAttack's swing at a target and the primary action's swing at the air
+	 * with a melee weapon in hand (G174).
+	 * @return True if the ability activation was requested
+	 */
+	bool StartMeleeSwing();
 
 	/** World time of the owner's last swing played at input (the server's rate limit, mirrored). */
 	double LastOwnSwingTime = -1.0;

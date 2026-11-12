@@ -57,6 +57,15 @@ public:
 	 */
 	float GetAttackSpeed(const AActor* Avatar) const;
 
+	/**
+	 * Whether an avatar's main hand holds a melee weapon: the primary action's swing at the air when nothing hostile is
+	 * under the crosshair (G174).
+	 * @param Avatar The character
+	 * @return True for a main-hand item (its own slot's or drawn from a sheath) with a Weapon fragment and no Ranged
+	 *         Weapon fragment
+	 */
+	static bool HoldsMeleeWeapon(const AActor* Avatar);
+
 protected:
 	virtual void ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 		const FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
