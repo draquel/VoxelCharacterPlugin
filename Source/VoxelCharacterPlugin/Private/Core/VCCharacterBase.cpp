@@ -222,25 +222,22 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 		EquipmentManager->AvailableSlots.Add(Chest);
 
 		// The sheaths (the equipment sheathing plan, D78), in the cycle's order: a weapon carried on the body, drawn into
-		// the main hand. Each item's SheathOffset fits it on the bone; the slot's correction stays the identity.
-		auto AddSheath = [this](const FGameplayTag& Tag, const FText& Name, FName Bone,
-			const FGameplayTag& Hand = CGFGameplayTags::Equipment_Slot_MainHand, bool bDrawWhenFree = false)
+		// the main hand. Each item's SheathOffset fits it on the bone; the slot's correction stays the identity. Each is
+		// one place on the body and holds one item (the sheath loadout plan, D95): the back carries a bow, a two-hander
+		// or a shield, and draws a shield into the off hand (its item's hand) with the one-handed weapon (D96).
+		auto AddSheath = [this](const FGameplayTag& Tag, const FText& Name, FName Bone)
 		{
 			FEquipmentSlotDefinition Sheath;
 			Sheath.SlotTag = Tag;
 			Sheath.SlotDisplayName = Name;
 			Sheath.AttachSocket = Bone;
-			Sheath.DrawSlotTag = Hand;
-			Sheath.bDrawWhenFree = bDrawWhenFree;
+			Sheath.DrawSlotTag = CGFGameplayTags::Equipment_Slot_MainHand;
 			Sheath.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Weapon")));
 			EquipmentManager->AvailableSlots.Add(Sheath);
 		};
 		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_Belt, NSLOCTEXT("VoxelCharacter", "SheathBelt", "Belt"), FName("pelvis"));
 		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_HipLeft, NSLOCTEXT("VoxelCharacter", "SheathHipLeft", "Left Hip"), FName("pelvis"));
 		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_Back, NSLOCTEXT("VoxelCharacter", "SheathBack", "Back"), FName("spine_05"));
-		// The shield's: on the off hand whenever nothing blocks it, on the back while a bow or a two-hander is held (G175).
-		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_ShieldBack, NSLOCTEXT("VoxelCharacter", "SheathShieldBack", "Shield"), FName("spine_03"),
-			CGFGameplayTags::Equipment_Slot_OffHand, /*bDrawWhenFree*/ true);
 	}
 #endif
 
@@ -2761,7 +2758,9 @@ bool AVCCharacterBase::UseItemInSlot(int32 SlotIndex)
 				}
 				UE_LOG(LogVoxelCharacter, Log, TEXT("UseItemInSlot: carry %s -> %s: %s"), *Item.ItemDefinitionId.PrimaryAssetName.ToString(),
 					*Sheath.ToString(), *UEnum::GetValueAsString(Equipped));
-				if (Equipped == EEquipmentResult::Success && EquipmentManager->IsSheathSlot(Sheath))
+				// A shield (D96) is no weapon of the cycle: it follows the drawn one into the off hand on its own, and the
+				// weapon in the hand stays there.
+				if (Equipped == EEquipmentResult::Success && GetCarriedWeaponSlots().Contains(Sheath))
 				{
 					RunSheathSequence(Sheath, /*bOwnerPlayedIt*/ false);
 				}
@@ -3021,8 +3020,14 @@ bool AVCCharacterBase::RestoreItemSnapshotFromPlayerState()
 			{
 				continue;
 			}
-			// A drawn weapon comes back drawn (no montage); an old save's main-hand weapon lands in its sheath, drawn.
-			if (EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, Entry.SlotTag, Entry.bDrawn) == EEquipmentResult::Success)
+			// A drawn weapon comes back drawn (no montage); an old save's main-hand weapon lands in its sheath, drawn. A slot
+			// the character no longer has (a shield saved in the retired Sheath.ShieldBack, D95) gives way to the item's own.
+			const bool bHasSlot = EquipmentManager->EquipmentSlots.ContainsByPredicate([&Entry](const FEquipmentSlot& Slot)
+			{
+				return Slot.SlotTag == Entry.SlotTag;
+			});
+			if (EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, bHasSlot ? Entry.SlotTag : FGameplayTag(),
+				Entry.bDrawn) == EEquipmentResult::Success)
 			{
 				++Restored;
 			}

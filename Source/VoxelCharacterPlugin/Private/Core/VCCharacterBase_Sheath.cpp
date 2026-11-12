@@ -39,7 +39,7 @@ TArray<FGameplayTag> AVCCharacterBase::GetCarriedWeaponSlots() const
 	{
 		for (const FEquipmentSlot& Slot : EquipmentManager->EquipmentSlots)
 		{
-			// The main hand's sheaths: the shield's (drawn into the off hand) comes and goes on its own (G175).
+			// The main hand's sheaths: a shield on the back draws into the off hand and follows the drawn weapon (D96).
 			if (Slot.DrawSlotTag == CGFGameplayTags::Equipment_Slot_MainHand && Slot.bIsOccupied)
 			{
 				Carried.Add(Slot.SlotTag);

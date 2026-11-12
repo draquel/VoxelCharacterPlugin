@@ -11,6 +11,7 @@
 #include "Core/VCGameplayTags.h"
 #include "Core/VCTypes.h"
 #include "Components/EquipmentManagerComponent.h"
+#include "Components/InventoryComponent.h"
 #include "Data/Fragments/ItemFragment_Equipment.h"
 #include "Data/ItemDefinition.h"
 #include "Subsystems/ItemDatabaseSubsystem.h"
@@ -132,24 +133,17 @@ bool FVCSheath_Slots::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	// The three weapon sheaths, drawn into the main hand, on their bones, in the cycle's order (D78).
+	// The three weapon sheaths, one place on the body each, drawn into the main hand, on their bones, in the cycle's order
+	// (D78, D95): no second sheath on the back for the shield.
 	const FGameplayTag Expected[] = { CGFGameplayTags::Equipment_Slot_Sheath_Belt, CGFGameplayTags::Equipment_Slot_Sheath_HipLeft,
 		CGFGameplayTags::Equipment_Slot_Sheath_Back };
 	const FName Bones[] = { TEXT("pelvis"), TEXT("pelvis"), TEXT("spine_05") };
-	// The shield's (G175) draws into the off hand on its own and is no carried weapon of the cycle.
 	TArray<FGameplayTag> Sheaths;
 	for (const FEquipmentSlot& Slot : Equipment->EquipmentSlots)
 	{
-		if (Slot.SlotTag == CGFGameplayTags::Equipment_Slot_Sheath_ShieldBack.GetTag())
-		{
-			TestTrue(TEXT("The shield's sheath draws into the off hand"), Slot.DrawSlotTag == CGFGameplayTags::Equipment_Slot_OffHand.GetTag());
-			TestTrue(TEXT("The shield's sheath draws when the hand is free"), Slot.bDrawWhenFree);
-			TestTrue(TEXT("The shield's sheath hangs on spine_03"), Equipment->GetVisualAttachSocket(Slot.SlotTag) == FName(TEXT("spine_03")));
-		}
-		else if (Slot.DrawSlotTag.IsValid())
+		if (Slot.DrawSlotTag.IsValid())
 		{
 			TestTrue(*FString::Printf(TEXT("%s draws into the main hand"), *Slot.SlotTag.ToString()), Slot.DrawSlotTag == CGFGameplayTags::Equipment_Slot_MainHand.GetTag());
-			TestFalse(*FString::Printf(TEXT("%s waits to be drawn"), *Slot.SlotTag.ToString()), Slot.bDrawWhenFree);
 			Sheaths.Add(Slot.SlotTag);
 		}
 	}
@@ -166,6 +160,48 @@ bool FVCSheath_Slots::RunTest(const FString& Parameters)
 	{
 		return S.SlotTag == CGFGameplayTags::Equipment_Slot_MainHand.GetTag() && !S.DrawSlotTag.IsValid();
 	}));
+
+	// A shield goes onto the back, draws into the off hand and follows the sword (D96); the cycle and R leave it alone.
+	const FGameplayTag Back = CGFGameplayTags::Equipment_Slot_Sheath_Back;
+	const FGameplayTag HipLeft = CGFGameplayTags::Equipment_Slot_Sheath_HipLeft;
+	UItemDefinition* Sword = W.DefineWeapon(TEXT("SheathSlotsSword"), HipLeft, FGameplayTag());
+	UItemDefinition* Shield = W.DefineWeapon(TEXT("SheathSlotsShield"), Back, FGameplayTag());
+	UItemFragment_Equipment* ShieldFragment = CastChecked<UItemFragment_Equipment>(Shield->Fragments[0]);
+	ShieldFragment->EquipmentSlotTag = CGFGameplayTags::Equipment_Slot_OffHand;
+	ShieldFragment->DrawWithSlotTag = CGFGameplayTags::Equipment_Slot_MainHand;
+	ShieldFragment->SheathBoneOverride = TEXT("spine_03");
+	Equipment->TryEquip(W.Database->CreateItemInstance(Sword->GetPrimaryAssetId(), 1));
+	TestEqual(TEXT("The shield equips onto the back"), static_cast<int32>(Equipment->TryEquip(W.Database->CreateItemInstance(Shield->GetPrimaryAssetId(), 1))),
+		static_cast<int32>(EEquipmentResult::Success));
+	const FEquipmentSlot* BackSlot = Equipment->EquipmentSlots.FindByPredicate([&Back](const FEquipmentSlot& S) { return S.SlotTag == Back; });
+	TestTrue(TEXT("The back draws the shield into the off hand"), BackSlot && BackSlot->DrawSlotTag == CGFGameplayTags::Equipment_Slot_OffHand.GetTag());
+	TestTrue(TEXT("The shield hangs on spine_03 (its own bone)"), Equipment->GetVisualAttachSocket(Back) == FName(TEXT("spine_03")));
+	TestFalse(TEXT("The shield is no carried weapon of the cycle"), Player->GetCarriedWeaponSlots().Contains(Back));
+	TestTrue(TEXT("R draws the sword"), Player->RequestToggleSheathe());
+	TestTrue(TEXT("The sword is drawn"), Equipment->IsDrawn(HipLeft));
+	TestTrue(TEXT("The shield came onto the arm with it"), Equipment->IsDrawn(Back));
+	TestTrue(TEXT("The drawn shield rides the off hand's bone"), Equipment->GetVisualAttachSocket(Back) == FName(TEXT("hand_l")));
+	TestTrue(TEXT("R sheathes the sword"), Player->RequestToggleSheathe());
+	TestFalse(TEXT("The shield went onto the back with it"), Equipment->IsDrawn(Back));
+
+	// The shield used from the bag (F) with the sword drawn: onto the arm, and the sword stays in the hand (no draw sequence).
+	UInventoryComponent* Bag = Player->FindComponentByClass<UInventoryComponent>();
+	if (TestNotNull(TEXT("The player's bag"), Bag))
+	{
+		TestTrue(TEXT("R draws the sword again"), Player->RequestToggleSheathe());
+		TestEqual(TEXT("The shield goes to the bag"), static_cast<int32>(Equipment->TryUnequipToInventory(Back, Bag)), static_cast<int32>(EEquipmentResult::Success));
+		int32 ShieldSlot = INDEX_NONE;
+		for (int32 i = 0; i < Bag->MaxSlots; ++i)
+		{
+			if (Bag->GetItemInSlot(i).ItemDefinitionId == Shield->GetPrimaryAssetId())
+			{
+				ShieldSlot = i;
+			}
+		}
+		TestTrue(TEXT("The shield used from the bag"), ShieldSlot != INDEX_NONE && Player->UseItemInSlot(ShieldSlot));
+		TestTrue(TEXT("The sword is still drawn"), Equipment->IsDrawn(HipLeft));
+		TestTrue(TEXT("The shield is on the arm"), Equipment->IsDrawn(Back));
+	}
 	return true;
 }
 
