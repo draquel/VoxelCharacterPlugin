@@ -221,6 +221,16 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 		Chest.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Armor")));
 		EquipmentManager->AvailableSlots.Add(Chest);
 
+		// The quiver, worn on the back with its opening over the right shoulder blade (the bow pack's reload from the back,
+		// D97). It shares the back's place with the back's sheath: only a bow can be there with it (its fragment's
+		// SharesPlaceWith*), so a shield or a two-hander sends it to the bag. The item's AttachOffset fits it on the bone.
+		FEquipmentSlotDefinition Quiver;
+		Quiver.SlotTag = CGFGameplayTags::Equipment_Slot_Quiver;
+		Quiver.SlotDisplayName = NSLOCTEXT("VoxelCharacter", "Quiver", "Quiver");
+		Quiver.AttachSocket = FName("spine_05");
+		Quiver.AcceptedItemTags.AddTag(CGFGameplayTags::Item_Category_Quiver);
+		EquipmentManager->AvailableSlots.Add(Quiver);
+
 		// The sheaths (the equipment sheathing plan, D78), in the cycle's order: a weapon carried on the body, drawn into
 		// the main hand. Each item's SheathOffset fits it on the bone; the slot's correction stays the identity. Each is
 		// one place on the body and holds one item (the sheath loadout plan, D95): the back carries a bow, a two-hander
