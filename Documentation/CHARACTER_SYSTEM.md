@@ -108,15 +108,21 @@ attacker builds FCGFDamageContext
 - Equipment stats go through `UVCEquipmentStatEffect` (SetByCaller keys `SetByCaller.Stat.*` in `VCGameplayTags.h`;
   configured under `EquipmentGASSettings` in `Config/DefaultGame.ini`). A new modifiable attribute is one tag and one
   `AddStatModifier` line.
-- **The sword and the shield** (G174, G175, D94, 2026-11-11). The demo's swords (`ID_Weapon_WoodenSword`,
+- **The sword and the shield** (G174, G175, D94, D95, D96, 2026-11-11). The demo's swords (`ID_Weapon_WoodenSword`,
   `ID_Weapon_IronSword`, and `ID_Weapon_Longsword`, LowPolyRPGWeapons' `SM_Sword_03`) carry the SwordShield action set;
   the primary action swings them at a target or at the air ("The primary action" below). `Scripts/configure_melee_items.py`
   builds the longsword and `ID_Weapon_Shield` (`SM_Shield_01`, worn on the forearm: `AttachBoneOverride` `lowerarm_l`,
   upright and facing forward in the guard; +3 `Defense` while on the arm; a Shield fragment); both are in
-  `CharacterTest`'s kit. The shield lives in the character's `Equipment.Slot.Sheath.ShieldBack` (on `spine_03`, drawn into
-  the off hand, `bDrawWhenFree`): on the arm whenever the off hand is free, on the back while the bow or a pickaxe is out
-  (their `BlockedSlotTags`; EquipmentPlugin's "Sheaths" › Blocked hands). The weapon cycle and the sheathe key ignore it
-  (`GetCarriedWeaponSlots` lists the main hand's sheaths only).
+  `CharacterTest`'s kit. You can only equip what can be sheathed together (the sheath loadout plan, D95): the shield is
+  carried on the back, `Equipment.Slot.Sheath.Back`, the bow's place, so the back holds one of a bow, a two-hander or a
+  shield, and equipping one from the bag sends the other to the bag (EquipmentPlugin's "Sheaths" › One item per place).
+  On the back it hangs on `spine_03` (its `SheathBoneOverride`), face out and top at the shoulders; the back draws it into
+  the off hand. It follows the one-handed weapon (D96, its `DrawWithSlotTag`): on the arm while a sword is drawn, onto
+  the back when the sword is sheathed or another weapon comes out; a pickaxe needs both hands (`BlockedSlotTags`) and a
+  torch in the off hand wins, so with either the shield stays on the back. The swap is instant, at the sword's hand-off.
+  The weapon cycle and the sheathe key ignore it (`GetCarriedWeaponSlots` lists the sheaths that draw into the main
+  hand). A save holding the shield in the retired `Sheath.ShieldBack` restores it onto the back (a tag redirect, and the
+  snapshot falls back to the item's own sheath for a slot the character no longer has).
 - **Block** (D94). Held with the secondary action while a shield is in the off hand (`UVCBlockAbility::CanStartBlock`):
   the owner raises its guard at once (`StartBlock`: the set's `Block` montage, the pack's `Guard_Begin` then `Guard_Idle`
   looping, in the `UpperBodyAction` slot so the legs keep walking) and asks for `UVCBlockAbility` (Ability.Block,
@@ -899,7 +905,8 @@ runs `FellOutOfWorld`; `RecoverFromMissingTerrain` puts a pawn whose terrain nev
 - **Callables.** `EquipHotbarItem(slot)`, `UnequipSlotToInventory(tag)`, `RequestUseActiveItem()`.
 - **Carried weapons** (the equipment sheathing plan, 2026-11-08, D77-D82; EquipmentPlugin's "Sheaths"). The character
   has three sheaths beside its four slots, in the cycle's order: `Equipment.Slot.Sheath.Belt` (`pelvis`, the
-  pickaxes), `.HipLeft` (`pelvis`, the swords), `.Back` (`spine_05`, the bow), each drawn into the main hand. A weapon
+  pickaxes), `.HipLeft` (`pelvis`, the swords), `.Back` (`spine_05`, the bow, or the shield), each drawn into the main
+  hand (a shield on the back into the off hand) and each one place holding one item (D95). A weapon
   lives in its sheath and is drawn by the slot's replicated state; everything that asks what the player wields asks
   the hand (`GetHeldItem(MainHand)`): the action set (all sheathed is `Unarmed`), the primary chain, digging (a belted
   pickaxe grants no mining speed: a sheath's GAS applies while drawn), the drawn grip.
@@ -1117,7 +1124,7 @@ Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, World
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
 and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83), the swing at the air's `Combat.Melee.HoldsMeleeWeapon` (G174), the guard's `Combat.Block.Rules` and
 `Combat.Block.GuardTakesFrontHits` (D94), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the sheaths'
-`EquipmentLoop.SheathSlots`, `SheathActionSet` (the set follows the drawn weapon, R and X, the snapshot's drawn state),
+`EquipmentLoop.SheathSlots` (the three sheaths, a shield on the back drawn into the off hand with the sword, D95-D96), `SheathActionSet` (the set follows the drawn weapon, R and X, the snapshot's drawn state),
 `SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip` (the equipment sheathing plan's S2-S4); the state
 machine's `Locomotion.ClipChoice`, `StanceWeight`, `SetChange` (L1), `States`, `Pace`, `Transitions`, `Instance` and
 `Movement.GaitClipCaps` (L2). The feel is judged by hand on `/Game/PluginTesting/Tests/Character/CharacterTest`
