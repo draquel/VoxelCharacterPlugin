@@ -8,6 +8,7 @@
 
 class AVCArrowProjectile;
 class UAbilitySystemComponent;
+class UStaticMesh;
 
 /**
  * The bow's attack (ranged combat plan B3, D56): hold to draw, release to shoot, for whatever ranged weapon the main
@@ -20,7 +21,9 @@ class UAbilitySystemComponent;
  * draw. At the release a draw shorter than the weapon's minimum is no shot; otherwise the server uses up one arrow from
  * the inventory, spawns it (AVCArrowProjectile::SpawnArrow) along the reticle's line (ComputeShot, D83), wears the bow by its
  * Durability fragment's DegradeRate, and sends the release to everyone else. Without an arrow the draw does not start
- * (CanStartDraw: the owner's check and the server's), and a release that finds none left is refused.
+ * (CanStartDraw: the owner's check and the server's), and a release that finds none left is refused. A player character
+ * draws only a nocked arrow: it reloads after each shot (the bow reload plan, D98; AVCCharacterBase::IsArrowNocked) and
+ * hears of the shot here (AVCCharacterBase::HandleArrowLoosed).
  *
  * The draw and the release have montages when the avatar's UVCActionMontageComponent has them (EVCAnimAction::Draw and
  * ::Release): the owning player plays its own at input and the server sends them to everyone else (D49). Granted to players
@@ -54,8 +57,25 @@ public:
 	static bool HoldsRangedWeapon(const AActor* Avatar);
 
 	/**
+	 * Whether an avatar has ammo to load: a ranged weapon that shoots ammo in its main hand and some of that ammo in its
+	 * inventory (the reload's check, D98).
+	 * @param Avatar The character
+	 * @return True when an arrow could be nocked
+	 */
+	static bool HasAmmoToLoad(const AActor* Avatar);
+
+	/**
+	 * The look of the ammo the avatar carries: the ammo item's WorldDisplay mesh (the projectile's), loaded; the ammo the
+	 * main hand's ranged weapon shoots, else any (Item.Ammo). For the arrow in the hand and the quiver (D100).
+	 * @param Avatar The character
+	 * @return The mesh, or null without ammo or a mesh
+	 */
+	static UStaticMesh* LoadAmmoMesh(const AActor* Avatar);
+
+	/**
 	 * Whether an avatar can start a draw: a ranged weapon in its main hand and, when the weapon shoots ammo, some in its
-	 * inventory. One predicate for the owner's input and the server's activation (D-CR16).
+	 * inventory and, for a player character, an arrow nocked (D98). One predicate for the owner's input and the server's
+	 * activation (D-CR16).
 	 * @param Avatar The character
 	 * @return True when a draw may start
 	 */

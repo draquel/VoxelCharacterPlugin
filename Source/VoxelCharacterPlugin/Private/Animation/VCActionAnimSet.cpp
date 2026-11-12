@@ -45,6 +45,8 @@ UAnimMontage* UVCActionAnimSet::GetMontage(EVCAnimAction Action, int32 Variant) 
 	case EVCAnimAction::BlockEnd:   return BlockEnd;
 	case EVCAnimAction::BlockHit:   return BlockHit;
 	case EVCAnimAction::GuardBreak: return GuardBreak;
+	case EVCAnimAction::Reload:
+		return Variant == static_cast<int32>(EVCReloadFrom::Bag) && ReloadFromBag ? ReloadFromBag.Get() : ReloadFromQuiver.Get();
 	case EVCAnimAction::Unsheathe:
 	case EVCAnimAction::Sheathe:  return GetSheathMontage(Action, FGameplayTag());
 	}

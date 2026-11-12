@@ -103,6 +103,14 @@ public:
 	bool IsActionPlaying(EVCAnimAction Action) const;
 
 	/**
+	 * The action's montage playing on the body and how far in (any variant of a Reload).
+	 * @param Action      The action
+	 * @param OutPosition Seconds into the montage
+	 * @return The playing montage, or null
+	 */
+	const UAnimMontage* GetPlayingActionMontage(EVCAnimAction Action, float& OutPosition) const;
+
+	/**
 	 * Authority: stops an action on every machine that draws the character, through one reliable multicast (a lost stop
 	 * would leave a looping draw playing).
 	 * @param Action          The action
