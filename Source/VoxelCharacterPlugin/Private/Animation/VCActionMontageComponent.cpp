@@ -149,9 +149,10 @@ void UVCActionMontageComponent::PlayActionForEveryone(EVCAnimAction Action, int3
 
 bool UVCActionMontageComponent::StopActionLocal(EVCAnimAction Action)
 {
-	UAnimMontage* Montage = GetMontage(Action);
+	float Position = 0.f;
+	UAnimMontage* Montage = const_cast<UAnimMontage*>(GetPlayingActionMontage(Action, Position));
 	UAnimInstance* AnimInstance = Montage ? GetBodyAnimInstance() : nullptr;
-	if (!AnimInstance || !AnimInstance->Montage_IsPlaying(Montage))
+	if (!AnimInstance)
 	{
 		return false;
 	}
@@ -161,9 +162,29 @@ bool UVCActionMontageComponent::StopActionLocal(EVCAnimAction Action)
 
 bool UVCActionMontageComponent::IsActionPlaying(EVCAnimAction Action) const
 {
-	UAnimMontage* Montage = GetMontage(Action);
-	const UAnimInstance* AnimInstance = Montage ? GetBodyAnimInstance() : nullptr;
-	return AnimInstance && AnimInstance->Montage_IsPlaying(Montage);
+	float Position = 0.f;
+	return GetPlayingActionMontage(Action, Position) != nullptr;
+}
+
+const UAnimMontage* UVCActionMontageComponent::GetPlayingActionMontage(EVCAnimAction Action, float& OutPosition) const
+{
+	const UAnimInstance* AnimInstance = GetBodyAnimInstance();
+	if (!AnimInstance)
+	{
+		return nullptr;
+	}
+	// A reload has one montage per place the arrow comes from; the other actions stop and ask by their first.
+	const int32 Variants = Action == EVCAnimAction::Reload ? 2 : 1;
+	for (int32 Variant = 0; Variant < Variants; ++Variant)
+	{
+		const UAnimMontage* Montage = GetMontage(Action, Variant);
+		if (Montage && AnimInstance->Montage_IsPlaying(Montage))
+		{
+			OutPosition = AnimInstance->Montage_GetPosition(Montage);
+			return Montage;
+		}
+	}
+	return nullptr;
 }
 
 void UVCActionMontageComponent::StopActionForEveryone(EVCAnimAction Action, bool bOwnerStoppedIt)

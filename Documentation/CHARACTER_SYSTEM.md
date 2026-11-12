@@ -174,6 +174,28 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
   (Aiming, below) at the bow's speed times the draw's power plus the archer's own velocity, and the bow wears by its
   `DegradeRate`. No ranged weapon, a dead or downed shooter or no arrow at the release: no shot, nothing used. The
   owner's check and the server's are one predicate, `CanStartDraw` (D-CR16).
+- **The reload (the bow reload plan, D98-D101, 2026-11-12).** A player character draws only a nocked arrow
+  (`AVCCharacterBase::IsArrowNocked`, set by the server and replicated; an NPC shooter draws as before). The server
+  loads the bow on its own (`VCCharacterBase_Reload.cpp`, `UpdateBowReload` each tick through `CanReload`) once it is in
+  the hand and empty, its arrows in the bag, nothing drawn or sheathed mid-way, after the unsheathe's end, the last
+  shot's loose (`ReloadAfterShotSeconds`, 0.35 s) or a hit's flinch (`ReloadAfterHitSeconds`, 0.6 s): it plays
+  `EVCAnimAction::Reload` to everyone, from a worn quiver (`EVCReloadFrom::Quiver`, the pack's `Reload_Back`, over the
+  right shoulder) or without one from the bag at the hip (`Reload_Hip`), and nocks at the montage's action point
+  (`GetHitTime`, read from the asset: a dedicated server plays nothing). The shot empties the string
+  (`HandleArrowLoosed`, from the ability); the weapon leaving the hand, a fall and death empty it too, and a hit breaks a
+  running reload off. Arrows stay in the bag and are spent at the shot. A press while loading waits: the draw starts at
+  the nock if the press is still held (`bDrawWaitsForNock`, the owner's). The reload plays in the bow layer's
+  `UpperBody` slot (walking and crouching go on). `setup_character_layers.py` reads the grab and the nock from the
+  pack's arrow bones (`arrow_hand_r` settling in the hand, `arrow_bow_string` on the string: quiver 0.10 and 0.44, bag
+  0.19 and 0.43 of 1 s) and marks them on the montages (`UVCAnimNotify_ItemHandOff`, `UVCAnimNotify_ActionHit`). The
+  arrow is seen (D100), every machine, with `ArrowMesh` (the bag's ammo mesh, replicated since the bag is the owner's):
+  in the right hand from the grab to the nock on the pack's own `arrow_hand_r` fit (`UVCActionAnimSet::HeldArrowGrip`),
+  then from the nock on the drawing hand (`NockedArrowOffset`, the pack's at full draw) toward the bow hand, through the
+  draw, until the release; four arrows stand in a worn quiver while the bag holds any (`QuiverArrowLayout`). Checked on
+  `CharacterTest` (`Saved/QA/reload/`): the unsheathe, the reload from the quiver, nocked at rest and drawn; without the
+  quiver from the hip; a press held through the reload drawing at the nock. Test
+  `VoxelCharacter.Combat.Ranged.ReloadCycle`. Not done: the crouched reloads (the standing one plays over crouched legs),
+  the arrows in first person, the bow's string (a static mesh) does not follow the draw.
 - **The arrow (D54).** `AVCArrowProjectile` (`Combat/VCArrowProjectile.h`), replicated and spawned by the server only
   (no client prediction), carries an `FVCArrowShot` (damage at full draw, the draw's power, type, crits, the bow). A 4 uu
   sphere sweeps and ignores its shooter. On a pawn or anything with a combat component it applies the hit through the

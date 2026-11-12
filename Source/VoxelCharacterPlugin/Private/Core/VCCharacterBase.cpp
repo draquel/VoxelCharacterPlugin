@@ -230,6 +230,13 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 		Quiver.AttachSocket = FName("spine_05");
 		Quiver.AcceptedItemTags.AddTag(CGFGameplayTags::Item_Category_Quiver);
 		EquipmentManager->AvailableSlots.Add(Quiver);
+		// The arrows standing in it (D100), for the pack's quiver (its opening up +Z, the rim at 18 cm, the tube 6.7 cm out
+		// along +Y): heads down inside, the nocks 12 cm above the rim, fanned a little.
+		const FVector4f Fan[] = { FVector4f(-3.f, 5.f, -4.f, 3.f), FVector4f(3.f, 5.5f, 4.f, 2.f), FVector4f(-1.5f, 9.f, -2.f, -4.f), FVector4f(2.f, 8.5f, 3.f, -3.f) };
+		for (const FVector4f& Arrow : Fan)
+		{
+			QuiverArrowLayout.Add(FTransform(FRotator(Arrow.W, 0.f, 180.f + Arrow.Z), FVector(Arrow.X, Arrow.Y, 30.f)));
+		}
 
 		// The sheaths (the equipment sheathing plan, D78), in the cycle's order: a weapon carried on the body, drawn into
 		// the main hand. Each item's SheathOffset fits it on the bone; the slot's correction stays the identity. Each is
@@ -380,6 +387,12 @@ void AVCCharacterBase::BeginPlay()
 		EquipmentManager->OnDrawnChanged.AddDynamic(this, &AVCCharacterBase::HandleEquipmentDrawnChanged);
 	}
 #endif
+#if WITH_INVENTORY_PLUGIN
+	if (InventoryComponent)
+	{
+		InventoryComponent->OnInventoryChanged.AddDynamic(this, &AVCCharacterBase::HandleInventoryChangedForReload);
+	}
+#endif
 	RefreshActionSet();
 
 	// The player's montage sets come from the project settings unless the Blueprint lists its own.
@@ -403,6 +416,7 @@ void AVCCharacterBase::BeginPlay()
 	{
 		CombatComponent->OnDied.AddDynamic(this, &AVCCharacterBase::HandleDied);
 		CombatComponent->OnDowned.AddDynamic(this, &AVCCharacterBase::HandleDowned);
+		CombatComponent->OnDamaged.AddDynamic(this, &AVCCharacterBase::HandleDamagedForReload);
 	}
 
 	// --- Underwater Post-Process (the local player's view only; again on each controller change, G133) ---
@@ -524,6 +538,8 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 	TickWorldSafety(DeltaSeconds);
 	UpdateDrawnGrip();
 	UpdateSheathHandOff();
+	UpdateBowReload();
+	UpdateHeldArrow();
 
 	// The weather on the character (the weather plan's P5): the server sets the wet and cold states every half second.
 	if (HasAuthority())
@@ -641,6 +657,8 @@ void AVCCharacterBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(AVCCharacterBase, bIsCorpse);
 	DOREPLIFETIME(AVCCharacterBase, bIsAiming);
+	DOREPLIFETIME(AVCCharacterBase, bArrowNocked);
+	DOREPLIFETIME(AVCCharacterBase, ArrowMesh);
 }
 
 // ---------------------------------------------------------------------------
@@ -940,6 +958,12 @@ bool AVCCharacterBase::TryStartRangedAttack()
 	// The owner's check; the server's activation runs the same one.
 	if (!UVCRangedAttackAbility::CanStartDraw(this))
 	{
+		// Arrows but none nocked yet: the draw starts at the nock if the press is still held (D98).
+		if (UVCRangedAttackAbility::HasAmmoToLoad(this))
+		{
+			bDrawWaitsForNock = true;
+			return true;
+		}
 		if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
 		{
 			PC->ShowToast(NSLOCTEXT("VCHud", "NoArrows", "No arrows"), 2.0f);
@@ -962,6 +986,8 @@ bool AVCCharacterBase::TryStartRangedAttack()
 
 void AVCCharacterBase::ReleaseRangedAttack()
 {
+	// Let go before the nock: no draw waits any more.
+	bDrawWaitsForNock = false;
 	if (!bDrawingRangedWeapon)
 	{
 		return;
@@ -1166,6 +1192,12 @@ void AVCCharacterBase::ShareOwnAction(EVCAnimAction Action)
 
 void AVCCharacterBase::Incapacitate()
 {
+	// Down or dead: the string is empty and no reload runs (D101).
+	if (HasAuthority())
+	{
+		CancelReload(0.f);
+		SetArrowNocked(false);
+	}
 	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
 	{
 		Movement->StopMovementImmediately();
@@ -1786,6 +1818,25 @@ void AVCCharacterBase::HandleItemUnequipped(const FItemInstance& Item, FGameplay
 void AVCCharacterBase::HandleEquipmentChanged()
 {
 	RefreshActionSet();
+
+	// The reload's gate (D98): a ranged weapon in the hand. Leaving the hand (sheathed, swapped, dropped) empties the
+	// string; coming into it, the unsheathe's end plays before the reload starts.
+	const bool bWasInHand = bRangedWeaponInHand;
+	bRangedWeaponInHand = UVCRangedAttackAbility::HoldsRangedWeapon(this);
+	if (HasAuthority())
+	{
+		if (!bRangedWeaponInHand)
+		{
+			CancelReload(0.f);
+			SetArrowNocked(false);
+		}
+		else if (!bWasInHand && GetWorld())
+		{
+			NextReloadTime = FMath::Max(NextReloadTime, GetWorld()->GetTimeSeconds() + ReloadAfterShotSeconds);
+		}
+		RefreshArrowMesh();
+	}
+	UpdateQuiverArrows();
 }
 
 void AVCCharacterBase::RefreshActionSet()
@@ -2711,6 +2762,8 @@ void AVCCharacterBase::HandleEquipmentVisualAttached(FGameplayTag SlotTag)
 {
 	// The manager attaches to the body; first-person arms take their slots once the mesh exists.
 	UpdateEquipmentAttachments();
+	// A quiver's mesh landed: the arrows standing in it ride its visual (D100).
+	UpdateQuiverArrows();
 }
 
 void AVCCharacterBase::Server_UseItemInSlot_Implementation(int32 SlotIndex)

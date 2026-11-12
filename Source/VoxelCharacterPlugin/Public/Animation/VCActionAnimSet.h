@@ -42,6 +42,21 @@ enum class EVCAnimAction : uint8
 	BlockHit,
 	/** The guard broken by a hit the stamina could not pay for: a stagger. */
 	GuardBreak,
+	/**
+	 * Taking an arrow and nocking it (the bow reload plan, D98): its variant is where the arrow comes from
+	 * (EVCReloadFrom). The grab is the montage's UVCAnimNotify_ItemHandOff, the nock its UVCAnimNotify_ActionHit.
+	 */
+	Reload,
+};
+
+/** Where a reload takes its arrow from: the variant of EVCAnimAction::Reload (D99). */
+UENUM(BlueprintType)
+enum class EVCReloadFrom : uint8
+{
+	/** A quiver on the back (Equipment.Slot.Quiver): over the right shoulder. */
+	Quiver,
+	/** No quiver: from the bag at the hip. */
+	Bag,
 };
 
 /** The side a hit came from, in the victim's gravity frame (the variant of a hit react or a death). */
@@ -206,6 +221,38 @@ public:
 	/** Loosing the arrow. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UAnimMontage> Release;
+
+	/** Taking an arrow from a quiver on the back and nocking it (D98, EVCReloadFrom::Quiver). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Reload")
+	TObjectPtr<UAnimMontage> ReloadFromQuiver;
+
+	/** Taking an arrow from the bag at the hip and nocking it (no quiver, D99). Empty: ReloadFromQuiver. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Reload")
+	TObjectPtr<UAnimMontage> ReloadFromBag;
+
+	/**
+	 * Whether the set shows the arrow (D100), with the ammo's own mesh (its nock at the pivot, the head along +Z): in the
+	 * drawing hand from a reload's grab to its nock (HeldArrowGrip on HeldArrowBone), then on the string from the nock to
+	 * the loose (from NockedArrowOffset toward BowHandBone).
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Reload")
+	bool bShowsHeldArrow = false;
+
+	/** The drawing hand's bone: the arrow rides it from the grab and its nock stays with it on the string. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Reload", meta = (EditCondition = "bShowsHeldArrow"))
+	FName HeldArrowBone = TEXT("hand_r");
+
+	/** The arrow's fit on HeldArrowBone between the grab and the nock (the bone's space): the pack's arrow_hand_r there. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Reload", meta = (EditCondition = "bShowsHeldArrow"))
+	FTransform HeldArrowGrip = FTransform::Identity;
+
+	/** Where the nock sits once nocked, in HeldArrowBone's space (the fingers on the string, as the pack's draw has it). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Reload", meta = (EditCondition = "bShowsHeldArrow"))
+	FVector NockedArrowOffset = FVector::ZeroVector;
+
+	/** The bow hand's bone: a nocked arrow points from its nock toward it (the arrow rests on the bow). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Reload", meta = (EditCondition = "bShowsHeldArrow"))
+	FName BowHandBone = TEXT("hand_l");
 
 	/**
 	 * The set's own full-body locomotion under ABP_VCPlayerLocomotion (vc.Anim.Locomotion 2; the locomotion state machine

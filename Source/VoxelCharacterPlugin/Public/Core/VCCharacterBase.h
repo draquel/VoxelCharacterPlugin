@@ -25,7 +25,10 @@ class UVCActionMontageComponent;
 class UVCAppearanceComponent;
 class UVCCharacterAppearance;
 class UVCUnderwaterPostProcess;
+class UStaticMesh;
+class UStaticMeshComponent;
 enum class EVCAnimAction : uint8;
+enum class EVCReloadFrom : uint8;
 struct FInputActionValue;
 struct FVoxelWorldBounds;
 
@@ -357,6 +360,37 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
 	float GetOwnDrawPower() const;
+
+	// ==================== Reload (the bow reload plan, D98-D101) ====================
+
+	/**
+	 * Whether an arrow is nocked on the ranged weapon in the main hand (D98): the server sets it at a reload's nock and
+	 * clears it at the shot, when the weapon leaves the hand and when the archer goes down; replicated. A draw needs it
+	 * (UVCRangedAttackAbility::CanStartDraw, the owner's check and the server's).
+	 * @return True when an arrow is nocked
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
+	bool IsArrowNocked() const { return bArrowNocked; }
+
+	/** @return True while the server runs a reload, from its start to its nock or its end */
+	bool IsReloading() const { return bReloading; }
+
+	/**
+	 * Where a reload takes its arrow from (D99): a worn quiver (Equipment.Slot.Quiver), else the bag at the hip.
+	 * @return The reload's variant
+	 */
+	EVCReloadFrom GetReloadFrom() const;
+
+	/**
+	 * Whether a reload may start now (the server's check, each tick while the weapon is empty): a ranged weapon that
+	 * shoots ammo in the main hand, its ammo in the bag, nothing nocked, no reload, draw or sheath sequence running, not
+	 * down, and the last shot's loose or a hit's flinch played out.
+	 * @return True when a reload may start
+	 */
+	bool CanReload() const;
+
+	/** The server's shot left the string (UVCRangedAttackAbility): the weapon is empty and reloads after the loose. */
+	void HandleArrowLoosed();
 
 	/** Whether the aim ray (UVCCombatStatics::ComputeAimRay) meets a hostile within AimRange: the reticle reddens. */
 	bool IsAimOnHostile(float Range = 20000.f) const;
@@ -836,6 +870,99 @@ protected:
 
 	UFUNCTION()
 	void OnRep_IsCorpse();
+
+	/** Seconds after a shot before the reload starts, the release's loose played first (D101). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0"))
+	float ReloadAfterShotSeconds = 0.35f;
+
+	/** Seconds after a hit broke a reload off before the next one starts, the flinch played first (D101). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0"))
+	float ReloadAfterHitSeconds = 0.6f;
+
+	/**
+	 * The arrows standing in a worn quiver while the bag holds the ranged weapon's ammo (D100), in the quiver's mesh space
+	 * (its opening up +Z): a cosmetic cluster with the ammo's mesh, not one per arrow. Empty: none shown.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat")
+	TArray<FTransform> QuiverArrowLayout;
+
+	/** The server's nock (D98); every machine shows the arrow from it and the owner's waiting draw starts. */
+	UPROPERTY(ReplicatedUsing = OnRep_ArrowNocked)
+	bool bArrowNocked = false;
+
+	UFUNCTION()
+	void OnRep_ArrowNocked();
+
+	/**
+	 * The arrows' look (D100): the ammo mesh the server finds in the bag (the held weapon's ammo, else any), null with
+	 * none; replicated, since the bag is the owner's alone. The arrow in the hand and those in a worn quiver show it.
+	 */
+	UPROPERTY(ReplicatedUsing = OnRep_ArrowMesh)
+	TObjectPtr<UStaticMesh> ArrowMesh;
+
+	UFUNCTION()
+	void OnRep_ArrowMesh();
+
+	/** The server runs a reload (StartReload until FinishReload or CancelReload). */
+	bool bReloading = false;
+
+	/** World time before which no reload starts (the shot's loose, a hit's flinch). */
+	double NextReloadTime = 0.0;
+
+	/** The server's nock at the reload montage's nock time (its UVCAnimNotify_ActionHit). */
+	FTimerHandle ReloadNockTimer;
+
+	/** The owner pressed to draw while the weapon was being loaded: the draw starts at the nock if still held. */
+	bool bDrawWaitsForNock = false;
+
+	/** A ranged weapon is in the main hand (refreshed at every equipment change, every machine): the reload's gate. */
+	bool bRangedWeaponInHand = false;
+
+	/** The arrow in the drawing hand (D100), created on first use; cosmetic, every machine. */
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMeshComponent> HeldArrowComponent;
+
+	/** The arrows standing in the quiver (QuiverArrowLayout), cosmetic, every machine. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> QuiverArrowComponents;
+
+	/** Server, each tick: start a reload when CanReload says so. */
+	void UpdateBowReload();
+
+	/** Server: play the reload to everyone and nock at its nock time (D101). */
+	void StartReload();
+
+	/** Server: the reload's nock (the weapon still in the hand, the archer up). */
+	void FinishReload();
+
+	/**
+	 * Server: break a running reload off (its montage stopped everywhere); the next starts no sooner than RetryDelay.
+	 * @param RetryDelay Seconds before a reload may start again
+	 */
+	void CancelReload(float RetryDelay);
+
+	/** Server: set the nock and act on it as a client's OnRep does. */
+	void SetArrowNocked(bool bNocked);
+
+	/** Every machine, at a change of the nock: the owner's waiting draw starts. */
+	void HandleNockChanged();
+
+	/** Every machine, each tick: show the arrow in the hand from a reload's grab to the loose. */
+	void UpdateHeldArrow();
+
+	/** Every machine: the arrows standing in a worn quiver (ArrowMesh on QuiverArrowLayout). */
+	void UpdateQuiverArrows();
+
+	/** Server: ArrowMesh from the bag. */
+	void RefreshArrowMesh();
+
+	/** A hit landed (server): a reload is broken off (D101). */
+	UFUNCTION()
+	void HandleDamagedForReload(const FCGFDamageContext& Context);
+
+	/** The bag changed (server): the quiver's arrows and a reload waiting for ammo. */
+	UFUNCTION()
+	void HandleInventoryChangedForReload();
 
 	/** The server's aim state (C3): the owner's request or a draw on the server; clients apply it as it arrives. */
 	UPROPERTY(ReplicatedUsing = OnRep_IsAiming)

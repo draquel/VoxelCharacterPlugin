@@ -136,9 +136,55 @@ bool UVCRangedAttackAbility::CanStartDraw(const AActor* Avatar)
 	}
 	UInventoryComponent* Inventory = nullptr;
 	FItemInstance Ammo;
+	if (!FindAmmo(Avatar, Weapon.Ranged->AmmoTag, Inventory, Ammo))
+	{
+		return false;
+	}
+	// A player character draws only a nocked arrow; it reloads after each shot (the bow reload plan, D98).
+	const AVCCharacterBase* Character = Cast<AVCCharacterBase>(Avatar);
+	return !Character || Character->IsArrowNocked();
+#else
+	return false;
+#endif
+}
+
+bool UVCRangedAttackAbility::HasAmmoToLoad(const AActor* Avatar)
+{
+#if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
+	FVCMainHandRangedWeapon Weapon;
+	if (!FindMainHandRangedWeapon(Avatar, Weapon) || !Weapon.Ranged->AmmoTag.IsValid())
+	{
+		return false;
+	}
+	UInventoryComponent* Inventory = nullptr;
+	FItemInstance Ammo;
 	return FindAmmo(Avatar, Weapon.Ranged->AmmoTag, Inventory, Ammo);
 #else
 	return false;
+#endif
+}
+
+UStaticMesh* UVCRangedAttackAbility::LoadAmmoMesh(const AActor* Avatar)
+{
+#if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
+	FVCMainHandRangedWeapon Weapon;
+	FGameplayTag AmmoTag = FGameplayTag::RequestGameplayTag(TEXT("Item.Ammo"), /*ErrorIfNotFound*/ false);
+	if (FindMainHandRangedWeapon(Avatar, Weapon) && Weapon.Ranged->AmmoTag.IsValid())
+	{
+		AmmoTag = Weapon.Ranged->AmmoTag;
+	}
+	UInventoryComponent* Inventory = nullptr;
+	FItemInstance Ammo;
+	if (!AmmoTag.IsValid() || !FindAmmo(Avatar, AmmoTag, Inventory, Ammo))
+	{
+		return nullptr;
+	}
+	const UItemDatabaseSubsystem* ItemDB = FindItemDatabase(Avatar);
+	const UItemDefinition* AmmoDefinition = ItemDB ? ItemDB->GetDefinition(Ammo.ItemDefinitionId) : nullptr;
+	const UItemFragment_WorldDisplay* Display = AmmoDefinition ? AmmoDefinition->FindFragment<UItemFragment_WorldDisplay>() : nullptr;
+	return Display ? Display->WorldMesh.LoadSynchronous() : nullptr;
+#else
+	return nullptr;
 #endif
 }
 
@@ -274,6 +320,11 @@ void UVCRangedAttackAbility::InputReleased(const FGameplayAbilitySpecHandle Hand
 	bDrawing = false;
 	const float DrawSeconds = static_cast<float>(World->GetTimeSeconds() - DrawStartTime);
 	const bool bShot = Shoot(Avatar, DrawSeconds);
+	// The string is empty: a player character reloads after the loose (D98).
+	if (AVCCharacterBase* Character = bShot ? Cast<AVCCharacterBase>(Avatar) : nullptr)
+	{
+		Character->HandleArrowLoosed();
+	}
 
 	// The owning player played its own release or stopped its own draw at input; everyone else follows the server.
 	if (UVCActionMontageComponent* Montages = Avatar->FindComponentByClass<UVCActionMontageComponent>())
