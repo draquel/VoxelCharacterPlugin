@@ -906,7 +906,12 @@ runs `FellOutOfWorld`; `RecoverFromMissingTerrain` puts a pawn whose terrain nev
 - **Carried weapons** (the equipment sheathing plan, 2026-11-08, D77-D82; EquipmentPlugin's "Sheaths"). The character
   has three sheaths beside its four slots, in the cycle's order: `Equipment.Slot.Sheath.Belt` (`pelvis`, the
   pickaxes), `.HipLeft` (`pelvis`, the swords), `.Back` (`spine_05`, the bow, or the shield), each drawn into the main
-  hand (a shield on the back into the off hand) and each one place holding one item (D95). A weapon
+  hand (a shield on the back into the off hand) and each one place holding one item (D95). The quiver
+  (`Equipment.Slot.Quiver`, on `spine_05`, D97; `ID_Quiver`, LowPolyRPGWeapons' `SM_Accessories_Quiver_01`,
+  `configure_ranged_items.py`) is worn on the back with its opening over the right shoulder blade, where the bow pack's
+  reload from the back (`UE5_Reload_Back_Seq`) reaches; it shares the back with a bow only, so a shield or a two-hander
+  sends it to the bag and it sends them (EquipmentPlugin's "Sheaths" › A shared place). The arrows stay in the bag; the
+  reload is not wired yet. A weapon
   lives in its sheath and is drawn by the slot's replicated state; everything that asks what the player wields asks
   the hand (`GetHeldItem(MainHand)`): the action set (all sheathed is `Unarmed`), the primary chain, digging (a belted
   pickaxe grants no mining speed: a sheath's GAS applies while drawn), the drawn grip.
