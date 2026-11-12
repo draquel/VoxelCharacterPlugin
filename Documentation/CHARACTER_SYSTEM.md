@@ -160,8 +160,9 @@ attacker builds FCGFDamageContext
   plays over the whole body with the locomotion Idle under its lunge (G181: the lunge's speed had stepped the legs into a
   stop, which snapped back after the follow-through and hid the third attack's spin). The demo's
   `AnimBP_EssentialSwordShield_UE5` is a live retarget of the UE4 ABP (a Retarget Pose From Mesh node), so its third attack is
-  `UE4_SSH_Attack_04_Seq`, the same motion as the UE5 clip. The Chop's hit is at its clip's measured strike too (G182; the
-  sword's Chop plays `_04`, the spin: D108 open). The demo's other attacks
+  `UE4_SSH_Attack_04_Seq`, the same motion as the UE5 clip. The sword's Chop plays `SSH_Attack_01`, a forward cut from
+  the idle (D108; `_04`, the finisher, spins), and every set's Chop hits at its clip's measured strike (G182: 0.48 s
+  for the sword's). The demo's other attacks
   (the secondary branch, the charge, the run, air and plunge attacks, the dodge) are the plan's later phases.
 
 ### The bow (ranged combat plan, 2026-11-06 to 11-07)
