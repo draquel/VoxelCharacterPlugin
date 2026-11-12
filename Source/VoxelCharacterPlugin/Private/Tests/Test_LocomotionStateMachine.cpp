@@ -669,6 +669,67 @@ bool FVCLocomotion_Instance::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
+// A montage's root motion moving the capsule (a standing attack's lunge) is not locomotion (G181): the state stays Idle
+// and the action montage keeps the legs. Without the flag the same speed steps into the cycle and a stop.
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCLocomotion_RootMotionStands, "VoxelCharacter.Locomotion.RootMotionStands", VC_LOCO_FLAGS)
+bool FVCLocomotion_RootMotionStands::RunTest(const FString& Parameters)
+{
+	using namespace VCLocomotionTestHelpers;
+
+	UVCLocomotionClipSet* Base = NewSet(TEXT("Unarmed"));
+	UVCLocomotionClipSet* Sword = NewSet(TEXT("Sword"));
+	Sword->JogStop = SixWay(TEXT("Sword_JogStop"), 302.f);
+
+	// The lunge: no input, the capsule carried forward at up to 196 uu/s (SSH_Attack_01 at the Longsword's rate) for 0.3 s.
+	const auto Lunge = [&](bool bRootMotion, bool& bLeftIdle, float& MaxLegs, float& MaxSpeed)
+	{
+		UVCLocomotionAnimInstance* Anim = NewAnimInstance();
+		FVCAnimInput In = Standing(Sword, Base);
+		In.MaxSpeed = 400.f;
+		Update(Anim, In);
+		bLeftIdle = false;
+		MaxLegs = 0.f;
+		MaxSpeed = 0.f;
+		In.bMontageRootMotion = bRootMotion;
+		for (int32 Step = 0; Step < 18; ++Step)
+		{
+			In.Velocity = FVector(196.0 * FMath::Sin(PI * Step / 18.0), 0.0, 0.0);
+			Update(Anim, In);
+			bLeftIdle |= !Anim->bInIdle;
+			MaxLegs = FMath::Max(MaxLegs, Anim->ActionLegsWeight);
+			MaxSpeed = FMath::Max(MaxSpeed, Anim->Speed);
+		}
+	};
+
+	bool bLeftIdle = false;
+	float MaxLegs = 0.f;
+	float MaxSpeed = 0.f;
+	Lunge(true, bLeftIdle, MaxLegs, MaxSpeed);
+	TestFalse(TEXT("Root motion's lunge: the locomotion stays Idle"), bLeftIdle);
+	TestEqual(TEXT("and the montage keeps the legs"), MaxLegs, 0.f);
+	TestEqual(TEXT("and the speed reads 0"), MaxSpeed, 0.f);
+
+	Lunge(false, bLeftIdle, MaxLegs, MaxSpeed);
+	TestTrue(TEXT("The same speed without the flag leaves Idle (the stutter's cause)"), bLeftIdle);
+	TestTrue(TEXT("and hands the legs to the locomotion"), MaxLegs > 0.5f);
+
+	// Walking (input; the movement then ignores root motion, so the flag is off): the legs stay the locomotion's.
+	UVCLocomotionAnimInstance* Walk = NewAnimInstance();
+	FVCAnimInput Moving = Standing(Sword, Base);
+	Moving.MaxSpeed = 400.f;
+	Moving.Acceleration = FVector(800.0, 0.0, 0.0);
+	Moving.Velocity = FVector(300.0, 0.0, 0.0);
+	for (int32 Step = 0; Step < 30; ++Step)
+	{
+		Update(Walk, Moving);
+	}
+	TestTrue(TEXT("Walking: the action lays over the upper body"), Walk->ActionLegsWeight > 0.99f && !Walk->bInIdle);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
 // The crouch (L3): the crouch set (own or borrowed), its pace, starts and stops, and on the anim instance the crouch's
 // begin and end at a stand, the crouch cycle, the borrowed crouch's upper body.
 // ---------------------------------------------------------------------------

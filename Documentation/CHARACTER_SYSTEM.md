@@ -156,7 +156,13 @@ attacker builds FCGFDamageContext
   the pack: 81, 123 and 101 uu) moves the capsule only standing (D106, "Movement" › Montage root motion). Measured on
   `CharacterTest` with a dedicated server, two clients and 100 ms of lag (`vox.PIE.Net 2`, `vox.AttackTrace`): the
   owner, the server and the other client play the same three attacks, standing all three end at the same place with no
-  correction, walking all three hold 400 uu/s through each swing and break it at its recovery. The demo's other attacks
+  correction, walking all three hold 400 uu/s through each swing and break it at its recovery. Standing, the attack
+  plays over the whole body with the locomotion Idle under its lunge (G181: the lunge's speed had stepped the legs into a
+  stop, which snapped back after the follow-through and hid the third attack's spin). The demo's
+  `AnimBP_EssentialSwordShield_UE5` is a live retarget of the UE4 ABP (a Retarget Pose From Mesh node), so its third attack is
+  `UE4_SSH_Attack_04_Seq`, the same motion as the UE5 clip. The sword's Chop plays `SSH_Attack_01`, a forward cut from
+  the idle (D108; `_04`, the finisher, spins), and every set's Chop hits at its clip's measured strike (G182: 0.48 s
+  for the sword's). The demo's other attacks
   (the secondary branch, the charge, the run, air and plunge attacks, the dodge) are the plan's later phases.
 
 ### The bow (ranged combat plan, 2026-11-06 to 11-07)
@@ -390,6 +396,14 @@ re-mesh).
   server's replay decide alike; a simulated proxy, which runs no moves, takes it from its speed over 50 uu/s and
   follows the server's replicated movement otherwise. Standing, the lunge moves the capsule; moving, the locomotion
   keeps it. A dedicated server plays the montages that have root motion for this ("Animation" › Action montages).
+  The anim instance does not read that motion as locomotion (G181, 2026-11-12): while a montage's root motion moves the
+  capsule (the engine's `IsPlayingNetworkedRootMotionMontage`; on a simulated proxy the server's replicated
+  `RepRootMotion`) `FVCAnimInput::bMontageRootMotion` reads the velocity as zero, so the locomotion stays Idle and the
+  montage keeps the whole body (`vc.Anim.RootMotionStands`). Before, the lunge's speed (up to 196 uu/s) stepped Idle,
+  Cycle, Stop under a standing swing and laid it over the upper body only (`ActionLegsWeight`): the legs snapped back
+  into the attack's stance just past the follow-through, and the third attack's spin (`SSH_Attack_04` turns the pelvis
+  356 degrees by 0.5 s; the TwoHand set's `2H_Attack_03` too) stayed on a Stop clip's square hips. Test
+  `VoxelCharacter.Locomotion.RootMotionStands`.
 - **Planet gravity.** On a planet `PerformMovement` points the engine's custom gravity at the centre before every move
   (`UpdatePlanetGravity`), so the server's replay, the client's prediction and NPCs agree with no new replicated state.
   The component's own vertical code (swim controls, buoyancy, floor and landing traces, the shore climb, the embed
