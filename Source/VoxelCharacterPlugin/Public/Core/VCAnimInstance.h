@@ -63,6 +63,13 @@ struct FVCAnimInput
 	/** The capsule turns toward where it moves (else toward the view: the bow drawn, first person). */
 	bool bOrientToMovement = true;
 
+	/**
+	 * A montage's root motion moves the capsule (a standing attack's lunge, D106): the clip steps the feet itself, so the
+	 * velocity is not locomotion (G181). The engine's networked root motion montage on the owner, the server and
+	 * standalone; on a simulated proxy the server's replicated root motion. Off with vc.Anim.RootMotionStands 0.
+	 */
+	bool bMontageRootMotion = false;
+
 	/** The walking floor's surface normal; zero when there is no walkable floor. */
 	FVector FloorNormal = FVector::ZeroVector;
 

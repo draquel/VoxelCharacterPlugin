@@ -47,6 +47,11 @@ namespace
 		TEXT("A held item's stance over the upper body (character refinement plan C2): 0 off (the locomotion alone), 1 the static idle as before C2, 2 the moving stance (the set's idle, walk and jog by speed on a blend ramp from spine_01), faded by speed where the layer asks (the bow's, D85), 3 the moving stance at every gait (C2, before D85; A/B)."),
 		ECVF_Default);
 
+	TAutoConsoleVariable<int32> CVarAnimRootMotionStands(
+		TEXT("vc.Anim.RootMotionStands"), 1,
+		TEXT("While a montage's root motion moves the capsule (a standing attack's lunge), the locomotion reads the character as standing, so the montage plays over the whole body: 1 on, 0 the lunge's speed counts as moving (A/B; G181)."),
+		ECVF_Default);
+
 	/** Mirrors vc.Anim.Debug into the engine's foot placement debug draw. */
 	void OnAnimDebugChanged(IConsoleVariable* Variable)
 	{
@@ -189,6 +194,10 @@ bool UVCAnimInstance::GatherInput(float DeltaSeconds, FVCAnimInput& OutInput) co
 	OutInput.bFlying = Movement->IsFlying();
 	OutInput.MaxSpeed = Movement->GetMaxSpeed();
 	OutInput.bOrientToMovement = Movement->bOrientRotationToMovement;
+	// A simulated proxy runs no moves and follows the server's movement: the server says when root motion drives it.
+	OutInput.bMontageRootMotion = CVarAnimRootMotionStands.GetValueOnGameThread() != 0
+		&& (Character->IsPlayingNetworkedRootMotionMontage()
+			|| (Character->GetLocalRole() == ROLE_SimulatedProxy && Character->GetRepRootMotion().bIsActive));
 
 	// The head's target: an AI controller's focus (none when it has no focus), else the view's aim ahead.
 	OutInput.EyeLocation = Character->GetPawnViewLocation();
@@ -301,7 +310,10 @@ void UVCAnimInstance::ComputeValues(const FVCAnimInput& Input)
 	const float DeltaSeconds = Input.DeltaSeconds;
 
 	// --- Locomotion ---
-	const FVector HorizontalVelocity = Horizontal(Input.Velocity, Up);
+	// A montage's root motion moving the capsule is the clip's own step: the locomotion stands under it (G181), else the
+	// lunge's speed walks the legs into a start and a stop under the attack and lays the attack over the upper body only.
+	const FVector Velocity = Input.bMontageRootMotion ? FVector::ZeroVector : Input.Velocity;
+	const FVector HorizontalVelocity = Horizontal(Velocity, Up);
 	Speed = HorizontalVelocity.Size();
 	Direction = Speed > 1.f ? SignedAngleAbout(Forward, HorizontalVelocity, Up) : 0.f;
 
@@ -312,11 +324,11 @@ void UVCAnimInstance::ComputeValues(const FVCAnimInput& Input)
 	bIsAccelerating = Input.Acceleration.SizeSquared() > UE_KINDA_SMALL_NUMBER;
 	bIsSprinting = Input.bSprinting;
 
-	LocalVelocity = ToLocal(Input.Velocity);
+	LocalVelocity = ToLocal(Velocity);
 	LocalAcceleration = ToLocal(Input.Acceleration);
 
 	// Speeding up (or starting from rest) measures against the maximum acceleration, slowing down against braking.
-	const float AccelerationScale = (Input.Acceleration | Input.Velocity) >= 0.f
+	const float AccelerationScale = (Input.Acceleration | Velocity) >= 0.f
 		? Input.MaxAcceleration : Input.MaxBrakingDeceleration;
 	RelativeAcceleration = AccelerationScale > UE_KINDA_SMALL_NUMBER
 		? LocalAcceleration.GetClampedToMaxSize(AccelerationScale) / AccelerationScale : FVector::ZeroVector;
