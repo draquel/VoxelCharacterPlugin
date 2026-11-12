@@ -709,6 +709,23 @@ public:
 	static FVCMovementTable ResolveGaitTable(const FVCMovementTable& Table, const FVCGaitCaps& Caps, bool bApply);
 
 	/**
+	 * Whether a montage's root motion (an attack's lunge) moves the capsule only while the character stands (the sword
+	 * attack flow plan, D106): on every move with input the anim instance ignores it, so the legs and the capsule stay
+	 * the locomotion's and a swing on the run does not stop the run (G180). The owner's prediction and the server's
+	 * replay decide from the same move's input; a simulated proxy from its speed.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Movement")
+	bool bMontageRootMotionOnlyStanding = true;
+
+	/**
+	 * Pure: whether a move takes a montage's root motion (D106).
+	 * @param bOnlyStanding  bMontageRootMotionOnlyStanding
+	 * @param bWantsToMove   The move has input (a simulated proxy: it moves)
+	 * @return True to take it
+	 */
+	static bool ShouldTakeMontageRootMotion(bool bOnlyStanding, bool bWantsToMove) { return !bOnlyStanding || !bWantsToMove; }
+
+	/**
 	 * Set the engine's movement values from the gait table for this tick: the row's cap by the rotation mode and the
 	 * input's angle to the facing, the sprint's acceleration and friction by speed, the braking by whether there is
 	 * input, the friction scaled by the surface and the wetness, the yaw rate by the mode. PerformMovement calls it;
@@ -926,8 +943,14 @@ protected:
 	/** The voxel world is a planet (its bounds are a shell): gravity points at CachedWorldBounds.Center (WM-W1). */
 	bool bPlanetGravity = false;
 
-	/** Planets: gravity from the position before the move (WM-W1), then the gait table's values (C4), then the engine's movement. */
+	/**
+	 * Planets: gravity from the position before the move (WM-W1), then the gait table's values (C4), whether the move
+	 * takes a montage's root motion (D106), then the engine's movement.
+	 */
 	virtual void PerformMovement(float DeltaTime) override;
+
+	/** Sets the body's anim instance to take montage root motion or ignore it (D106). */
+	void ApplyMontageRootMotionMode(bool bWantsToMove);
 
 	/**
 	 * Planets: a swimmer stays upright in its gravity as well as a walker or a faller. The engine turns pitch and roll at

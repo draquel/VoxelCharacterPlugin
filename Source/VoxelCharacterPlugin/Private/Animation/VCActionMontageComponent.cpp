@@ -12,15 +12,212 @@
 #include "Animation/AnimMontage.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "HAL/IConsoleManager.h"
 #include "Engine/World.h"
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemGlobals.h"
 #include "Tags/CGFGameplayTags.h"
 
+namespace
+{
+	TAutoConsoleVariable<int32> CVarAnimAttackBreak(
+		TEXT("vc.Anim.AttackBreak"), 1,
+		TEXT("Movement breaks an attack off once its follow-through ends (the sword attack flow plan, D103): 1 on, 0 off (the recovery always plays out; A/B)."),
+		ECVF_Default);
+}
+
 UVCActionMontageComponent::UVCActionMontageComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	// Ticks only while an attack plays (D103: the recovery's break, D104: the kept press).
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = false;
 	SetIsReplicatedByDefault(true);
+}
+
+void UVCActionMontageComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	float Position = 0.f;
+	UAnimMontage* Montage = GetPlayingAttackMontage(Position);
+	if (!Montage)
+	{
+		// Nothing to break; a kept press still waits for its recovery (the owner's character takes it).
+		SetComponentTickEnabled(bAttackBuffered);
+		return;
+	}
+	// Read on this machine's own montage, so a simulated proxy, which keeps no attack of its own, breaks it too. A kept
+	// press wins: the next attack plays from the recovery instead.
+	const float Recovery = UVCActionAnimSet::GetRecoveryTime(Montage);
+	if (CVarAnimAttackBreak.GetValueOnGameThread() != 0 && !bAttackBuffered
+		&& ShouldBreakRecovery(Position, Recovery, Montage->GetPlayLength(), WantsToMove()))
+	{
+		const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+		if (UAnimInstance* AnimInstance = GetBodyAnimInstance())
+		{
+			AnimInstance->Montage_Stop(Set ? Set->RecoveryBlendOut : 0.2f, Montage);
+		}
+	}
+}
+
+EVCAttackPress UVCActionMontageComponent::ClassifyAttackPress(double SinceStart, float HitTime, float RecoveryTime, float EndTime, float Window)
+{
+	if (SinceStart < 0.0 || SinceStart > EndTime + Window)
+	{
+		return EVCAttackPress::NewCombo;
+	}
+	if (SinceStart < HitTime)
+	{
+		return EVCAttackPress::Ignore;
+	}
+	return SinceStart < RecoveryTime ? EVCAttackPress::Buffer : EVCAttackPress::Continue;
+}
+
+bool UVCActionMontageComponent::ShouldBreakRecovery(double SinceStart, float RecoveryTime, float EndTime, bool bWantsToMove)
+{
+	return bWantsToMove && SinceStart >= RecoveryTime && SinceStart < EndTime;
+}
+
+float UVCActionMontageComponent::GetAttackPlayRate(float AttackSpeed)
+{
+	return FMath::Clamp(AttackSpeed, 0.5f, 2.f);
+}
+
+double UVCActionMontageComponent::GetSecondsSinceAttack() const
+{
+	const UWorld* World = GetWorld();
+	return World && AttackStartTime >= 0.0 ? World->GetTimeSeconds() - AttackStartTime : -1.0;
+}
+
+EVCAttackPress UVCActionMontageComponent::ClassifyAttackPress() const
+{
+	return ClassifyAttackPress(GetSecondsSinceAttack(), AttackHitTime, AttackRecoveryTime, AttackEndTime, AttackComboWindow);
+}
+
+void UVCActionMontageComponent::RecordAttack(int32 Index, float PlayRate)
+{
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	const UAnimMontage* Montage = Set ? Set->GetMontage(EVCAnimAction::Attack, Index) : nullptr;
+	const float Rate = FMath::Max(PlayRate, 0.01f);
+	const UWorld* World = GetWorld();
+	ComboIndex = Index;
+	AttackStartTime = World ? World->GetTimeSeconds() : 0.0;
+	AttackHitTime = UVCActionAnimSet::GetHitTime(Montage) / Rate;
+	AttackRecoveryTime = UVCActionAnimSet::GetRecoveryTime(Montage) / Rate;
+	AttackEndTime = Montage ? Montage->GetPlayLength() / Rate : 0.f;
+	AttackComboWindow = Set ? Set->ComboWindow : 0.f;
+	AttackComboCount = Set ? Set->AttackCombo.Num() : 0;
+	bAttackBuffered = false;
+}
+
+int32 UVCActionMontageComponent::ChooseAttack(float AttackSpeed, float& OutPlayRate)
+{
+	OutPlayRate = GetAttackPlayRate(AttackSpeed);
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	const int32 Count = Set ? Set->AttackCombo.Num() : 0;
+	if (Count == 0)
+	{
+		return 0;
+	}
+	// The next of the combo when a press now continues it (one kept for the recovery does by then), else the first.
+	const EVCAttackPress Press = ClassifyAttackPress();
+	const bool bContinues = ComboIndex >= 0 && AttackComboCount == Count
+		&& (Press == EVCAttackPress::Continue || Press == EVCAttackPress::Buffer);
+	const int32 Index = bContinues ? (ComboIndex + 1) % Count : 0;
+	RecordAttack(Index, OutPlayRate);
+	return Index;
+}
+
+bool UVCActionMontageComponent::AcceptAttack(int32 RequestedIndex, float AttackSpeed, int32& OutIndex, float& OutPlayRate)
+{
+	OutPlayRate = GetAttackPlayRate(AttackSpeed);
+	OutIndex = 0;
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	const int32 Count = Set ? Set->AttackCombo.Num() : 0;
+	const UWorld* World = GetWorld();
+	const double Now = World ? World->GetTimeSeconds() : 0.0;
+
+	// The owner picked it on this machine this very moment (a listen server's or a standalone player): it is the attack
+	// already kept, not a second pick (G179).
+	if (RequestedIndex >= 0 && RequestedIndex == ComboIndex && AttackStartTime == Now)
+	{
+		OutIndex = ComboIndex;
+		return true;
+	}
+	// The attack before must have reached its recovery; the request's trip makes the server see it late, never early,
+	// so the allowance only takes up the jitter.
+	const double Since = GetSecondsSinceAttack();
+	if (ComboIndex >= 0 && Since >= 0.0 && Since < AttackRecoveryTime - AttackRequestTolerance)
+	{
+		return false;
+	}
+	if (Count == 0)
+	{
+		RecordAttack(0, OutPlayRate);
+		return true;
+	}
+	const bool bInWindow = ComboIndex >= 0 && AttackComboCount == Count && Since >= 0.0
+		&& Since <= AttackEndTime + AttackComboWindow + AttackRequestTolerance;
+	const int32 Next = bInWindow ? (ComboIndex + 1) % Count : 0;
+	// The owner's index when the server's rule allows it (the first, or the next within the window), else the server's.
+	OutIndex = (RequestedIndex == 0 || RequestedIndex == Next) ? RequestedIndex : Next;
+	RecordAttack(OutIndex, OutPlayRate);
+	return true;
+}
+
+void UVCActionMontageComponent::BufferAttack()
+{
+	bAttackBuffered = true;
+	SetComponentTickEnabled(true);
+}
+
+bool UVCActionMontageComponent::TakeDueBufferedAttack()
+{
+	if (!bAttackBuffered || GetSecondsSinceAttack() < AttackRecoveryTime)
+	{
+		return false;
+	}
+	bAttackBuffered = false;
+	return true;
+}
+
+bool UVCActionMontageComponent::WantsToMove() const
+{
+	const ACharacter* Character = Cast<ACharacter>(GetOwner());
+	const UCharacterMovementComponent* Movement = Character ? Character->GetCharacterMovement() : nullptr;
+	if (!Movement)
+	{
+		return false;
+	}
+	if (Character->GetLocalRole() == ROLE_SimulatedProxy)
+	{
+		const FVector Up = FVCGravityFrame::GetUp(Movement);
+		const FVector Velocity = Character->GetVelocity();
+		return (Velocity - Up * FVector::DotProduct(Velocity, Up)).SizeSquared() > FMath::Square(MovingSpeed);
+	}
+	return !Movement->GetCurrentAcceleration().IsNearlyZero();
+}
+
+UAnimMontage* UVCActionMontageComponent::GetPlayingAttackMontage(float& OutPosition) const
+{
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	const UAnimInstance* AnimInstance = Set ? GetBodyAnimInstance() : nullptr;
+	if (!AnimInstance)
+	{
+		return nullptr;
+	}
+	for (const TObjectPtr<UAnimMontage>& Montage : Set->AttackCombo)
+	{
+		// Playing and not already on its way out (a break or the next attack blending over it).
+		const FAnimMontageInstance* Instance = Montage ? AnimInstance->GetActiveInstanceForMontage(Montage) : nullptr;
+		if (Instance && Instance->IsActive() && !Instance->IsStopped())
+		{
+			OutPosition = Instance->GetPosition();
+			return Montage;
+		}
+	}
+	return nullptr;
 }
 
 void UVCActionMontageComponent::BeginPlay()
@@ -82,27 +279,6 @@ UAnimMontage* UVCActionMontageComponent::GetMontage(EVCAnimAction Action, int32 
 	return Set ? Set->GetMontage(Action, Variant) : nullptr;
 }
 
-int32 UVCActionMontageComponent::ChooseAttack(float AttackSpeed, float& OutPlayRate)
-{
-	OutPlayRate = 1.f;
-	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
-	const int32 Count = Set ? Set->AttackCombo.Num() : 0;
-	if (Count == 0)
-	{
-		return 0;
-	}
-	const UWorld* World = GetWorld();
-	const double Now = World ? World->GetTimeSeconds() : 0.0;
-	ComboIndex = (ComboIndex >= 0 && Now <= ComboWindowEnd) ? (ComboIndex + 1) % Count : 0;
-
-	// A swing fits one attack's interval: a montage longer than 1 / AttackSpeed plays faster, a shorter one at its own pace.
-	const UAnimMontage* Montage = Set->AttackCombo[ComboIndex];
-	const float Length = Montage ? Montage->GetPlayLength() : 0.f;
-	OutPlayRate = FMath::Clamp(Length * FMath::Max(AttackSpeed, 0.01f), 1.f, 3.f);
-	ComboWindowEnd = Now + Length / OutPlayRate + Set->ComboWindow;
-	return ComboIndex;
-}
-
 UAnimInstance* UVCActionMontageComponent::GetBodyAnimInstance() const
 {
 	const ACharacter* Character = Cast<ACharacter>(GetOwner());
@@ -129,6 +305,11 @@ float UVCActionMontageComponent::PlayActionLocal(EVCAnimAction Action, int32 Var
 		return 0.f;
 	}
 	const float Length = AnimInstance->Montage_Play(Montage, FMath::Max(PlayRate, 0.01f));
+	if (Action == EVCAnimAction::Attack && Length > 0.f)
+	{
+		// The recovery's break (D103) is watched while the attack plays.
+		SetComponentTickEnabled(true);
+	}
 	// Raised by the aim already: the draw pulls the string from there (its first section is the raise).
 	const UVCAnimInstance* Body = Cast<UVCAnimInstance>(AnimInstance);
 	if (Action == EVCAnimAction::Draw && Length > 0.f && Body && Body->AimRaiseWeight > 0.5f && Montage->CompositeSections.Num() >= 3)
@@ -306,9 +487,15 @@ void UVCActionMontageComponent::HandleRevived()
 
 void UVCActionMontageComponent::Multicast_PlayAction_Implementation(EVCAnimAction Action, uint8 Variant, float PlayRate, bool bOwnerPlayedIt)
 {
-	// A dedicated server draws nothing; the owner already played what it started at input.
+	// A dedicated server draws nothing, but plays a montage with root motion so its movement takes the lunge as the
+	// owner's does (D106); the owner already played what it started at input.
 	if (GetNetMode() == NM_DedicatedServer)
 	{
+		const UAnimMontage* Montage = GetMontage(Action, Variant);
+		if (Montage && Montage->HasRootMotion())
+		{
+			PlayActionLocal(Action, Variant, PlayRate);
+		}
 		return;
 	}
 	const APawn* Pawn = Cast<APawn>(GetOwner());

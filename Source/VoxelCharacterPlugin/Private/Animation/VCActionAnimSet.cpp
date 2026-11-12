@@ -8,6 +8,11 @@ FString UVCAnimNotify_ActionHit::GetNotifyName_Implementation() const
 	return TEXT("ActionHit");
 }
 
+FString UVCAnimNotify_ActionRecovery::GetNotifyName_Implementation() const
+{
+	return TEXT("ActionRecovery");
+}
+
 FString UVCAnimNotify_ItemHandOff::GetNotifyName_Implementation() const
 {
 	return TEXT("ItemHandOff");
@@ -107,6 +112,23 @@ float UVCActionAnimSet::GetHitTime(const UAnimMontage* Montage, float DefaultFra
 		return FMath::Max(0.f, Earliest);
 	}
 	return Montage->GetPlayLength() * FMath::Clamp(DefaultFraction, 0.f, 1.f);
+}
+
+float UVCActionAnimSet::GetRecoveryTime(const UAnimMontage* Montage)
+{
+	if (!Montage)
+	{
+		return 0.f;
+	}
+	float Earliest = TNumericLimits<float>::Max();
+	for (const FAnimNotifyEvent& Event : Montage->Notifies)
+	{
+		if (Cast<UVCAnimNotify_ActionRecovery>(Event.Notify))
+		{
+			Earliest = FMath::Min(Earliest, Event.GetTriggerTime());
+		}
+	}
+	return Earliest < TNumericLimits<float>::Max() ? FMath::Max(0.f, Earliest) : Montage->GetPlayLength();
 }
 
 EVCHitDirection UVCActionAnimSet::DirectionOfHit(const FVector& VictimForward, const FVector& Up, const FVector& ToSource)

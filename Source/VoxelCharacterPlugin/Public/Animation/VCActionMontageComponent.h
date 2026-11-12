@@ -12,6 +12,20 @@
 class UAnimInstance;
 class UAnimMontage;
 
+/** What a press of the attack does at a moment of the current attack (the sword attack flow plan, D104). */
+UENUM()
+enum class EVCAttackPress : uint8
+{
+	/** No attack, or past the combo's window: the first attack of a new combo, at once. */
+	NewCombo,
+	/** Before the strike: nothing (a press in the wind-up is not kept). */
+	Ignore,
+	/** From the strike to the recovery: kept, and the next attack plays at the recovery time. */
+	Buffer,
+	/** In the recovery or the window after it: the next attack of the combo, at once. */
+	Continue,
+};
+
 /**
  * Plays a character's action montages (character animation P3): attacks, digging, chopping, placing, using, hit reacts,
  * deaths and getting up, from the UVCActionAnimSet of what the character holds (IVCAnimatedCharacter::GetAnimActionSet).
@@ -23,6 +37,12 @@ class UAnimMontage;
  *
  * On the server it also answers the owner's UVCCombatComponent: a hit react from the side the hit came from, a death
  * montage for a body with no physics asset (one with a physics asset ragdolls), getting up when revived.
+ *
+ * The attack combo (the sword attack flow plan, D102-D104): each machine keeps the attack it plays (its combo index,
+ * its start and its hit, recovery and end times at its play rate). A press before the strike does nothing, one from the
+ * strike to the recovery is kept until the recovery, one in the recovery or just after continues the combo; the owner
+ * picks the index and the server accepts it when the same rule allows it. While an attack's recovery plays, the
+ * component ticks and breaks it off with a blend-out when the character wants to move.
  *
  * On AVCCharacterBase and AVCNPCCharacterBase. It replicates only for its multicast.
  */
@@ -36,6 +56,13 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+
+	/** The server's allowance for a request's trip when it checks an owner's attack against its own clock (seconds). */
+	static constexpr float AttackRequestTolerance = 0.2f;
+
+	/** Above this speed a simulated proxy counts as moving (uu/s): it has no input to read (D103). */
+	static constexpr float MovingSpeed = 50.f;
 
 	/** The action sets this character plays, one per Equipment.AnimSet tag; the Unarmed set covers a tag with none. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
@@ -60,13 +87,84 @@ public:
 	UAnimMontage* GetMontage(EVCAnimAction Action, int32 Variant = 0) const;
 
 	/**
-	 * The next attack of the combo on this machine: the next montage while attacks follow each other within the set's
-	 * window, else the first.
+	 * What a press does at a moment of an attack (D104), the rule the owner and the server share.
+	 * @param SinceStart   Seconds since the attack started, negative for no attack
+	 * @param HitTime      Its hit time, seconds at its play rate
+	 * @param RecoveryTime Its recovery time, seconds at its play rate
+	 * @param EndTime      Its length, seconds at its play rate
+	 * @param Window       Seconds past its end within which the combo continues
+	 * @return NewCombo, Ignore, Buffer or Continue
+	 */
+	static EVCAttackPress ClassifyAttackPress(double SinceStart, float HitTime, float RecoveryTime, float EndTime, float Window);
+
+	/**
+	 * Whether movement breaks an attack off now (D103): in its recovery, before its end, while the character wants to move.
+	 * @param SinceStart    Seconds since the attack started
+	 * @param RecoveryTime  Its recovery time, seconds at its play rate
+	 * @param EndTime       Its length, seconds at its play rate
+	 * @param bWantsToMove  The character wants to move (WantsToMove)
+	 * @return True to stop its montage
+	 */
+	static bool ShouldBreakRecovery(double SinceStart, float RecoveryTime, float EndTime, bool bWantsToMove);
+
+	/**
+	 * The play rate of an attack for a weapon (D107): its attacks per second as a rate, 1 as the clips were authored.
+	 * @param AttackSpeed The weapon's attacks per second
+	 * @return The rate, from 0.5 to 2
+	 */
+	static float GetAttackPlayRate(float AttackSpeed);
+
+	/** What a press of the attack does now on this machine, from the attack it plays (ClassifyAttackPress). */
+	EVCAttackPress ClassifyAttackPress() const;
+
+	/**
+	 * Picks the attack to play now and keeps it as this machine's current attack: the next of the combo when a press now
+	 * continues it, else the first.
 	 * @param AttackSpeed  Attacks per second (the weapon's)
-	 * @param OutPlayRate  The play rate that fits the montage into one attack's interval
+	 * @param OutPlayRate  The play rate (GetAttackPlayRate)
 	 * @return The combo index (0 with no combo)
 	 */
 	int32 ChooseAttack(float AttackSpeed, float& OutPlayRate);
+
+	/**
+	 * Server: whether an attack may start now and which (D104, G179). An attack the owner picked on this very machine at
+	 * this moment (a listen server's or a standalone player's) is taken as it is. Otherwise the attack before must have
+	 * reached its recovery (less AttackRequestTolerance); the owner's index is taken when it is the first or the next of
+	 * the combo within the window (plus the tolerance), else the server picks its own. The attack is kept as current.
+	 * @param RequestedIndex The owner's combo index, -1 for none (an NPC)
+	 * @param AttackSpeed    Attacks per second (the weapon's)
+	 * @param OutIndex       The combo index to play
+	 * @param OutPlayRate    The play rate
+	 * @return False when it is too early for another attack
+	 */
+	bool AcceptAttack(int32 RequestedIndex, float AttackSpeed, int32& OutIndex, float& OutPlayRate);
+
+	/**
+	 * Server: the combo index the owner asked for with its swing (AVCCharacterBase::Server_RequestMeleeSwing), for the
+	 * melee ability's activation that follows; -1 clears it.
+	 */
+	void SetRequestedAttack(int32 Index) { RequestedAttackIndex = Index; }
+
+	/** Server: the owner's requested combo index, cleared; -1 for none. */
+	int32 TakeRequestedAttack() { const int32 Index = RequestedAttackIndex; RequestedAttackIndex = -1; return Index; }
+
+	/** The owner: keep a press made between the strike and the recovery until the recovery (D104). */
+	void BufferAttack();
+
+	/** The owner: whether a kept press is due (the current attack reached its recovery); it is consumed. */
+	bool TakeDueBufferedAttack();
+
+	/** Whether a press is kept for the recovery. */
+	bool HasBufferedAttack() const { return bAttackBuffered; }
+
+	/** The combo index of the current or last attack, -1 before any. */
+	int32 GetLastAttackIndex() const { return ComboIndex; }
+
+	/**
+	 * Whether the character wants to move (D103): its input's acceleration on the owner and on the server (from the
+	 * owner's moves), its speed across local up over MovingSpeed on a simulated proxy.
+	 */
+	bool WantsToMove() const;
 
 	/**
 	 * Plays an action's montage on this machine only. A repeated non-attack action that is still playing keeps playing.
@@ -80,7 +178,9 @@ public:
 	float PlayActionLocal(EVCAnimAction Action, int32 Variant = 0, float PlayRate = 1.f);
 
 	/**
-	 * Authority: plays an action on every machine that draws the character, through one unreliable multicast.
+	 * Authority: plays an action on every machine that draws the character, through one unreliable multicast. A dedicated
+	 * server draws nothing but plays a montage with root motion itself (an attack's lunge, D106), so the movement takes
+	 * the lunge there as the owner's does.
 	 * @param Action         The action
 	 * @param Variant        The combo index, or an EVCHitDirection
 	 * @param PlayRate       Play rate
@@ -200,9 +300,29 @@ private:
 	/** The owner's body's anim instance, or null. */
 	UAnimInstance* GetBodyAnimInstance() const;
 
-	/** The combo index of the last attack, and until when the next one continues the combo (world seconds). */
+	/** Keeps an attack as this machine's current one, starting now. */
+	void RecordAttack(int32 Index, float PlayRate);
+
+	/** Seconds since the current attack started, negative before any. */
+	double GetSecondsSinceAttack() const;
+
+	/** The attack montage of the current set playing on the body and its position, or null. */
+	UAnimMontage* GetPlayingAttackMontage(float& OutPosition) const;
+
+	/** The current attack (D104): its combo index, its start (world seconds) and its times at its play rate. */
 	int32 ComboIndex = -1;
-	double ComboWindowEnd = -1.0;
+	double AttackStartTime = -1.0;
+	float AttackHitTime = 0.f;
+	float AttackRecoveryTime = 0.f;
+	float AttackEndTime = 0.f;
+	float AttackComboWindow = 0.f;
+	int32 AttackComboCount = 0;
+
+	/** A press kept for the current attack's recovery (the owner's). */
+	bool bAttackBuffered = false;
+
+	/** The combo index the owner asked for, until the melee ability takes it (server). */
+	int32 RequestedAttackIndex = -1;
 
 	int32 ActionsPlayed = 0;
 	EVCAnimAction LastAction = EVCAnimAction::Attack;

@@ -25,7 +25,10 @@ editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the 
    (holding, the upper body, aiming, handling, D70-D75, done 2026-11-08, now in `CHARACTER_SYSTEM.md` "The bow",
    "Movement", "Animation", "Camera", "HUD and widgets" and "Tests") and `LOCOMOTION_STATE_MACHINE_PLAN.md` (the
    player's locomotion as a state machine over the Essential Animation packs, D86-D92, done 2026-11-11, now in
-   `CHARACTER_SYSTEM.md` "Animation" › The state machine and "Movement"), all frozen;
+   `CHARACTER_SYSTEM.md` "Animation" › The state machine and "Movement") and `SWORD_ATTACK_FLOW_PLAN.md` (the sword's
+   combo after the pack's demo, broken off by movement after the follow-through, D102-D107, phase A done 2026-11-12,
+   now in `CHARACTER_SYSTEM.md` "GAS" › The sword's attack flow and "Movement" › Montage root motion; phases B-F, the
+   demo's other attacks, wait), all frozen;
    `Documentation/Archive/ImplementationPlan.md`.
 
 Across plugins: `Plugins/CommonGameFramework/Documentation/ARCHITECTURE.md`; VoxelWorlds'

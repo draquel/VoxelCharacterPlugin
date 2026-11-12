@@ -536,6 +536,11 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 	}
 
 	TickWorldSafety(DeltaSeconds);
+	// A press kept during an attack's swing plays the next attack at its recovery (D104).
+	if (ActionMontages && IsLocallyControlled() && ActionMontages->TakeDueBufferedAttack())
+	{
+		StartMeleeSwing();
+	}
 	UpdateDrawnGrip();
 	UpdateSheathHandOff();
 	UpdateBowReload();
@@ -923,26 +928,57 @@ bool AVCCharacterBase::StartMeleeSwing()
 	}
 
 	// The owner swings at once (D49); the server's swing plays for everyone else and lands the hit at the montage's hit
-	// time. The same rate limit as the server's, so the owner does not swing where the server would refuse.
-	if (ActionMontages)
+	// time. A press goes by the combo's rule (D104), as the server's acceptance does: nothing in the wind-up, kept from the
+	// strike until the recovery (Tick plays it then), the next attack from the recovery on.
+	int32 Variant = -1;
+	if (ActionMontages && ActionMontages->GetMontage(EVCAnimAction::Attack, 0))
 	{
+		switch (ActionMontages->ClassifyAttackPress())
+		{
+		case EVCAttackPress::Ignore:
+			return true;
+		case EVCAttackPress::Buffer:
+			ActionMontages->BufferAttack();
+			return true;
+		default:
+			break;
+		}
 		const AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
 		const UVCMeleeAttackAbility* Melee = PS && PS->MeleeAttackAbilityClass
 			? Cast<UVCMeleeAttackAbility>(PS->MeleeAttackAbilityClass->GetDefaultObject()) : nullptr;
-		const float AttackSpeed = Melee ? Melee->GetAttackSpeed(this) : 1.f;
-		const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
-		if (LastOwnSwingTime < 0.0 || Now - LastOwnSwingTime >= 1.0 / FMath::Max(AttackSpeed, 0.01f))
-		{
-			LastOwnSwingTime = Now;
-			float PlayRate = 1.f;
-			const int32 Variant = ActionMontages->ChooseAttack(AttackSpeed, PlayRate);
-			ActionMontages->PlayActionLocal(EVCAnimAction::Attack, Variant, PlayRate);
-		}
+		float PlayRate = 1.f;
+		Variant = ActionMontages->ChooseAttack(Melee ? Melee->GetAttackSpeed(this) : 1.f, PlayRate);
+		ActionMontages->PlayActionLocal(EVCAnimAction::Attack, Variant, PlayRate);
 	}
 
-	// The ability is ServerOnly: on a client this sends the activation request to the server,
-	// which does its own sweep, so a client cannot fabricate a hit.
+	// The ability is ServerOnly: the server does its own sweep, so a client cannot fabricate a hit. The request carries
+	// the owner's combo index, which the server takes when its own rule allows it (G179).
+	if (HasAuthority())
+	{
+		return ActivateMeleeSwing(Variant);
+	}
+	Server_RequestMeleeSwing(static_cast<int8>(FMath::Clamp(Variant, -1, 127)));
+	return true;
+}
+
+bool AVCCharacterBase::ActivateMeleeSwing(int32 ComboIndex)
+{
+	UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	if (!ASC || !CombatComponent || IsIncapacitated())
+	{
+		return false;
+	}
+	if (ActionMontages)
+	{
+		ActionMontages->SetRequestedAttack(ComboIndex);
+	}
 	return ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(CGFGameplayTags::Ability_Attack_Melee));
+}
+
+void AVCCharacterBase::Server_RequestMeleeSwing_Implementation(int8 ComboIndex)
+{
+	// The ability checks the rest (the combo's timing, the attacker's state); an index out of the combo is the server's to pick.
+	ActivateMeleeSwing(ComboIndex);
 }
 
 bool AVCCharacterBase::TryStartRangedAttack()

@@ -167,31 +167,46 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 	}
 
 	const FAttackParameters Attack = ResolveAttackParameters(Avatar);
-
-	// Rate limit: one swing per 1/AttackSpeed seconds. Cheaper and simpler than a cooldown effect
-	// until attack animations give the swing a real duration.
 	const double Now = World->GetTimeSeconds();
-	const double Interval = 1.0 / FMath::Max(0.01f, Attack.AttackSpeed);
-	if (LastAttackTimeSeconds >= 0.0 && (Now - LastAttackTimeSeconds) < Interval)
-	{
-		EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
-		return;
-	}
-	LastAttackTimeSeconds = Now;
+	UVCActionMontageComponent* Montages = Avatar->FindComponentByClass<UVCActionMontageComponent>();
+	const UAnimMontage* AttackMontage = Montages ? Montages->GetMontage(EVCAnimAction::Attack, 0) : nullptr;
 
 	// The swing's montage: everyone but the owning player (who played its own at input) sees it, and the hit waits
 	// for the montage's hit time. No montage, no wait.
 	float HitDelay = 0.f;
-	if (UVCActionMontageComponent* Montages = Avatar->FindComponentByClass<UVCActionMontageComponent>())
+	if (AttackMontage)
 	{
+		// The combo's own rule (D104): the attack before must have reached its recovery, and the owner's pick is taken
+		// when the rule allows it (G179: on a machine that is owner and server, it is the pick already made).
 		float PlayRate = 1.f;
-		const int32 Variant = Montages->ChooseAttack(Attack.AttackSpeed, PlayRate);
+		int32 Variant = 0;
+		if (!Montages->AcceptAttack(Montages->TakeRequestedAttack(), Attack.AttackSpeed, Variant, PlayRate))
+		{
+			EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
+			return;
+		}
+		LastAttackTimeSeconds = Now;
 		if (const UAnimMontage* Montage = Montages->GetMontage(EVCAnimAction::Attack, Variant))
 		{
 			const APawn* Pawn = Cast<APawn>(Avatar);
 			Montages->PlayActionForEveryone(EVCAnimAction::Attack, Variant, PlayRate, Pawn && Pawn->IsPlayerControlled());
 			HitDelay = UVCActionAnimSet::GetHitTime(Montage) / PlayRate;
 		}
+	}
+	else
+	{
+		// Without a montage: one swing per 1/AttackSpeed seconds.
+		if (Montages)
+		{
+			Montages->TakeRequestedAttack();
+		}
+		const double Interval = 1.0 / FMath::Max(0.01f, Attack.AttackSpeed);
+		if (LastAttackTimeSeconds >= 0.0 && (Now - LastAttackTimeSeconds) < Interval)
+		{
+			EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
+			return;
+		}
+		LastAttackTimeSeconds = Now;
 	}
 
 	if (HitDelay <= UE_KINDA_SMALL_NUMBER)

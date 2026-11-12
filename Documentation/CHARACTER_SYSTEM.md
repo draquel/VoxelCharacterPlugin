@@ -137,6 +137,27 @@ attacker builds FCGFDamageContext
   sees `GuardBreak` (`Guard_Break`). Pure damage and a hit with no source are not blocked; a body without stamina (an NPC)
   never breaks. While the guard is up the primary action does nothing and stamina does not regenerate. Not done: the
   guard does not slow the walk, NPCs do not block, and the shield's swap has no montage.
+- **The sword's attack flow** (the sword attack flow plan, D102-D107, G178-G180, 2026-11-12;
+  `SWORD_ATTACK_FLOW_PLAN.md`, frozen). The SwordShield set's combo is the pack demo's, `SSH_Attack_01`, `_02`, `_04`
+  (each begins in the last one's follow-through pose), then `_01` again. Every attack montage carries two markers the
+  layers script measures from its clip: the hit at the strike (the fastest hand's fastest frame, G178: 0.48, 0.41,
+  0.41 s; it was 40 % of the clip, 0.2 s late) and `UVCAnimNotify_ActionRecovery` where the follow-through ends (the
+  body settles: 0.68, 0.65, 0.58 s), read with `UVCActionAnimSet::GetRecoveryTime` (the end without one). A press
+  before the strike does nothing, one from the strike to the recovery is kept and plays the next attack at the
+  recovery, one from the recovery to `ComboWindow` (0.2 s) past the end plays it at once, later starts a new combo
+  (`UVCActionMontageComponent::ClassifyAttackPress`). The owner picks the combo index and sends it
+  (`Server_RequestMeleeSwing`); the ability takes it when the server's own rule allows it (`AcceptAttack`: the attack
+  before at its recovery less 0.2 s, the index the first or the next), else picks its own, and a machine that is
+  owner and server picks once (G179: the combo had skipped every second attack there). The clips play at the
+  weapon's `AttackSpeed` as a rate (0.5 to 2: the Longsword's 1.1; D107), so the combo's cadence is the recovery time
+  over it (0.59 s). Past the recovery, an attack whose character wants to move (the input's acceleration on the owner
+  and the server, over 50 uu/s on a simulated proxy) blends out in the set's `RecoveryBlendOut` (0.2 s) to the
+  locomotion; standing, the recovery plays out (D103, `vc.Anim.AttackBreak`). The lunge (the clips' root motion, on in
+  the pack: 81, 123 and 101 uu) moves the capsule only standing (D106, "Movement" › Montage root motion). Measured on
+  `CharacterTest` with a dedicated server, two clients and 100 ms of lag (`vox.PIE.Net 2`, `vox.AttackTrace`): the
+  owner, the server and the other client play the same three attacks, standing all three end at the same place with no
+  correction, walking all three hold 400 uu/s through each swing and break it at its recovery. The demo's other attacks
+  (the secondary branch, the charge, the run, air and plunge attacks, the dodge) are the plan's later phases.
 
 ### The bow (ranged combat plan, 2026-11-06 to 11-07)
 
@@ -361,6 +382,14 @@ re-mesh).
   once the body is within `AimTurnTolerance` (15 degrees) of it or `AimTurnMaxTime` (0.5 s) has passed (`AdvanceAimTurn`;
   `IsAimTurnPending` meanwhile). A flip with nothing to turn through completes at once, as before. Test
   `VoxelCharacter.Movement.AimTurnEase`.
+- **Montage root motion** (the sword attack flow plan, D106, G180, 2026-11-12). The pack's attack clips carry their
+  lunge as root motion with the flag on, and the anim instance takes root motion from montages, so a swing moves the
+  capsule; for the whole montage it also took the velocity, so a swing on the run stopped the run (G180). With
+  `bMontageRootMotionOnlyStanding` (on) `PerformMovement` sets the body's root motion mode per move from the move's
+  input (`ApplyMontageRootMotionMode`: from montages without input, ignored with it), so the owner's prediction and the
+  server's replay decide alike; a simulated proxy, which runs no moves, takes it from its speed over 50 uu/s and
+  follows the server's replicated movement otherwise. Standing, the lunge moves the capsule; moving, the locomotion
+  keeps it. A dedicated server plays the montages that have root motion for this ("Animation" › Action montages).
 - **Planet gravity.** On a planet `PerformMovement` points the engine's custom gravity at the centre before every move
   (`UpdatePlanetGravity`), so the server's replay, the client's prediction and NPCs agree with no new replicated state.
   The component's own vertical code (swim controls, buoyancy, floor and landing traces, the shore climb, the embed
@@ -514,14 +543,17 @@ L4: D44 is reversed, and motion matching stays selectable for comparison.
   and the release, the upper body only, so the legs keep walking) and the drawn aim offset that points the bow where the
   view looks, weighted by `DrawnAimWeight` (the raise or the montage, the larger; `LAYER_VERSION` `stance-v4`).
 - **Action montages.** `UVCActionMontageComponent` (on both character classes) plays an action from the
-  `UVCActionAnimSet` of what the character holds: `ChooseAttack` steps through the set's combo within its window and
-  picks the play rate that fits one swing into an attack's interval; `PlayActionLocal` plays on this machine (a dig or a
-  chop already playing keeps playing); `PlayActionForEveryone` sends one unreliable multicast, which a dedicated server
-  and, for an action it played at input, the owning player skip (D49). On the server it answers the combat component: a
+  `UVCActionAnimSet` of what the character holds: `ChooseAttack` steps through the set's combo by the press's rule and
+  plays it at the weapon's speed ("GAS" › The sword's attack flow); `PlayActionLocal` plays on this machine (a dig or a
+  chop already playing keeps playing); `PlayActionForEveryone` sends one unreliable multicast, which the owning player
+  skips for an action it played at input (D49) and a dedicated server skips unless the montage has root motion (an
+  attack's lunge: the server plays it, undrawn, so its movement takes the lunge as the owner's does, D106). While an
+  attack plays the component ticks and breaks its recovery off when the character wants to move (D103). On the server it answers the combat component: a
   hit react from the side the hit came from (`DirectionOfHit`, about local up), a death montage for a body with no
   physics asset (one with a physics asset ragdolls), a get-up on revive.
-- **What plays when.** The melee attack: the owner plays its swing at once (`StartMeleeSwing`, from
-  `TryStartMeleeAttack` or a swing at the air; the server's rate limit mirrored); the server's ability sends it to the others and lands the sweep and the damage at the montage's hit
+- **What plays when.** The melee attack: the owner plays its swing at once, or keeps the press for the current attack's
+  recovery (`StartMeleeSwing`, from `TryStartMeleeAttack` or a swing at the air; the combo's rule the server applies
+  too); the server's ability sends it to the others and lands the sweep and the damage at the montage's hit
   time, the first `UVCAnimNotify_ActionHit` (`GetHitTime`; 40% of the length without one), and at once with no montage.
   Dig, place and chop: the owner at input, the others once the server accepted the edit or the chop. Use and placing an
   item: everyone, from the server, since the server may refuse. The bow's draw and release: as the melee attack (ranged
@@ -644,7 +676,8 @@ L4: D44 is reversed, and motion matching stays selectable for comparison.
   offset), then an Inertialization node, the root turned by `RootYawOffset`, and `ABP_VoxelCharacter`'s own chain, pasted (the layer, `UpperBodyAction`, the default
   slot, foot placement, the foot-bone IK, look-at, off-hand IK), with one change: while the character moves the
   default slot's montages (attacks, digs, hit reacts) lay over the upper body on the stance's ramp
-  (`ActionLegsWeight`), so a swing on the move keeps the legs running; standing they play over the whole body.
+  (`ActionLegsWeight`), so a swing on the move keeps the legs running; standing they play over the whole body. An
+  attack on the move breaks off to this graph once its follow-through ends (D103, "GAS" › The sword's attack flow).
   **The crouch** (L3, 2026-11-11). A clip set's crouch (`CrouchIdle`, `CrouchBegin`, `CrouchEnd`, the slow crouch walk
   and the crouch walk by direction with their starts and stops, `AimCrouchWalk` and its starts, stops and idle for the
   aim, `CrouchCycle` and `AimCrouchCycle`) is the bow's hold `B` (114 and 302 uu/s authored, the aim's hold `C` slow
@@ -1150,7 +1183,8 @@ Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, World
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
 and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83), the swing at the air's `Combat.Melee.HoldsMeleeWeapon` (G174), the guard's `Combat.Block.Rules` and
-`Combat.Block.GuardTakesFrontHits` (D94), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the sheaths'
+`Combat.Block.GuardTakesFrontHits` (D94), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the attack flow's
+`Anim.RecoveryTime`, `Anim.AttackPressRule`, `Anim.AttackCombo` and `Combat.Melee.AcceptAttack` (D102-D107, G179); the sheaths'
 `EquipmentLoop.SheathSlots` (the three sheaths, a shield on the back drawn into the off hand with the sword, D95-D96), `SheathActionSet` (the set follows the drawn weapon, R and X, the snapshot's drawn state),
 `SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip` (the equipment sheathing plan's S2-S4); the state
 machine's `Locomotion.ClipChoice`, `StanceWeight`, `SetChange` (L1), `States`, `Pace`, `Transitions`, `Instance` and
