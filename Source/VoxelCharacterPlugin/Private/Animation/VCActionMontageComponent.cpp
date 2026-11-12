@@ -13,6 +13,9 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/Character.h"
 #include "Engine/World.h"
+#include "AbilitySystemComponent.h"
+#include "AbilitySystemGlobals.h"
+#include "Tags/CGFGameplayTags.h"
 
 UVCActionMontageComponent::UVCActionMontageComponent()
 {
@@ -156,6 +159,13 @@ bool UVCActionMontageComponent::StopActionLocal(EVCAnimAction Action)
 	return true;
 }
 
+bool UVCActionMontageComponent::IsActionPlaying(EVCAnimAction Action) const
+{
+	UAnimMontage* Montage = GetMontage(Action);
+	const UAnimInstance* AnimInstance = Montage ? GetBodyAnimInstance() : nullptr;
+	return AnimInstance && AnimInstance->Montage_IsPlaying(Montage);
+}
+
 void UVCActionMontageComponent::StopActionForEveryone(EVCAnimAction Action, bool bOwnerStoppedIt)
 {
 	if (!GetOwner() || !GetOwner()->HasAuthority())
@@ -242,6 +252,16 @@ void UVCActionMontageComponent::HandleDamaged(const FCGFDamageContext& Context)
 	const UVCCombatComponent* Combat = GetOwner() ? GetOwner()->FindComponentByClass<UVCCombatComponent>() : nullptr;
 	if (!Combat || ICGFDamageableInterface::Execute_IsDead(Combat) || Combat->IsDowned())
 	{
+		return;
+	}
+	// A hit on the guard shakes the shield instead (D94); a guard it broke staggers already (UVCBlockAbility::BreakGuard).
+	if (Context.ContextTags.HasTagExact(CGFGameplayTags::Damage_Blocked))
+	{
+		const UAbilitySystemComponent* ASC = UAbilitySystemGlobals::GetAbilitySystemComponentFromActor(GetOwner(), false);
+		if (!ASC || !ASC->HasMatchingGameplayTag(CGFGameplayTags::State_GuardBroken))
+		{
+			PlayActionForEveryone(EVCAnimAction::BlockHit);
+		}
 		return;
 	}
 	PlayActionForEveryone(EVCAnimAction::HitReact, GetHitDirection(Context));

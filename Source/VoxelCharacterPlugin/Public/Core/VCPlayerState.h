@@ -58,6 +58,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
 	TSubclassOf<UGameplayAbility> RangedAttackAbilityClass;
 
+	/** The shield's guard, granted with the attacks (D94). Defaults to UVCBlockAbility; None disables blocking. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
+	TSubclassOf<UGameplayAbility> BlockAbilityClass;
+
 	// --- Death / Respawn ---
 
 	/** GameplayEffect applied on respawn to reset vitals to max. */

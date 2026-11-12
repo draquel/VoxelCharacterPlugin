@@ -9,6 +9,7 @@
 #include "UI/VCReticleWidget.h"
 #include "Combat/VCArrowProjectile.h"
 #include "Combat/VCCombatComponent.h"
+#include "Combat/VCBlockAbility.h"
 #include "Combat/VCMeleeAttackAbility.h"
 #include "Combat/VCRangedAttackAbility.h"
 #include "Core/VCCharacterBase.h"
@@ -19,6 +20,7 @@
 #include "Data/Fragments/ItemFragment_Durability.h"
 #include "Data/Fragments/ItemFragment_Equipment.h"
 #include "Data/Fragments/ItemFragment_RangedWeapon.h"
+#include "Data/Fragments/ItemFragment_Shield.h"
 #include "Data/Fragments/ItemFragment_Weapon.h"
 #include "Data/ItemDefinition.h"
 #include "Subsystems/ItemDatabaseSubsystem.h"
@@ -510,6 +512,131 @@ bool FVCMelee_HoldsMeleeWeapon::RunTest(const FString& Parameters)
 	TestFalse(TEXT("A bow in hand draws, it does not swing"), UVCMeleeAttackAbility::HoldsMeleeWeapon(S.NPC));
 	TestTrue(TEXT("The plank equips"), Hold(Plank));
 	TestFalse(TEXT("An item without a Weapon fragment is no melee weapon"), UVCMeleeAttackAbility::HoldsMeleeWeapon(S.NPC));
+	return true;
+}
+
+// The guard's rules (D94), pure: the arc about the local up, and what a hit costs and leaves.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCBlock_Rules, "VoxelCharacter.Combat.Block.Rules", VC_RANGED_FLAGS)
+bool FVCBlock_Rules::RunTest(const FString& Parameters)
+{
+	const FVector Forward(1, 0, 0);
+	const FVector Up(0, 0, 1);
+	TestTrue(TEXT("Straight ahead is in the arc"), UVCBlockAbility::IsInBlockArc(Forward, Up, FVector(100, 0, 0), 60.f));
+	TestTrue(TEXT("Ahead and above is in the arc (measured about up)"), UVCBlockAbility::IsInBlockArc(Forward, Up, FVector(100, 0, 300), 60.f));
+	TestTrue(TEXT("59 degrees aside is in"), UVCBlockAbility::IsInBlockArc(Forward, Up, FRotator(0, 59, 0).Vector(), 60.f));
+	TestFalse(TEXT("61 degrees aside is out"), UVCBlockAbility::IsInBlockArc(Forward, Up, FRotator(0, -61, 0).Vector(), 60.f));
+	TestFalse(TEXT("Behind is out"), UVCBlockAbility::IsInBlockArc(Forward, Up, FVector(-100, 0, 0), 60.f));
+	TestFalse(TEXT("Straight above has no side"), UVCBlockAbility::IsInBlockArc(Forward, Up, FVector(0, 0, 100), 60.f));
+	// On a planet's flank (up along +Y) the arc turns with the frame.
+	TestTrue(TEXT("A tilted frame: ahead in its plane is in"), UVCBlockAbility::IsInBlockArc(Forward, FVector(0, 1, 0), FVector(100, 300, 0), 60.f));
+
+	FVCShieldStats Shield;
+	Shield.DamageReduction = 0.8f;
+	Shield.HalfAngle = 60.f;
+	Shield.StaminaPerDamage = 1.f;
+	float Damage = 0.f, Cost = 0.f;
+	TestFalse(TEXT("Stamina enough: the guard holds"), UVCBlockAbility::ResolveBlockedHit(10.f, 100.f, Shield, Damage, Cost));
+	TestEqual(TEXT("Stamina enough: 20% lands"), Damage, 2.f, 1.e-4f);
+	TestEqual(TEXT("Stamina enough: the share is paid"), Cost, 8.f, 1.e-4f);
+	TestTrue(TEXT("Stamina short: the guard breaks"), UVCBlockAbility::ResolveBlockedHit(10.f, 3.f, Shield, Damage, Cost));
+	TestEqual(TEXT("Stamina short: what it paid for is taken, the rest lands"), Damage, 7.f, 1.e-4f);
+	TestEqual(TEXT("Stamina short: all of it is spent"), Cost, 3.f, 1.e-4f);
+	Shield.StaminaPerDamage = 0.f;
+	TestFalse(TEXT("A shield that costs nothing never breaks"), UVCBlockAbility::ResolveBlockedHit(10.f, 0.f, Shield, Damage, Cost));
+	TestEqual(TEXT("A shield that costs nothing takes its share"), Damage, 2.f, 1.e-4f);
+	return true;
+}
+
+// The guard on a body (D94): an NPC (its own ability system, no stamina) with a shield in the off hand and the block
+// ability. Raised, a hit from the front loses the shield's share and one from behind does not; lowered, nothing is taken.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCBlock_GuardTakesFrontHits, "VoxelCharacter.Combat.Block.GuardTakesFrontHits", VC_RANGED_FLAGS)
+bool FVCBlock_GuardTakesFrontHits::RunTest(const FString& Parameters)
+{
+	FRangedWorld W;
+	if (!TestNotNull(TEXT("The item database"), W.Database))
+	{
+		return false;
+	}
+	UItemDefinition* ShieldDef = W.Define(TEXT("BlockTestShield"), 1, FGameplayTagContainer(CGFGameplayTags::Item_Category_Weapon));
+	{
+		UItemFragment_Equipment* Equip = NewObject<UItemFragment_Equipment>(ShieldDef);
+		Equip->EquipmentSlotTag = CGFGameplayTags::Equipment_Slot_OffHand;
+		UItemFragment_Shield* Shield = NewObject<UItemFragment_Shield>(ShieldDef);
+		Shield->BlockDamageReduction = 0.8f;
+		Shield->BlockHalfAngle = 60.f;
+		ShieldDef->Fragments = { Equip, Shield };
+	}
+
+	const FTransform Transform(FVector(0, 0, 1000));
+	AVCNPCCharacterBase* Guard = W.World->SpawnActorDeferred<AVCNPCCharacterBase>(AVCNPCCharacterBase::StaticClass(), Transform, nullptr, nullptr,
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (!TestNotNull(TEXT("A guard"), Guard))
+	{
+		return false;
+	}
+	Guard->bAIEnabled = false;
+	Guard->DefaultAbilities.Add(UVCBlockAbility::StaticClass());
+	Guard->FinishSpawning(Transform);
+	if (UCharacterMovementComponent* Move = Guard->GetCharacterMovement())
+	{
+		Move->DisableMovement();
+	}
+	// Registered after BeginPlay, so it begins play at once: the off hand from its definition.
+	UEquipmentManagerComponent* Equipment = NewObject<UEquipmentManagerComponent>(Guard, TEXT("BlockTestEquipment"));
+	FEquipmentSlotDefinition OffHand;
+	OffHand.SlotTag = CGFGameplayTags::Equipment_Slot_OffHand;
+	Equipment->AvailableSlots.Add(OffHand);
+	Equipment->RegisterComponent();
+	UAbilitySystemComponent* ASC = Guard->GetAbilitySystemComponent();
+	UVCCombatComponent* Combat = Guard->CombatComponent;
+	if (!TestNotNull(TEXT("An ability system"), ASC) || !TestNotNull(TEXT("A combat component"), Combat))
+	{
+		return false;
+	}
+
+	// Two sources 2 m before and behind the guard: actors with a root to stand on.
+	const auto SpawnSource = [&](const FVector& Location)
+	{
+		AActor* Source = W.World->SpawnActor<AActor>(AActor::StaticClass(), FTransform(Location));
+		USceneComponent* Root = NewObject<USceneComponent>(Source);
+		Source->SetRootComponent(Root);
+		Root->RegisterComponent();
+		Source->SetActorLocation(Location);
+		return Source;
+	};
+	AActor* Front = SpawnSource(Guard->GetActorLocation() + Guard->GetActorForwardVector() * 200.0);
+	AActor* Behind = SpawnSource(Guard->GetActorLocation() - Guard->GetActorForwardVector() * 200.0);
+
+	const auto HitFrom = [&](AActor* Source)
+	{
+		FCGFDamageContext Hit;
+		Hit.InstigatorActor = Source;
+		Hit.BaseDamage = 10.f;
+		Hit.DamageType = CGFGameplayTags::Damage_Type_Physical;
+		Hit.bIgnoreFaction = true;
+		const float Before = Combat->GetHealth();
+		Combat->ApplyDamage(Hit);
+		return Before - Combat->GetHealth();
+	};
+	const auto Raise = [&]() { return ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(VCGameplayTags::Ability_Block)); };
+
+	TestFalse(TEXT("No shield: no guard"), Raise());
+	TestTrue(TEXT("The shield equips into the off hand"), Equipment->TryEquipToSlot(W.Database->CreateItemInstance(ShieldDef->GetPrimaryAssetId()),
+		CGFGameplayTags::Equipment_Slot_OffHand) == EEquipmentResult::Success);
+	const float Unguarded = HitFrom(Front);
+	TestTrue(*FString::Printf(TEXT("Unguarded, a hit lands (%.2f)"), Unguarded), Unguarded > 0.f);
+
+	TestTrue(TEXT("With the shield the guard goes up"), Raise());
+	TestTrue(TEXT("Raised: State.Blocking"), ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Blocking));
+	const float FromFront = HitFrom(Front);
+	TestEqual(*FString::Printf(TEXT("Raised: a hit from the front loses 80%% (%.2f of %.2f)"), FromFront, Unguarded), FromFront, Unguarded * 0.2f, 0.05f);
+	const float FromBehind = HitFrom(Behind);
+	TestEqual(*FString::Printf(TEXT("Raised: a hit from behind lands whole (%.2f)"), FromBehind), FromBehind, Unguarded, 0.05f);
+
+	UVCBlockAbility::ReleaseBlock(ASC);
+	TestFalse(TEXT("Lowered: no State.Blocking"), ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Blocking));
+	const float Lowered = HitFrom(Front);
+	TestEqual(*FString::Printf(TEXT("Lowered: a hit from the front lands whole (%.2f)"), Lowered), Lowered, Unguarded, 0.05f);
 	return true;
 }
 

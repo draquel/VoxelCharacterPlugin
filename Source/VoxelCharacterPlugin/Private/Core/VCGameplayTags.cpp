@@ -12,6 +12,7 @@ namespace VCGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Equipment_AnimSet_Bow,         "Equipment.AnimSet.Bow",         "Action set: a bow");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Attack_Ranged,         "Ability.Attack.Ranged",         "The bow's attack: hold to draw, release to shoot (UVCRangedAttackAbility)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Block,                 "Ability.Block",                 "The shield's guard: held while the secondary action is (UVCBlockAbility)");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Stat_MaxHealth,          "SetByCaller.Stat.MaxHealth",          "Equipment stat key: UVCCharacterAttributeSet::MaxHealth");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Stat_MaxStamina,         "SetByCaller.Stat.MaxStamina",         "Equipment stat key: UVCCharacterAttributeSet::MaxStamina");

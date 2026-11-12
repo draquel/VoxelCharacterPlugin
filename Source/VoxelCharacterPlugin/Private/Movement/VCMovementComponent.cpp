@@ -1172,6 +1172,11 @@ void UVCMovementComponent::TickStamina(float DeltaTime)
 		TimeSinceSprint = 0.f;
 		PendingStaminaDelta -= SprintStaminaPerSecond * DeltaTime;
 	}
+	else if (ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Blocking))
+	{
+		// A raised guard holds the stamina where its blocks left it (D94): no regeneration until it comes down.
+		TimeSinceSprint = 0.f;
+	}
 	else
 	{
 		TimeSinceSprint += DeltaTime;

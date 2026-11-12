@@ -292,6 +292,21 @@ public:
 	void ReleasePrimaryAction();
 
 	/**
+	 * Press the secondary action, as IA_SecondaryAction's press does: a bow aims, a shield raises its guard (D94), edit mode
+	 * places. For scripts and QA, as PressPrimaryAction.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
+	void PressSecondaryAction();
+
+	/** Release the secondary action: the aim ends, the guard comes down. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
+	void ReleaseSecondaryAction();
+
+	/** Whether this machine's player holds its guard up (the owner's input state; the server's is State.Blocking). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
+	bool IsBlocking() const { return bBlocking; }
+
+	/**
 	 * Start drawing the main hand's ranged weapon (ranged combat plan B3): the owner's check that there is an arrow
 	 * (UVCRangedAttackAbility::CanStartDraw; a toast says none), its own draw montage, and the ability's activation on the
 	 * server. Step 0 of the primary-action chain: a ranged weapon in hand takes the press, arrows or not; also callable
@@ -510,7 +525,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
 	bool RequestCycleWeapon();
 
-	/** The sheaths holding a weapon, in the cycle's order (every machine, from the replicated slots). */
+	/** The main hand's sheaths holding a weapon, in the cycle's order (every machine, from the replicated slots). */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Equipment")
 	TArray<FGameplayTag> GetCarriedWeaponSlots() const;
 
@@ -1040,6 +1055,19 @@ protected:
 
 	/** World time of the owner's last swing played at input (the server's rate limit, mirrored). */
 	double LastOwnSwingTime = -1.0;
+
+	/**
+	 * Raise the guard (D94): with a shield in the off hand (UVCBlockAbility::CanStartBlock), the owner's guard at once and
+	 * the block ability's activation, which the server holds while the secondary action is held.
+	 * @return True when the guard went up (or was up)
+	 */
+	bool StartBlock();
+
+	/** Lower the guard: the owner's lowering (when its guard still plays) and the ability's release on the server. */
+	void StopBlock();
+
+	/** The owner holds its guard up (StartBlock until StopBlock). */
+	bool bBlocking = false;
 
 	/** A draw this machine started (TryStartRangedAttack) and its world time, for the owner's release montage. */
 	bool bDrawingRangedWeapon = false;

@@ -8,6 +8,7 @@
 #include "Combat/VCCombatAttributeSet.h"
 #include "Combat/VCMeleeAttackAbility.h"
 #include "Combat/VCRangedAttackAbility.h"
+#include "Combat/VCBlockAbility.h"
 #include "AbilitySystemComponent.h"
 #include "GameplayEffect.h"
 #include "VoxelCharacterPlugin.h"
@@ -109,6 +110,7 @@ AVCPlayerState::AVCPlayerState()
 
 	MeleeAttackAbilityClass = UVCMeleeAttackAbility::StaticClass();
 	RangedAttackAbilityClass = UVCRangedAttackAbility::StaticClass();
+	BlockAbilityClass = UVCBlockAbility::StaticClass();
 
 	// Net update frequency for ASC replication
 	SetNetUpdateFrequency(100.f);

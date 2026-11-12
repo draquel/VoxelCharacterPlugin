@@ -132,16 +132,24 @@ bool FVCSheath_Slots::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	// The three sheaths, drawn into the main hand, on their bones, in the cycle's order (D78).
+	// The three weapon sheaths, drawn into the main hand, on their bones, in the cycle's order (D78).
 	const FGameplayTag Expected[] = { CGFGameplayTags::Equipment_Slot_Sheath_Belt, CGFGameplayTags::Equipment_Slot_Sheath_HipLeft,
 		CGFGameplayTags::Equipment_Slot_Sheath_Back };
 	const FName Bones[] = { TEXT("pelvis"), TEXT("pelvis"), TEXT("spine_05") };
+	// The shield's (G175) draws into the off hand on its own and is no carried weapon of the cycle.
 	TArray<FGameplayTag> Sheaths;
 	for (const FEquipmentSlot& Slot : Equipment->EquipmentSlots)
 	{
-		if (Slot.DrawSlotTag.IsValid())
+		if (Slot.SlotTag == CGFGameplayTags::Equipment_Slot_Sheath_ShieldBack.GetTag())
+		{
+			TestTrue(TEXT("The shield's sheath draws into the off hand"), Slot.DrawSlotTag == CGFGameplayTags::Equipment_Slot_OffHand.GetTag());
+			TestTrue(TEXT("The shield's sheath draws when the hand is free"), Slot.bDrawWhenFree);
+			TestTrue(TEXT("The shield's sheath hangs on spine_03"), Equipment->GetVisualAttachSocket(Slot.SlotTag) == FName(TEXT("spine_03")));
+		}
+		else if (Slot.DrawSlotTag.IsValid())
 		{
 			TestTrue(*FString::Printf(TEXT("%s draws into the main hand"), *Slot.SlotTag.ToString()), Slot.DrawSlotTag == CGFGameplayTags::Equipment_Slot_MainHand.GetTag());
+			TestFalse(*FString::Printf(TEXT("%s waits to be drawn"), *Slot.SlotTag.ToString()), Slot.bDrawWhenFree);
 			Sheaths.Add(Slot.SlotTag);
 		}
 	}
