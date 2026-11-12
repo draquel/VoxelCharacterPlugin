@@ -84,6 +84,21 @@ public:
 };
 
 /**
+ * Marks where an attack's follow-through ends and its recovery begins (the sword attack flow plan, D102): the body has
+ * settled after the strike and the pack's next attack starts from this pose. From here the next attack of the combo
+ * plays at once (D104) and movement breaks the recovery off (D103). Read from the asset (UVCActionAnimSet::GetRecoveryTime)
+ * as the hit is; nothing happens when the notify itself fires.
+ */
+UCLASS(meta = (DisplayName = "VC Action Recovery"))
+class VOXELCHARACTERPLUGIN_API UVCAnimNotify_ActionRecovery : public UAnimNotify
+{
+	GENERATED_BODY()
+
+public:
+	virtual FString GetNotifyName_Implementation() const override;
+};
+
+/**
  * Marks the frame of an Unsheathe where the hand closes on the grip, or of a Sheathe where it lets go at the sheath: the
  * weapon's visual moves between the sheath and the hand there on every machine, and the server puts the drawn weapon in
  * the hand at an Unsheathe's (UVCActionAnimSet::GetHandOffTime, read from the asset as the hit time is).
@@ -157,13 +172,20 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation", meta = (Categories = "Equipment.AnimSet"))
 	FGameplayTag ActionSet;
 
-	/** The attack combo, played in turn while attacks follow each other within ComboWindow. */
+	/**
+	 * The attack combo, played in turn: the next attack continues the combo from the current one's recovery time to
+	 * ComboWindow past its end (D104).
+	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TArray<TObjectPtr<UAnimMontage>> AttackCombo;
 
-	/** Seconds after an attack's montage ends within which the next attack continues the combo. */
+	/** Seconds after an attack's montage ends within which the next attack still continues the combo (D104). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation", meta = (ClampMin = "0"))
-	float ComboWindow = 0.6f;
+	float ComboWindow = 0.2f;
+
+	/** The blend-out when movement breaks an attack's recovery off (D103), seconds. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation", meta = (ClampMin = "0"))
+	float RecoveryBlendOut = 0.2f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TObjectPtr<UAnimMontage> Dig;
@@ -314,6 +336,14 @@ public:
 	 * @return Seconds from the montage's start at play rate 1; 0 for no montage
 	 */
 	static float GetHitTime(const UAnimMontage* Montage, float DefaultFraction = 0.4f);
+
+	/**
+	 * When an attack's follow-through ends and its recovery begins (D102): the first UVCAnimNotify_ActionRecovery's time,
+	 * else the montage's end (a montage without the marker has no recovery to break or to chain from).
+	 * @param Montage The attack's montage
+	 * @return Seconds from the montage's start at play rate 1; 0 for no montage
+	 */
+	static float GetRecoveryTime(const UAnimMontage* Montage);
 
 	/**
 	 * The side a hit came from, measured about the victim's local up.

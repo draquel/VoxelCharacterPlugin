@@ -1173,15 +1173,24 @@ protected:
 	bool bLastCarriedLightLit = false;
 
 	/**
-	 * Swing: the owner's montage at once (rate limited as the server's) and the melee ability's activation, which sweeps
-	 * on the server at the hit time. TryStartMeleeAttack's swing at a target and the primary action's swing at the air
-	 * with a melee weapon in hand (G174).
-	 * @return True if the ability activation was requested
+	 * Swing: by the combo's rule (the sword attack flow plan, D104) the owner's montage at once, or the press kept until
+	 * the current attack's recovery, or nothing in its wind-up; then the melee ability's activation with the owner's combo
+	 * index, which sweeps on the server at the hit time. TryStartMeleeAttack's swing at a target and the primary action's
+	 * swing at the air with a melee weapon in hand (G174).
+	 * @return True if the press was taken (a swing requested, or kept)
 	 */
 	bool StartMeleeSwing();
 
-	/** World time of the owner's last swing played at input (the server's rate limit, mirrored). */
-	double LastOwnSwingTime = -1.0;
+	/**
+	 * Authority: the melee ability's activation for a swing, with the owner's combo index for the ability to take (G179).
+	 * @param ComboIndex The owner's combo index, -1 for none
+	 * @return True if the ability activated
+	 */
+	bool ActivateMeleeSwing(int32 ComboIndex);
+
+	/** The owner's swing: the server activates the melee ability with the owner's combo index (D104). */
+	UFUNCTION(Server, Reliable)
+	void Server_RequestMeleeSwing(int8 ComboIndex);
 
 	/**
 	 * Raise the guard (D94): with a shield in the off hand (UVCBlockAbility::CanStartBlock), the owner's guard at once and

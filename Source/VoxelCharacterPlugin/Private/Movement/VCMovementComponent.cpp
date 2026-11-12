@@ -5,6 +5,8 @@
 #include "Movement/VCGravityFrame.h"
 #include "AI/VCNPCCost.h"
 #include "GameFramework/Character.h"
+#include "Animation/AnimInstance.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/PhysicsVolume.h"
 #include "VoxelChunkManager.h"
 #include "VoxelCollisionManager.h"
@@ -261,6 +263,13 @@ void UVCMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 		WorldEdgeProximity = 0.f;
 	}
 
+	// A simulated proxy runs no moves: it takes a montage's root motion only while it stands, by its speed (D106).
+	if (CharacterOwner && CharacterOwner->GetLocalRole() == ROLE_SimulatedProxy)
+	{
+		const FVector Up = FVCGravityFrame::GetUp(this);
+		ApplyMontageRootMotionMode((Velocity - Up * FVector::DotProduct(Velocity, Up)).SizeSquared() > FMath::Square(50.f));
+	}
+
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 }
 
@@ -352,7 +361,25 @@ void UVCMovementComponent::PerformMovement(float DeltaTime)
 	UpdatePlanetGravity();
 	// The gait table's values for this move, from the saved-move state and the rotation mode both sides hold (C4).
 	ApplyGaitTable();
+	// A montage's root motion only while the move has no input (D106), decided from the move itself.
+	ApplyMontageRootMotionMode(!Acceleration.IsNearlyZero());
 	Super::PerformMovement(DeltaTime);
+}
+
+void UVCMovementComponent::ApplyMontageRootMotionMode(bool bWantsToMove)
+{
+	USkeletalMeshComponent* Body = CharacterOwner ? CharacterOwner->GetMesh() : nullptr;
+	UAnimInstance* AnimInstance = Body ? Body->GetAnimInstance() : nullptr;
+	if (!AnimInstance)
+	{
+		return;
+	}
+	const ERootMotionMode::Type Mode = ShouldTakeMontageRootMotion(bMontageRootMotionOnlyStanding, bWantsToMove)
+		? ERootMotionMode::RootMotionFromMontagesOnly : ERootMotionMode::IgnoreRootMotion;
+	if (AnimInstance->RootMotionMode != Mode)
+	{
+		AnimInstance->SetRootMotionMode(Mode);
+	}
 }
 
 bool UVCMovementComponent::ShouldRemainVertical() const
