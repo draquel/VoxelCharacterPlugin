@@ -687,7 +687,8 @@ L4: D44 is reversed, and motion matching stays selectable for comparison.
   body it overshot the view by the legs' lag until the feet caught up (fixed in L4's pass). After
   the state machine the graph zeroes the root bone's translation and rotation (the packs carry their root motion in the
   root with the root-motion flag off, which would walk the mesh off the capsule; a turn's yaw comes back through the
-  offset), then an Inertialization node, the root turned by `RootYawOffset`, and `ABP_VoxelCharacter`'s own chain, pasted (the layer, `UpperBodyAction`, the default
+  offset; the Swim state plays `AS_VCSwim`, the water pack's `AS_Swim` with its root's constant 90-degree roll folded
+  into the root's children, since the zeroing stood the pack's clip upright on every body, G183), then an Inertialization node, the root turned by `RootYawOffset`, and `ABP_VoxelCharacter`'s own chain, pasted (the layer, `UpperBodyAction`, the default
   slot, foot placement, the foot-bone IK, look-at, off-hand IK), with one change: while the character moves the
   default slot's montages (attacks, digs, hit reacts) lay over the upper body on the stance's ramp
   (`ActionLegsWeight`), so a swing on the move keeps the legs running; standing they play over the whole body. An
