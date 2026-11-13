@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/VCTypes.h"
-#include "VoxelSeaSurface.h"
+#include "VoxelWaterLevels.h"
 #include "VoxelWorldModeTypes.h"
 
 class UVoxelChunkManager;
@@ -41,8 +41,8 @@ class VOXELCHARACTERPLUGIN_API FVCTerrainQueryHelper
 public:
 	/**
 	 * Query full terrain context at a world position.
-	 * Populates surface type, friction, water state, and chunk coordinate. The water depth is the sea's
-	 * (UVoxelChunkManager::GetSeaSurface): along the radius on a planet (spherical SP-E1).
+	 * Populates surface type, friction, water state, and chunk coordinate. The water depth is the water levels'
+	 * (UVoxelChunkManager::GetWaterLevels): along the radius on a planet (spherical SP-E1).
 	 *
 	 * @param World World context
 	 * @param Location World-space position to query (typically character feet)
@@ -53,8 +53,8 @@ public:
 
 	/**
 	 * Check if a world position is underwater: in a water-flagged voxel, edits included (a flooded dig is water, G86), with
-	 * its depth below the sea (UVoxelChunkManager::GetSeaSurface: the WaterLevel plane, or the sphere of WaterRadius on a
-	 * planet, SP-E1).
+	 * its depth below the water's surface over it (UVoxelChunkManager::GetWaterLevels: the sea's plane, or its sphere on
+	 * a planet, SP-E1).
 	 *
 	 * @param World World context
 	 * @param Location World-space position
@@ -74,8 +74,8 @@ public:
 	 * @param World World context
 	 * @param Location World-space position
 	 * @param ReachAbove How far above the surface the position may be and still count as at the water, uu
-	 * @param OutSample Receives the depth, the up and whether water is there (bWater false: the rest is still the sea's)
-	 * @return True when the world has a sea (bEnableWaterLevel) and a chunk manager
+	 * @param OutSample Receives the depth, the up and whether water is there (bWater false: the rest is still the water surface's)
+	 * @return True when a body of water covers the position's column (the water levels' sample) and there is a chunk manager
 	 */
 	static bool SampleWaterSurface(const UWorld* World, const FVector& Location, float ReachAbove, FVCWaterSurfaceSample& OutSample);
 
@@ -141,7 +141,7 @@ public:
 	 * @return True if dry land was found
 	 */
 	static bool FindPlaneSpawnPoint(const FVector2D& Start, float Step, float MaxSearchRadius, const FVoxelWorldBounds& Bounds,
-		TFunctionRef<float(float X, float Y)> SurfaceHeightAt, const FVoxelSeaSurface& Sea, FVector& OutPosition, int32& OutRing);
+		TFunctionRef<float(float X, float Y)> SurfaceHeightAt, const FVoxelWaterLevels& Water, FVector& OutPosition, int32& OutRing);
 
 	/**
 	 * Pure: the spawn search on a heightmap world past the ring search (world modes review WM-MP10; the plane's
@@ -163,7 +163,7 @@ public:
 	 * @return True if dry land was found
 	 */
 	static bool FindPlaneSpawnPointAtScale(const FVector2D& Start, double FirstRadius, double StepSize, double MaxRadius,
-		const FVoxelWorldBounds& Bounds, TFunctionRef<float(double X, double Y)> SurfaceHeightAt, const FVoxelSeaSurface& Sea,
+		const FVoxelWorldBounds& Bounds, TFunctionRef<float(double X, double Y)> SurfaceHeightAt, const FVoxelWaterLevels& Water,
 		FVector& OutPosition, double& OutDistance, int32 MaxSamples = 4096);
 
 	/**
@@ -183,7 +183,7 @@ public:
 	 * @return True if dry land was found
 	 */
 	static bool FindPlanetSpawnPoint(const FVector& Centre, double Radius, const FVector& StartDirection, double StepArc,
-		double MaxSearchArc, TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelSeaSurface& Sea,
+		double MaxSearchArc, TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelWaterLevels& Water,
 		FVector& OutPosition, int32& OutRing);
 
 	/**
@@ -205,6 +205,6 @@ public:
 	 * @return True if dry land was found
 	 */
 	static bool FindPlanetSpawnPointAtScale(const FVector& Centre, double Radius, const FVector& StartDirection, double FirstArc,
-		TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelSeaSurface& Sea, FVector& OutPosition, double& OutArc,
+		TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelWaterLevels& Water, FVector& OutPosition, double& OutArc,
 		int32 MaxSamples = 4096);
 };
