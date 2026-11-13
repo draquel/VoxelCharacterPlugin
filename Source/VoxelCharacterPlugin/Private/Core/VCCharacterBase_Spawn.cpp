@@ -33,7 +33,7 @@
 #include "VoxelCoordinates.h"
 #include "VoxelWorldConfiguration.h"
 #include "VoxelChunkManager.h"
-#include "VoxelSeaSurface.h"
+#include "VoxelWaterLevels.h"
 #include "VoxelScatterManager.h"
 #include "VoxelCollisionManager.h"
 #include "VoxelCharacterPlugin.h"
@@ -108,12 +108,16 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 	}
 	else if (!bResumeAtExactLocation && ChunkMgr->GetWorldBounds().Shape == EVoxelWorldBoundsShape::Shell)
 	{
-		const FVoxelSeaSurface Sea = ChunkMgr->GetSeaSurface();
-		const FVector Direction = (GetActorLocation() - Sea.Center).GetSafeNormal();
-		if (Sea.bEnabled && Sea.bRadial && !Direction.IsNearlyZero())
+		// The water over the pawn (the water levels' sample: on a planet its level is the distance from the centre).
+		const FVoxelWaterLevels Water = ChunkMgr->GetWaterLevels();
+		FVoxelWaterSample Over;
+		const bool bWater = Water.Sample(GetActorLocation(), Over);
+		const FVector Centre = ChunkMgr->GetWorldBounds().Center;
+		const FVector Direction = (GetActorLocation() - Centre).GetSafeNormal();
+		if (bWater && Water.IsRadial() && !Direction.IsNearlyZero())
 		{
 			const float HalfHeight = GetCapsuleComponent() ? GetCapsuleComponent()->GetScaledCapsuleHalfHeight() : 90.f;
-			SetActorLocation(Sea.Center + Direction * (Sea.Radius + HalfHeight));
+			SetActorLocation(Centre + Direction * (Over.SurfaceLevel + HalfHeight));
 			bSpawnAtSea = true;
 			UE_LOG(LogVoxelCharacter, Warning, TEXT("InitiateChunkBasedWait: no land on the planet; spawning at the sea's surface."));
 		}

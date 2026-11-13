@@ -3,7 +3,7 @@
 #include "Movement/VCTerrainQueryHelper.h"
 #include "Movement/VCMovementComponent.h"
 #include "VoxelChunkManager.h"
-#include "VoxelSeaSurface.h"
+#include "VoxelWaterLevels.h"
 #include "VoxelWorldConfiguration.h"
 #include "VoxelCoordinates.h"
 #include "VoxelData.h"
@@ -63,8 +63,8 @@ FVCTerrainContext FVCTerrainQueryHelper::QueryTerrainContext(const UWorld* World
 		break;
 	}
 
-	// Water state: the voxel water flag at the position and the sea's depth there (IsPositionUnderwater; SP-E1: the WaterLevel
-	// plane generation floods, G19, or the sphere of WaterRadius on a planet).
+	// Water state: the voxel water flag at the position and its depth under the water's surface (IsPositionUnderwater;
+	// SP-E1: the sea's plane generation floods, G19, or its sphere on a planet).
 	float WaterDepth = 0.f;
 	if (IsPositionUnderwater(World, Location, WaterDepth))
 	{
@@ -94,8 +94,8 @@ bool FVCTerrainQueryHelper::IsPositionUnderwater(const UWorld* World, const FVec
 		return false;
 	}
 
-	const UVoxelWorldConfiguration* Config = ChunkMgr->GetConfiguration();
-	if (!Config || !Config->bEnableWaterLevel)
+	const FVoxelWaterLevels Water = ChunkMgr->GetWaterLevels();
+	if (!ChunkMgr->GetConfiguration() || !Water.HasWater())
 	{
 		return false;
 	}
@@ -105,7 +105,7 @@ bool FVCTerrainQueryHelper::IsPositionUnderwater(const UWorld* World, const FVec
 	const FVoxelData VoxelAtLocation = ChunkMgr->GetVoxelAt(Location);
 	if (VoxelAtLocation.HasWaterFlag())
 	{
-		OutWaterDepth = FMath::Max(0.0, ChunkMgr->GetSeaSurface().GetDepth(Location));
+		OutWaterDepth = FMath::Max(0.0, Water.GetDepth(Location));
 		return true;
 	}
 
@@ -116,19 +116,19 @@ bool FVCTerrainQueryHelper::SampleWaterSurface(const UWorld* World, const FVecto
 {
 	OutSample = FVCWaterSurfaceSample();
 
+	// The water over the position: the water levels' sample (the body's surface there, the depth under it, its up).
 	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
-	const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
-	if (!Config || !Config->bEnableWaterLevel)
+	FVoxelWaterSample Over;
+	if (!ChunkMgr || !ChunkMgr->GetConfiguration() || !ChunkMgr->GetWaterLevels().Sample(Location, Over))
 	{
 		return false;
 	}
 
-	const FVoxelSeaSurface Sea = ChunkMgr->GetSeaSurface();
-	OutSample.Depth = Sea.GetDepth(Location);
-	OutSample.Up = Sea.bRadial ? (Location - Sea.Center).GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector) : FVector::UpVector;
+	OutSample.Depth = Over.Depth;
+	OutSample.Up = Over.SurfaceNormal;
 	if (OutSample.Depth > 0.0)
 	{
-		// Under the sea's level: water where the voxel says so (not in rock, not in a dry cave).
+		// Under the water's level: water where the voxel says so (not in rock, not in a dry cave).
 		OutSample.bWater = ChunkMgr->GetVoxelAt(Location).HasWaterFlag();
 	}
 	else if (OutSample.Depth > -static_cast<double>(ReachAbove))
@@ -221,11 +221,9 @@ bool FVCTerrainQueryHelper::FindSpawnablePosition(
 	}
 
 	const float ChunkWorldSize = Config->ChunkSize * Config->VoxelSize;
-	// Terrain heights are world Z, so the water surface is too: the sea at WaterLevel, where generation floods, wherever
-	// WorldOrigin is (G19; the nav, swim and NPC code read the same sea); the sphere of WaterRadius on a planet, SP-E1.
-	const FVoxelSeaSurface Sea = ChunkMgr->GetSeaSurface();
-	const float WaterLevel = static_cast<float>(Sea.PlaneZ);
-	const bool bHasWater = Sea.bEnabled;
+	// Terrain heights are world Z, so the water surface is too: the sea at its level, where generation floods, wherever
+	// WorldOrigin is (G19; the nav, swim and NPC code read the same water levels); its sphere on a planet, SP-E1.
+	const FVoxelWaterLevels Water = ChunkMgr->GetWaterLevels();
 
 	// Only points inside the world can host a spawn (world modes review WM-I3, KI8): past an island's R + falloff
 	// generation writes a flat floor (dry with water off) and then nothing, so a pawn placed there waits for terrain that
@@ -248,7 +246,7 @@ bool FVCTerrainQueryHelper::FindSpawnablePosition(
 			return ChunkMgr->GetGeneratedSurfacePoint(Centre + Direction * Radius);
 		};
 		int32 Ring = 0;
-		if (FindPlanetSpawnPoint(Centre, Radius, StartDirection, ChunkWorldSize, MaxSearchRadius, SurfaceAt, Sea, OutPosition, Ring))
+		if (FindPlanetSpawnPoint(Centre, Radius, StartDirection, ChunkWorldSize, MaxSearchRadius, SurfaceAt, Water, OutPosition, Ring))
 		{
 			UE_LOG(LogVoxelCharacter, Log,
 				TEXT("FindSpawnablePosition: planet surface at (%.0f, %.0f, %.0f), altitude %.0f, ring %d (%.0f of arc from the start)."),
@@ -258,7 +256,7 @@ bool FVCTerrainQueryHelper::FindSpawnablePosition(
 		// The rest of the planet (WM-BP11, G36): a big planet's open sea can lie hundreds of km across.
 		double Arc = 0.0;
 		if (bSearchWholeWorld && FindPlanetSpawnPointAtScale(Centre, Radius, StartDirection, FMath::Max(static_cast<double>(MaxSearchRadius), static_cast<double>(ChunkWorldSize)),
-			SurfaceAt, Sea, OutPosition, Arc))
+			SurfaceAt, Water, OutPosition, Arc))
 		{
 			UE_LOG(LogVoxelCharacter, Log,
 				TEXT("FindSpawnablePosition: no land within %.0f of arc; the nearest land found on the planet at (%.0f, %.0f, %.0f), altitude %.0f, %.0f of arc from the start."),
@@ -294,7 +292,7 @@ bool FVCTerrainQueryHelper::FindSpawnablePosition(
 			return false;
 		}
 		OutTerrainHeight = ChunkMgr->GetGeneratedSurfacePoint(FVector(X, Y, 0.0)).Z;
-		return !bHasWater || Sea.GetDepth(FVector(X, Y, OutTerrainHeight)) < 0.0;
+		return Water.GetDepth(FVector(X, Y, OutTerrainHeight)) < 0.0; // above the water, or no water over it
 	};
 
 	// Try the requested position first
@@ -310,14 +308,14 @@ bool FVCTerrainQueryHelper::FindSpawnablePosition(
 
 	UE_LOG(LogVoxelCharacter, Log,
 		TEXT("FindSpawnablePosition: Position (%.0f, %.0f) is underwater (terrain Z=%.0f, water=%.0f). Searching outward..."),
-		Start.X, Start.Y, TerrainHeight, WaterLevel);
+		Start.X, Start.Y, TerrainHeight, TerrainHeight + Water.GetDepth(FVector(Start.X, Start.Y, TerrainHeight)));
 
 	// Rings a chunk apart in the eight compass directions (FindPlaneSpawnPoint; the planet's FindPlanetSpawnPoint walks the
 	// same sequence on its sphere).
 	const float Step = ChunkWorldSize;
 	auto HeightAtF = [ChunkMgr](float X, float Y) { return static_cast<float>(ChunkMgr->GetGeneratedSurfacePoint(FVector(X, Y, 0.0)).Z); };
 	int32 Ring = 0;
-	if (FindPlaneSpawnPoint(FVector2D(Start.X, Start.Y), Step, MaxSearchRadius, Bounds, HeightAtF, Sea, OutPosition, Ring))
+	if (FindPlaneSpawnPoint(FVector2D(Start.X, Start.Y), Step, MaxSearchRadius, Bounds, HeightAtF, Water, OutPosition, Ring))
 	{
 		UE_LOG(LogVoxelCharacter, Log,
 			TEXT("FindSpawnablePosition: Found land at (%.0f, %.0f) Z=%.0f, ring %d (%.0f units away)"),
@@ -342,7 +340,7 @@ bool FVCTerrainQueryHelper::FindSpawnablePosition(
 		auto HeightAt = [ChunkMgr](double X, double Y) { return static_cast<float>(ChunkMgr->GetGeneratedSurfacePoint(FVector(X, Y, 0.0)).Z); };
 		double Distance = 0.0;
 		if (FindPlaneSpawnPointAtScale(FVector2D(Start.X, Start.Y), FMath::Max(static_cast<double>(MaxSearchRadius), static_cast<double>(Step)), Step,
-			MaxRadius, Bounds, HeightAt, Sea, OutPosition, Distance))
+			MaxRadius, Bounds, HeightAt, Water, OutPosition, Distance))
 		{
 			UE_LOG(LogVoxelCharacter, Log,
 				TEXT("FindSpawnablePosition: no land within %.0f of (%.0f, %.0f); the nearest land found at (%.0f, %.0f) Z=%.0f, %.0f away."),
@@ -358,7 +356,7 @@ bool FVCTerrainQueryHelper::FindSpawnablePosition(
 }
 
 bool FVCTerrainQueryHelper::FindPlaneSpawnPoint(const FVector2D& Start, float Step, float MaxSearchRadius, const FVoxelWorldBounds& Bounds,
-	TFunctionRef<float(float X, float Y)> SurfaceHeightAt, const FVoxelSeaSurface& Sea, FVector& OutPosition, int32& OutRing)
+	TFunctionRef<float(float X, float Y)> SurfaceHeightAt, const FVoxelWaterLevels& Water, FVector& OutPosition, int32& OutRing)
 {
 	OutRing = 0;
 	// The eight compass directions, a chunk per ring along each axis (square rings; the sample arithmetic in float, as the
@@ -379,7 +377,7 @@ bool FVCTerrainQueryHelper::FindPlaneSpawnPoint(const FVector2D& Start, float St
 			return false;
 		}
 		const float Height = SurfaceHeightAt(SampleX, SampleY);
-		if (Sea.bEnabled && Sea.GetDepth(FVector(SampleX, SampleY, Height)) >= 0.0)
+		if (Water.GetDepth(FVector(SampleX, SampleY, Height)) >= 0.0)
 		{
 			return false;
 		}
@@ -389,7 +387,7 @@ bool FVCTerrainQueryHelper::FindPlaneSpawnPoint(const FVector2D& Start, float St
 }
 
 bool FVCTerrainQueryHelper::FindPlaneSpawnPointAtScale(const FVector2D& Start, double FirstRadius, double StepSize, double MaxRadius,
-	const FVoxelWorldBounds& Bounds, TFunctionRef<float(double X, double Y)> SurfaceHeightAt, const FVoxelSeaSurface& Sea,
+	const FVoxelWorldBounds& Bounds, TFunctionRef<float(double X, double Y)> SurfaceHeightAt, const FVoxelWaterLevels& Water,
 	FVector& OutPosition, double& OutDistance, int32 MaxSamples)
 {
 	OutDistance = 0.0;
@@ -419,7 +417,7 @@ bool FVCTerrainQueryHelper::FindPlaneSpawnPointAtScale(const FVector2D& Start, d
 			bAnyInside = true;
 			++Samples;
 			const float Height = SurfaceHeightAt(X, Y);
-			if (!Sea.bEnabled || Sea.GetDepth(FVector(X, Y, Height)) < 0.0)
+			if (Water.GetDepth(FVector(X, Y, Height)) < 0.0)
 			{
 				OutPosition = FVector(X, Y, Height);
 				OutDistance = Radius;
@@ -436,7 +434,7 @@ bool FVCTerrainQueryHelper::FindPlaneSpawnPointAtScale(const FVector2D& Start, d
 }
 
 bool FVCTerrainQueryHelper::FindPlanetSpawnPoint(const FVector& Centre, double Radius, const FVector& StartDirection, double StepArc,
-	double MaxSearchArc, TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelSeaSurface& Sea,
+	double MaxSearchArc, TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelWaterLevels& Water,
 	FVector& OutPosition, int32& OutRing)
 {
 	OutRing = 0;
@@ -445,9 +443,9 @@ bool FVCTerrainQueryHelper::FindPlanetSpawnPoint(const FVector& Centre, double R
 	{
 		return false;
 	}
-	auto IsDry = [&Sea](const FVector& Surface)
+	auto IsDry = [&Water](const FVector& Surface)
 	{
-		return !Sea.bEnabled || Sea.GetDepth(Surface) < 0.0;
+		return Water.GetDepth(Surface) < 0.0; // above the water, or no water over it
 	};
 	const FVector Here = SurfaceAt(D);
 	if (IsDry(Here))
@@ -477,7 +475,7 @@ bool FVCTerrainQueryHelper::FindPlanetSpawnPoint(const FVector& Centre, double R
 }
 
 bool FVCTerrainQueryHelper::FindPlanetSpawnPointAtScale(const FVector& Centre, double Radius, const FVector& StartDirection, double FirstArc,
-	TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelSeaSurface& Sea, FVector& OutPosition, double& OutArc,
+	TFunctionRef<FVector(const FVector& Direction)> SurfaceAt, const FVoxelWaterLevels& Water, FVector& OutPosition, double& OutArc,
 	int32 MaxSamples)
 {
 	OutArc = 0.0;
@@ -486,9 +484,9 @@ bool FVCTerrainQueryHelper::FindPlanetSpawnPointAtScale(const FVector& Centre, d
 	{
 		return false;
 	}
-	auto IsDry = [&Sea](const FVector& Surface)
+	auto IsDry = [&Water](const FVector& Surface)
 	{
-		return !Sea.bEnabled || Sea.GetDepth(Surface) < 0.0;
+		return Water.GetDepth(Surface) < 0.0; // above the water, or no water over it
 	};
 	// A tangent frame at the start, as FindPlanetSpawnPoint's.
 	const FVector T1 = FVector::CrossProduct(FMath::Abs(D.Z) < 0.9 ? FVector::UpVector : FVector::ForwardVector, D).GetSafeNormal();
