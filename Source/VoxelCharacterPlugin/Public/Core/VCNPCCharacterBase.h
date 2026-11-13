@@ -8,6 +8,7 @@
 #include "GameplayTagContainer.h"
 #include "Types/CGFCombatTypes.h"
 #include "Core/VCAnimatedCharacter.h"
+#include "Effects/VCRagdollBuoyancy.h"
 #include "VCNPCCharacterBase.generated.h"
 
 class UAbilitySystemComponent;
@@ -240,6 +241,9 @@ protected:
 
 	/** A planet's ragdoll pull (AVCCharacterBase::StartRadialRagdoll); zero = none. */
 	FVector RagdollGravityDirection = FVector::ZeroVector;
+
+	/** The ragdoll's buoyancy between ticks on this machine (FVCRagdollBuoyancy: a body in water floats). */
+	FVCRagdollBuoyancyState RagdollBuoyancy;
 
 	/** Death visuals + cleanup; runs on every machine from the combat component's OnDied. */
 	UFUNCTION()
