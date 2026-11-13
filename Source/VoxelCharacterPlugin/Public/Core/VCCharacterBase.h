@@ -10,6 +10,7 @@
 #include "Types/CGFItemTypes.h"
 #include "Interfaces/CGFInventoryInterface.h"
 #include "Interfaces/CGFLightBearerInterface.h"
+#include "Effects/VCRagdollBuoyancy.h"
 #include "VCCharacterBase.generated.h"
 
 class UVCCameraManager;
@@ -265,6 +266,16 @@ public:
 	/** A corpse whose ragdoll never settles freezes after this long. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "1"))
 	float CorpseFreezeAfterSeconds = 10.f;
+
+	/**
+	 * ... and after this long while it is still rising through water (FVCRagdollBuoyancy): a body that died deep takes
+	 * longer to reach the surface than one takes to fall over.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "1"))
+	float CorpseFreezeAfterSecondsInWater = 40.f;
+
+	/** The ragdoll's buoyancy between ticks on this machine: in water or not, its depth, the column it rises in. */
+	FVCRagdollBuoyancyState RagdollBuoyancy;
 
 	/** A planet's ragdoll falls toward the centre: its bodies' world gravity off, this pull applied every tick (zero = none). */
 	FVector RagdollGravityDirection = FVector::ZeroVector;

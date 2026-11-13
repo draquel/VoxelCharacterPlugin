@@ -112,9 +112,15 @@ FVector AVCNPCCharacterBase::GetPawnViewLocation() const
 void AVCNPCCharacterBase::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	if (!RagdollGravityDirection.IsZero())
+	if (USkeletalMeshComponent* Body = GetMesh(); Body && Body->IsSimulatingPhysics())
 	{
-		AVCCharacterBase::TickRadialRagdoll(GetMesh(), RagdollGravityDirection);
+		// A ragdoll: the pull toward a planet's centre, and the water's lift where it lies in water (the water plan's
+		// W2B). The tick stays on until the body goes (DestroyAfterDeathDelay).
+		if (!RagdollGravityDirection.IsZero())
+		{
+			AVCCharacterBase::TickRadialRagdoll(Body, RagdollGravityDirection);
+		}
+		FVCRagdollBuoyancy::Get().Apply(Body, RagdollBuoyancy);
 		return;
 	}
 	if (!bToppling)
@@ -381,10 +387,8 @@ void AVCNPCCharacterBase::HandleDied(const FCGFDamageContext& Context)
 			Body->SetCollisionProfileName(TEXT("Ragdoll"));
 			Body->SetSimulatePhysics(true);
 			bRagdolled = true;
-			if (AVCCharacterBase::StartRadialRagdoll(Body, GetCharacterMovement(), RagdollGravityDirection))
-			{
-				SetActorTickEnabled(true); // Tick applies the pull toward the planet centre
-			}
+			AVCCharacterBase::StartRadialRagdoll(Body, GetCharacterMovement(), RagdollGravityDirection);
+			SetActorTickEnabled(true); // Tick applies the pull toward a planet's centre and the water's lift
 		}
 	}
 	if (!bRagdolled && ToppleSeconds > 0.f)

@@ -132,6 +132,12 @@ calls.
   everywhere but on a dedicated server (`PlaysIn`). Read the sea for a view or an effect through
   `FVCTerrainQueryHelper::SampleWaterSurface` (in water and below the level; the water flag alone is true just above
   the line), not `IsPositionUnderwater`.
+- Buoyancy (the water plan's W2B). The framework's dropped item gets the voxel world's water through
+  `UVCWaterSurfaceBridge`, which implements CommonGameFramework's `ICGFWaterSurfaceInterface` and registers with
+  `UCGFWaterSubsystem`: never make a framework plugin read VoxelWorlds, and never cache a level in the bridge (the
+  sample is per position and per call; lakes and reaches will be more bodies). A dead body floats by
+  `FVCRagdollBuoyancy`, applied to the ragdoll on every machine while it simulates; nothing of a ragdoll replicates, so
+  whatever moves one must give the same result from the same world on each machine.
 
 ### Server authority
 

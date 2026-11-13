@@ -543,6 +543,12 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 	{
 		TickRadialRagdoll(GetMesh(), RagdollGravityDirection);
 	}
+	// A ragdoll in water floats: it rises to the surface and rests there (the water plan's W2B). Every machine runs
+	// its own, as it runs its own ragdoll.
+	if (USkeletalMeshComponent* Body = GetMesh(); Body && Body->IsSimulatingPhysics())
+	{
+		FVCRagdollBuoyancy::Get().Apply(Body, RagdollBuoyancy);
+	}
 
 	TickWorldSafety(DeltaSeconds);
 	// A press kept during an attack's swing plays the next attack at its recovery (D104).
@@ -1324,7 +1330,11 @@ void AVCCharacterBase::CheckCorpseSettled()
 	{
 		const bool bCalm = Body->GetPhysicsLinearVelocity().Size() < 10.f;
 		CorpseCalmChecks = bCalm ? CorpseCalmChecks + 1 : 0;
-		if (CorpseCalmChecks < 4 && World->GetTimeSeconds() - CorpseStartTime < CorpseFreezeAfterSeconds)
+		// A body still under the depth it floats at is on its way up: it gets the longer wait, so it is not frozen
+		// halfway to the surface.
+		const FVCRagdollBuoyancy& Buoyancy = FVCRagdollBuoyancy::Get();
+		const bool bRising = RagdollBuoyancy.bInWater && RagdollBuoyancy.RootDepth > Buoyancy.GetRestDepth() + Buoyancy.SubmergeDepth;
+		if (CorpseCalmChecks < 4 && World->GetTimeSeconds() - CorpseStartTime < (bRising ? CorpseFreezeAfterSecondsInWater : CorpseFreezeAfterSeconds))
 		{
 			return;
 		}

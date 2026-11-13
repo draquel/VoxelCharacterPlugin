@@ -41,6 +41,8 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Camera | `UVCCameraManager`, `UVCCameraModeBase`, `UVCFirstPersonCameraMode`, `UVCThirdPersonCameraMode` | The camera mode stack and its blend; third-person collision against voxel terrain; the block-step ease |
 | Camera | `UVCUnderwaterPostProcess` | The local player's view under water: the waterline, a tint and a fog by scene depth from a post-process material, a vignette and bloom, a loop; on that player's pawn only (Water, below) |
 | Effects | `UVCWaterEffectsComponent` | A character's splash, wake and their sounds at the water's surface, from its own movement mode on every machine but a dedicated server (Water, below) |
+| Effects | `UVCWaterSurfaceBridge` | A world subsystem that gives the voxel world's water to the framework: it answers CommonGameFramework's `ICGFWaterSurfaceInterface` from `SampleWaterSurface` and registers with `UCGFWaterSubsystem`, so a dropped item rests at the surface (Water, below) |
+| Effects | `FVCRagdollBuoyancy`, `FVCRagdollBuoyancyState` | The floating rule for a dead body: a ragdoll in water rises to the surface and rests awash there, on each machine (Water, below) |
 | Combat | `UVCCombatComponent`, `UVCCombatAttributeSet`, `UVCDamageEffect`, `UVCDamageExecution`, `UVCMeleeAttackAbility`, `UVCCombatStatics`, `UVCEquipmentStatEffect`, `IVCDamageReceiver` | Faction, damage intake, death and downed state; AttackPower and Defense; the damage pipeline; equipment stats |
 | Combat | `UVCRangedAttackAbility`, `AVCArrowProjectile`, `UVCArrowMovementComponent` | The bow: the draw timed and the shot taken on the server; the replicated arrow, its hits and sticking; its flight under local gravity (The bow, below) |
 | Editing | `UVCBlockInteractionComponent` | Cubic worlds: the block outline, the placement ghost and timed breaking |
@@ -307,8 +309,9 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
 1. Health reaches 0: `UVCCombatComponent::HandleOutOfHealth` sets `State.Dead` (`OnDied`, `Event.Combat.Died`) or
    `State.Downed` (`OnDowned`; `Revive` recovers, `DownedTimeout` promotes to death).
 2. `AVCCharacterBase::HandleDied`: movement off, capsule passable, input ignored, ragdoll when there is a physics asset
-   (on a planet pulled toward the centre, `StartRadialRagdoll`), items captured to the player state
-   (`CaptureItemSnapshotToPlayerState`), then `AVCGameModeBase::HandlePlayerDied`.
+   (on a planet pulled toward the centre, `StartRadialRagdoll`; in water lifted to the surface, `FVCRagdollBuoyancy`:
+   Water, below), items captured to the player state (`CaptureItemSnapshotToPlayerState`), then
+   `AVCGameModeBase::HandlePlayerDied`.
 3. After `RespawnDelay` the game mode restarts the controller at `ChooseRespawnTransform` (`AtDeathLocation`,
    `AtPlayerStart` or `AtLastRest`); the old body becomes the player's corpse (`BecomeCorpse`, one per player).
 4. The new avatar's `PossessedBy` binds the ASC again, revives a dead or downed state, removes effects tagged
@@ -886,9 +889,44 @@ before W1 tinted a swimmer's submerged half bright cyan that way (the earlier ev
 foam turned it white until this test. It needs `r.CustomDepth` on (the engine's default); with it off the foam draws
 over a swimmer again.
 
+**Floating: dropped items** (the water plan's W2B, D129). The framework plugins know no voxel plugin, so the item
+(InteractionPlugin's `AWorldItem`) asks CommonGameFramework's `UCGFWaterSubsystem` for the water over its position when
+it settles, and this plugin registers the answer: `UVCWaterSurfaceBridge`, a world subsystem on every machine, implements
+`ICGFWaterSurfaceInterface` with `FVCTerrainQueryHelper::SampleWaterSurface` (the water levels' sample and the voxel's
+water flag) and registers itself when the world begins play. An item dropped in the water, or from within 5 m over it,
+then rests at the surface straight over the drop instead of on the bed, in every kind of world: the level is a world Z
+on a plane, an island and a block world, and a radius on a planet, where the up is the radial. Nothing floats where
+the sample says there is no water: in rock, and in a dry cave or a dug hole below the sea's level that the water has
+not reached. The bridge holds no level: it reads the water at each call, so a world with several bodies, or a body
+whose level changes, needs nothing here (whoever changes a body calls `UCGFWaterSubsystem::NotifyWaterChanged` and the
+items there settle again). One sample through the subsystem and the bridge measures 0.5 microseconds (the tests'
+`[Buoyancy]` line); an item takes one or two per drop and none per frame. The settle, the replicated resting place and
+the bob are the item's (`Plugins/InteractionPlugin/Documentation/INTERACTION_SYSTEM.md`, "In Water").
+
+**Floating: bodies** (D130). A dead character's ragdoll is simulated by each machine for itself (nothing of it
+replicates), so the rule runs on each: `FVCRagdollBuoyancy::Apply`, from `AVCCharacterBase::Tick` and
+`AVCNPCCharacterBase::Tick` while the body simulates. It samples the water once at the body's root; every part under the
+surface gets an upward acceleration that grows with its depth to `Buoyancy` (1.6) gravities over `SubmergeDepth`
+(40 uu), the water's drag (`LinearDrag` 2 per second, `AngularDrag` 1.5) and a pull toward the column where the body
+first met the water (`AnchorPull`, capped), so the copies on different machines come to rest within a body's length
+of each other. The body rises at about 3 m/s and rests awash, its parts about `GetRestDepth()` (25 uu) under the
+surface. Where the sample says the place is dry the body falls as before; a root lying on the bed reads one voxel up
+before the place is called dry. The player's corpse freezes when it is calm, as on land; while it is still rising it
+is given `CorpseFreezeAfterSecondsInWater` (40 s) instead of `CorpseFreezeAfterSeconds` (10 s), so a body that died
+deep is not frozen halfway up. An NPC's body floats until it is destroyed (`DestroyAfterDeathDelay`), and its tick
+stays on while it simulates. While the body is in the water its visible meshes (and its attached actors') draw custom
+depth, as a swimmer's do, and stay so when the corpse freezes at the surface: the water material then draws no shore
+foam over it (a body awash was painted white without it). `vc.Buoyancy.Bodies 0` turns the rule off on the machine it is set on. Not covered: a
+body with no physics asset (it plays its death or topples where it stood), a frozen corpse when the water's level
+later changes, and a body whose chunk is not loaded on a machine (the sample has no voxel to read there).
+
 Tests: `VoxelCharacter.Water.SurfaceSample` (the sample under, at and above the line, in the seabed, with no sea) and
 `VoxelCharacter.Water.EffectsRules` (where the effects play, the splash's strength, the wake's rule, the tint by
-depth, the component on a character); `VoxelCharacter.Underwater.LocalPlayerOnly` counts the water volume too.
+depth, the component on a character); `VoxelCharacter.Underwater.LocalPlayerOnly` counts the water volume too;
+`VoxelCharacter.Water.ItemFloats.Plane`, `.Island`, `.Blocks` and `.Planet` (the bridge's answer and a dropped item in
+each kind of world: in the water, over it, out of reach, in the bed's rock, in a dry cave dug under the sea, with the sea
+off) and `VoxelCharacter.Water.BodyFloats.Rule` (the rule's acceleration, and a part followed through time from deep and
+from a fall into the water).
 
 ## Input
 
@@ -1242,11 +1280,13 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 | Arrows | Server (spawned there, no client prediction, D54) | A replicated actor: its flight, mesh and stuck state; hits and damage on the server |
 | Facing while drawn | The owner and the server alike (`SetFacesAim`) | Through the movement: the server simulates the same turn from the client's moves |
 | Water effects (splash, wake, sounds), the view under water | Each machine, from the pawn's replicated movement mode; the view on the local player's alone | Not replicated; nothing on a dedicated server |
+| A dropped item's place at the water's surface | Server (`AWorldItem::SnapToGround`, the water through `UVCWaterSurfaceBridge`) | The item's `Rest` (location, rotation, up, floating); each machine with a view draws the bob about it |
+| A dead body's float | Each machine, on its own ragdoll (`FVCRagdollBuoyancy`), the dedicated server included | Not replicated: the water is the same on every machine, and the pull toward the column the body met the water in keeps the copies together |
 | Camera, input, edit mode, debug flight | Local | Not replicated |
 
 ## Console variables
 
-`vc.*` groups: `vc.AI.*` (NPC AI), `vc.Anim.*` (the IK, pace and motion-matching switches, the trajectory tuning, the debug draw), `vc.Dig.*` (the cubic break times' scale, the highlight), `vc.Minimap.*` (the
+`vc.*` groups: `vc.AI.*` (NPC AI), `vc.Buoyancy.Bodies` (dead bodies float), `vc.Anim.*` (the IK, pace and motion-matching switches, the trajectory tuning, the debug draw), `vc.Dig.*` (the cubic break times' scale, the highlight), `vc.Minimap.*` (the
 minimap's refill stats), `vc.Move.*` (the player's movement table: the preset, one value, the print), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
 and `ToggleVoxelDebug` are on the controller and the character. Every name, default and meaning:
 `Documentation/EDITOR_CONSOLE_GUIDE.md` §4 at the project root. The `vox.*` QA commands that drive this plugin's pawn
