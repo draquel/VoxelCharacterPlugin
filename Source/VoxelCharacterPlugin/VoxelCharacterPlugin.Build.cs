@@ -43,6 +43,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"AnimationCore", // AnimationCore::SolveTwoBoneIK: FVCAnimNode_FootBoneIK (character animation P6)
 				"AnimationBudgetAllocator", // USkeletalMeshComponentBudgeted: the NPCs' animation budget (character animation P7)
 				"VoxelNavigation", // UVCVoxelPathProvider (feature 10)
+				"Niagara", // UVCWaterEffectsComponent: the splash and the wake (the water plan's W1)
 				"VoxelScatter",
 				"JsonUtilities",
 				"VoxelMap",

@@ -66,6 +66,8 @@ calls.
 - MetaHumans are content, not a dependency: an appearance (`UVCCharacterAppearance`) names a MetaHuman's Blueprint as
   its parts actor, and nothing links RigLogic, HairStrands or LiveLink (the project enables those plugins). Which body
   a world gives the player is the project's data (`UVCSettings`' appearances, D43), never code.
+- Niagara is a dependency (the water plan's W1: the splash and the wake); the systems themselves are the project's
+  content, named in `UVCSettings`, and a missing one is that effect absent.
 - The engine's AnimationBudgetAllocator plugin is a dependency (P7): the NPCs' meshes are
   `USkeletalMeshComponentBudgeted`; the project enables the budget (`a.Budget.Enabled`, `a.Budget.BudgetMs`) in its config.
 
@@ -125,6 +127,11 @@ calls.
   pawn a local player controller views through and destroys it when that controller goes (`UpdateUnderwaterPostProcess`
   on `BeginPlay` and `NotifyControllerChanged`). A view effect never lives on a remote player's or an NPC's pawn: an
   unbound post-process volume tints every view in its world.
+- The water's effects (the water plan's W1) are cosmetic and never replicated: `UVCWaterEffectsComponent` makes the
+  splash, the wake and their sounds on each machine from the pawn's own movement mode, and the character creates it
+  everywhere but on a dedicated server (`PlaysIn`). Read the sea for a view or an effect through
+  `FVCTerrainQueryHelper::SampleWaterSurface` (in water and below the level; the water flag alone is true just above
+  the line), not `IsPositionUnderwater`.
 
 ### Server authority
 

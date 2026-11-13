@@ -112,6 +112,33 @@ bool FVCTerrainQueryHelper::IsPositionUnderwater(const UWorld* World, const FVec
 	return false;
 }
 
+bool FVCTerrainQueryHelper::SampleWaterSurface(const UWorld* World, const FVector& Location, float ReachAbove, FVCWaterSurfaceSample& OutSample)
+{
+	OutSample = FVCWaterSurfaceSample();
+
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
+	const UVoxelWorldConfiguration* Config = ChunkMgr ? ChunkMgr->GetConfiguration() : nullptr;
+	if (!Config || !Config->bEnableWaterLevel)
+	{
+		return false;
+	}
+
+	const FVoxelSeaSurface Sea = ChunkMgr->GetSeaSurface();
+	OutSample.Depth = Sea.GetDepth(Location);
+	OutSample.Up = Sea.bRadial ? (Location - Sea.Center).GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector) : FVector::UpVector;
+	if (OutSample.Depth > 0.0)
+	{
+		// Under the sea's level: water where the voxel says so (not in rock, not in a dry cave).
+		OutSample.bWater = ChunkMgr->GetVoxelAt(Location).HasWaterFlag();
+	}
+	else if (OutSample.Depth > -static_cast<double>(ReachAbove))
+	{
+		// A little above it: over water when the voxel just under the surface below is water.
+		OutSample.bWater = ChunkMgr->GetVoxelAt(Location + OutSample.Up * (OutSample.Depth - 1.0)).HasWaterFlag();
+	}
+	return true;
+}
+
 // ---------------------------------------------------------------------------
 // Terrain Wait Chunks
 // ---------------------------------------------------------------------------

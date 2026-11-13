@@ -10,6 +10,25 @@
 class UVoxelChunkManager;
 class UVoxelWorldConfiguration;
 
+/** The water over a position, as a view or an effect at the surface needs it (FVCTerrainQueryHelper::SampleWaterSurface). */
+struct FVCWaterSurfaceSample
+{
+	/** The position's voxel is water (edits included), or it lies within the reach above the surface over water */
+	bool bWater = false;
+
+	/** Depth of the position under the surface, uu: positive below, negative above (the sea's own sign) */
+	double Depth = 0.0;
+
+	/** The surface's up at the position: +Z on a plane, radial on a planet */
+	FVector Up = FVector::UpVector;
+
+	/** @return True when the position is in water and under the surface */
+	bool IsSubmerged() const { return bWater && Depth > 0.0; }
+
+	/** @return The point of the surface straight over or under a position sampled at Location */
+	FVector SurfacePoint(const FVector& Location) const { return Location + Up * Depth; }
+};
+
 /**
  * Static utility class for voxel world queries used by the character system.
  *
@@ -43,6 +62,22 @@ public:
 	 * @return True if position is in water
 	 */
 	static bool IsPositionUnderwater(const UWorld* World, const FVector& Location, float& OutWaterDepth);
+
+	/**
+	 * The water over a position, for a view or an effect that needs the surface itself (the water plan's W1): the sea's
+	 * depth and up there, and whether water is there. Under the surface that is the position's own voxel (a dry cave under
+	 * sea level is not water; a flooded dig is, G86). Up to ReachAbove over the surface it is the voxel just under the
+	 * surface below the position, so a camera or a splash a little above the water still knows it is over water: the
+	 * voxel that holds the water line is flagged top to bottom, and the flag alone would call a point above the line
+	 * under water.
+	 *
+	 * @param World World context
+	 * @param Location World-space position
+	 * @param ReachAbove How far above the surface the position may be and still count as at the water, uu
+	 * @param OutSample Receives the depth, the up and whether water is there (bWater false: the rest is still the sea's)
+	 * @return True when the world has a sea (bEnableWaterLevel) and a chunk manager
+	 */
+	static bool SampleWaterSurface(const UWorld* World, const FVector& Location, float ReachAbove, FVCWaterSurfaceSample& OutSample);
 
 	/**
 	 * The chunks a pawn's terrain wait needs collision in before it is placed (AVCCharacterBase::InitiateChunkBasedWait):

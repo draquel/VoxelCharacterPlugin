@@ -56,6 +56,10 @@
 			"Enabled": true
 		},
 		{
+			"Name": "Niagara",
+			"Enabled": true
+		},
+		{
 			"Name": "ItemInventoryPlugin",
 			"Enabled": true,
 			"Optional": true

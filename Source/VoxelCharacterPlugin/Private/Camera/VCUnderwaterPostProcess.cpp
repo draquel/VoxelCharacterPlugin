@@ -1,13 +1,35 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Camera/VCUnderwaterPostProcess.h"
-#include "Movement/VCMovementComponent.h"
+#include "Core/VCSettings.h"
 #include "Movement/VCTerrainQueryHelper.h"
-#include "Camera/CameraComponent.h"
+#include "Components/AudioComponent.h"
 #include "Components/PostProcessComponent.h"
-#include "GameFramework/Character.h"
+#include "Engine/Engine.h"
+#include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
+#include "Sound/SoundBase.h"
 #include "VoxelCharacterPlugin.h"
+
+namespace VCUnderwaterPrivate
+{
+	// The underwater material's parameters (the parent's Scripts/setup_water_material.py builds the material).
+	const FName CameraDepthParam(TEXT("CameraDepth"));
+	const FName SurfaceUpParam(TEXT("SurfaceUp"));
+	const FName AmountParam(TEXT("Amount"));
+	const FName FogDensityParam(TEXT("FogDensity"));
+	const FName FogMaxDistanceParam(TEXT("FogMaxDistance"));
+	const FName DepthFalloffParam(TEXT("DepthFalloff"));
+	const FName NightFloorParam(TEXT("NightFloor"));
+	const FName FogColorParam(TEXT("FogColor"));
+	const FName TintParam(TEXT("Tint"));
+
+	/** The under-water loop's fade, seconds. */
+	constexpr float LoopFadeSeconds = 0.35f;
+}
 
 UVCUnderwaterPostProcess::UVCUnderwaterPostProcess()
 {
@@ -25,14 +47,28 @@ void UVCUnderwaterPostProcess::BeginPlay()
 	{
 		return;
 	}
+	const UVCSettings& Settings = UVCSettings::Get();
 
-	// Cache movement component
-	if (ACharacter* Character = Cast<ACharacter>(Owner))
+	// The water volume first: with its material the tint is per pixel (only what is under the waterline), so the view
+	// volume below leaves the scene's tint alone.
+	if (UMaterialInterface* Material = Settings.UnderwaterMaterial.LoadSynchronous())
 	{
-		MovementComp = Cast<UVCMovementComponent>(Character->GetCharacterMovement());
+		WaterPostProcessComp = NewObject<UPostProcessComponent>(Owner, TEXT("UnderwaterWaterVolume"));
+		WaterPostProcessComp->SetupAttachment(Owner->GetRootComponent());
+		WaterPostProcessComp->RegisterComponent();
+		WaterPostProcessComp->bUnbound = true;
+		WaterPostProcessComp->BlendWeight = 1.f;
+		WaterPostProcessComp->bEnabled = false;
+		WaterMaterial = UMaterialInstanceDynamic::Create(Material, this);
+		WaterPostProcessComp->Settings.WeightedBlendables.Array.Add(FWeightedBlendable(1.f, WaterMaterial));
+	}
+	else if (!Settings.UnderwaterMaterial.IsNull())
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("UnderwaterPostProcess: the underwater material %s does not load: no fog, no waterline"),
+			*Settings.UnderwaterMaterial.ToString());
 	}
 
-	// Create post-process component at runtime
+	// The view volume
 	PostProcessComp = NewObject<UPostProcessComponent>(Owner, TEXT("UnderwaterPPVolume"));
 	if (PostProcessComp)
 	{
@@ -46,40 +82,59 @@ void UVCUnderwaterPostProcess::BeginPlay()
 		PostProcessComp->BlendWeight = 0.f;
 		PostProcessComp->bEnabled = true;
 
-		// Configure post-process settings
 		FPostProcessSettings& PP = PostProcessComp->Settings;
 
-		// Color grading: tint via scene color multiply
-		PP.bOverride_SceneColorTint = true;
+		// Without the water material the tint is the whole screen's, via the scene colour multiply.
+		PP.bOverride_SceneColorTint = WaterMaterial == nullptr;
 		PP.SceneColorTint = UnderwaterTint;
 
 		// Vignette
 		PP.bOverride_VignetteIntensity = true;
 		PP.VignetteIntensity = UnderwaterVignetteIntensity;
 
-		// Depth of field for underwater blur at distance
-		PP.bOverride_DepthOfFieldFocalDistance = true;
-		PP.DepthOfFieldFocalDistance = 200.f;
-		PP.bOverride_DepthOfFieldFstop = true;
-		PP.DepthOfFieldFstop = 2.0f;
+		// No depth of field (W1): the fog is the distance cue now, and the blur reached across the waterline into the
+		// half of the screen above the water and hid the surface's ripples from below.
 
 		// Bloom for underwater caustic feel
 		PP.bOverride_BloomIntensity = true;
 		PP.BloomIntensity = 1.5f;
-
-		UE_LOG(LogVoxelCharacter, Log, TEXT("UnderwaterPostProcess: Created and configured post-process component"));
 	}
+
+	// The loop under the surface: created silent, faded in and out as the camera crosses.
+	if (USoundBase* Sound = Settings.WaterUnderLoopSound.LoadSynchronous())
+	{
+		UnderLoop = UGameplayStatics::CreateSound2D(this, Sound, UnderLoopVolume, 1.f, 0.f, nullptr, /*bPersistAcrossLevelTransition=*/false, /*bAutoDestroy=*/false);
+	}
+
+	UE_LOG(LogVoxelCharacter, Log, TEXT("UnderwaterPostProcess: view volume created; water material %s, loop %s"),
+		WaterMaterial ? TEXT("on") : TEXT("none"), UnderLoop ? TEXT("on") : TEXT("none"));
 }
 
 void UVCUnderwaterPostProcess::OnComponentDestroyed(bool bDestroyingHierarchy)
 {
-	// The volume goes with this component: destroyed on its own (the pawn's player controller went, G133) it would
-	// otherwise stay registered on the pawn and keep tinting the view; with the whole actor it is destroyed anyway.
-	if (PostProcessComp && !bDestroyingHierarchy)
+	// The volumes and the loop go with this component: destroyed on its own (the pawn's player controller went, G133)
+	// they would otherwise stay registered on the pawn and keep tinting the view; with the whole actor they are
+	// destroyed anyway.
+	if (!bDestroyingHierarchy)
 	{
-		PostProcessComp->DestroyComponent();
+		if (PostProcessComp)
+		{
+			PostProcessComp->DestroyComponent();
+		}
+		if (WaterPostProcessComp)
+		{
+			WaterPostProcessComp->DestroyComponent();
+		}
+	}
+	if (UnderLoop)
+	{
+		UnderLoop->Stop();
+		UnderLoop->DestroyComponent();
 	}
 	PostProcessComp = nullptr;
+	WaterPostProcessComp = nullptr;
+	WaterMaterial = nullptr;
+	UnderLoop = nullptr;
 	Super::OnComponentDestroyed(bDestroyingHierarchy);
 }
 
@@ -87,6 +142,30 @@ bool UVCUnderwaterPostProcess::IsLocalPlayerView(const APawn* Pawn)
 {
 	const APlayerController* PC = Pawn ? Cast<APlayerController>(Pawn->GetController()) : nullptr;
 	return PC && PC->IsLocalController();
+}
+
+FLinearColor UVCUnderwaterPostProcess::TintAtDepth(double CameraDepth, const FLinearColor& ShallowTint, const FLinearColor& DeepTint, float FullDepth)
+{
+	const float Alpha = FMath::Clamp(static_cast<float>(CameraDepth) / FMath::Max(FullDepth, 1.f), 0.f, 1.f);
+	return FMath::Lerp(ShallowTint, DeepTint, Alpha);
+}
+
+void UVCUnderwaterPostProcess::HoldOff()
+{
+	CurrentBlendWeight = 0.f;
+	if (PostProcessComp)
+	{
+		PostProcessComp->BlendWeight = 0.f;
+	}
+	if (WaterPostProcessComp)
+	{
+		WaterPostProcessComp->bEnabled = false;
+	}
+	if (UnderLoop && bWasUnder)
+	{
+		UnderLoop->FadeOut(VCUnderwaterPrivate::LoopFadeSeconds, 0.f);
+	}
+	bWasUnder = false;
 }
 
 void UVCUnderwaterPostProcess::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -98,39 +177,63 @@ void UVCUnderwaterPostProcess::TickComponent(float DeltaTime, ELevelTick TickTyp
 		return;
 	}
 
-	// No local player views through this pawn: nothing to tint, and the unbound volume must not tint anyone else's
-	// view (G133). The owner destroys the component in this case; this holds the weight at zero should one remain.
-	if (!IsLocalPlayerView(Cast<APawn>(GetOwner())))
+	// No local player views through this pawn: nothing to tint, and the unbound volumes must not tint anyone else's
+	// view (G133). The owner destroys the component in this case; this holds them off should one remain.
+	FVCWaterSurfaceSample Water;
+	if (!SampleCamera(Water))
 	{
-		CurrentBlendWeight = 0.f;
-		PostProcessComp->BlendWeight = 0.f;
+		HoldOff();
 		return;
 	}
 
-	const bool bUnderwater = IsCameraUnderwater();
+	// Under the surface: in water and below the sea's level. The water flag alone is not enough: the voxel holding the
+	// water line is flagged top to bottom, so a camera just above the line reads water too.
+	const bool bUnder = Water.IsSubmerged();
 
-	// Smooth blend toward target
-	const float TargetWeight = bUnderwater ? 1.0f : 0.0f;
-	CurrentBlendWeight = FMath::FInterpTo(CurrentBlendWeight, TargetWeight, DeltaTime, BlendSpeed);
-
-	// Apply blend weight
+	// The view volume (vignette, depth of field, bloom) eases in and out.
+	CurrentBlendWeight = FMath::FInterpTo(CurrentBlendWeight, bUnder ? 1.f : 0.f, DeltaTime, BlendSpeed);
 	PostProcessComp->BlendWeight = CurrentBlendWeight;
 
-	// Dynamically update tint intensity based on water depth for deeper = darker
-	if (bUnderwater && MovementComp)
+	const FLinearColor Tint = TintAtDepth(Water.Depth, UnderwaterShallowTint, UnderwaterTint, TintFullDepth);
+	if (WaterMaterial && WaterPostProcessComp)
 	{
-		const float Immersion = MovementComp->ImmersionDepth();
-		// Lerp tint toward darker at deeper immersion
-		FLinearColor DepthTint = FMath::Lerp(
-			FLinearColor(0.6f, 0.7f, 0.85f, 1.0f),  // Shallow: light blue
-			UnderwaterTint,                            // Deep: full tint
-			FMath::Clamp(Immersion, 0.f, 1.f));
-
-		PostProcessComp->Settings.SceneColorTint = DepthTint;
+		// The water volume follows the surface itself, with no easing: the material splits the screen at the waterline
+		// from the camera's depth, so the volume is on whenever the near plane can reach the water.
+		WaterPostProcessComp->bEnabled = Water.bWater;
+		if (Water.bWater)
+		{
+			using namespace VCUnderwaterPrivate;
+			WaterMaterial->SetScalarParameterValue(CameraDepthParam, static_cast<float>(Water.Depth));
+			WaterMaterial->SetVectorParameterValue(SurfaceUpParam, FLinearColor(Water.Up.X, Water.Up.Y, Water.Up.Z, 0.f));
+			WaterMaterial->SetScalarParameterValue(AmountParam, 1.f);
+			WaterMaterial->SetScalarParameterValue(FogDensityParam, UnderwaterFogDensity);
+			WaterMaterial->SetScalarParameterValue(FogMaxDistanceParam, UnderwaterFogMaxDistance);
+			WaterMaterial->SetScalarParameterValue(DepthFalloffParam, UnderwaterLightFalloffDepth);
+			WaterMaterial->SetScalarParameterValue(NightFloorParam, UnderwaterNightFloor);
+			WaterMaterial->SetVectorParameterValue(FogColorParam, UnderwaterFogColor);
+			WaterMaterial->SetVectorParameterValue(TintParam, Tint);
+		}
 	}
+	else if (bUnder)
+	{
+		PostProcessComp->Settings.SceneColorTint = Tint;
+	}
+
+	if (UnderLoop && bUnder != bWasUnder)
+	{
+		if (bUnder)
+		{
+			UnderLoop->FadeIn(VCUnderwaterPrivate::LoopFadeSeconds, UnderLoopVolume);
+		}
+		else
+		{
+			UnderLoop->FadeOut(VCUnderwaterPrivate::LoopFadeSeconds, 0.f);
+		}
+	}
+	bWasUnder = bUnder;
 }
 
-bool UVCUnderwaterPostProcess::IsCameraUnderwater() const
+bool UVCUnderwaterPostProcess::SampleCamera(FVCWaterSurfaceSample& OutSample) const
 {
 	// The camera's position, not the character's: in third person the camera may be above water while the character is
 	// submerged. Only a local player controller has a view; without one there is nothing to tint (G133: the pawn's own
@@ -145,7 +248,8 @@ bool UVCUnderwaterPostProcess::IsCameraUnderwater() const
 	FVector CameraLoc;
 	FRotator CameraRot;
 	PC->GetPlayerViewPoint(CameraLoc, CameraRot);
-
-	float WaterDepth = 0.f;
-	return FVCTerrainQueryHelper::IsPositionUnderwater(Pawn->GetWorld(), CameraLoc, WaterDepth);
+	// The near plane's lowest corner hangs under the camera by up to about 1.6 near-plane distances (looking down, at a
+	// wide view): within that of the surface the water volume must already be on.
+	const float Reach = FMath::Max(WaterlineReach, GNearClippingPlane * 1.6f);
+	return FVCTerrainQueryHelper::SampleWaterSurface(Pawn->GetWorld(), CameraLoc, Reach, OutSample);
 }

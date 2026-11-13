@@ -31,6 +31,7 @@
 #include "Movement/VCTerrainQueryHelper.h"
 #include "Movement/VCGravityFrame.h"
 #include "Camera/VCUnderwaterPostProcess.h"
+#include "Effects/VCWaterEffectsComponent.h"
 #include "Input/VCInputConfig.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -421,6 +422,14 @@ void AVCCharacterBase::BeginPlay()
 
 	// --- Underwater Post-Process (the local player's view only; again on each controller change, G133) ---
 	UpdateUnderwaterPostProcess();
+
+	// --- Water effects (the water plan's W1): the splash, the wake and their sounds are cosmetic and made from this
+	// pawn's own movement mode, so they exist wherever someone can see or hear them: not on a dedicated server ---
+	if (!WaterEffects && UVCWaterEffectsComponent::PlaysIn(GetNetMode()))
+	{
+		WaterEffects = NewObject<UVCWaterEffectsComponent>(this, TEXT("WaterEffects"));
+		WaterEffects->RegisterComponent();
+	}
 
 	// --- Terrain Ready Spawn ---
 	if (bWaitForTerrain)

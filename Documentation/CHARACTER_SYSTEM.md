@@ -1,6 +1,6 @@
 # Character System
 
-> State as of 2026-11-02 (code review CR5). Terms: `Documentation/GLOSSARY.md`.
+> State as of 2026-11-02 (code review CR5); Water as of 2026-11-13 (the water plan's W1). Terms: `Documentation/GLOSSARY.md`.
 
 VoxelCharacterPlugin is the player and NPC layer of the project: the character, its controller, player state and game
 mode, the movement component and camera, input, combat on GAS, NPC AI, surface gameplay (dig, place, chop, rest, craft)
@@ -31,14 +31,16 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Animation | `UVCLocomotionAnimSet` | An animal's locomotion for the creature template AnimBP: its blend space by speed, the run's own speed, its idle variant (NPCs, below) |
 | Animation | `FVCAnimNode_FootBoneIK` (its graph node `UVCAnimGraphNode_FootBoneIK` in `VoxelCharacterEditor`) | Foot placement on the foot bones, for a body without the Mannequin's `ik_foot` bones (a MetaHuman's) |
 | Animation | `UVCMotionMatchingAnimInstance`, `UVCGravityTrajectoryPredictor` (`VoxelCharacterAnimation`) | The player's motion matching: the parent of the Game Animation Sample's CMC AnimBP, which fills it from our pawn and does its world-Z arithmetic in the gravity frame; the trajectory predictor that turns about local up (Animation, below) |
+| Editor | `UVCEffectsAuthoringLibrary` (`VoxelCharacterEditor`) | Niagara systems from Python, which reaches no emitter: empty a system, add copies of the engine's emitter templates, set each one's sprite material and baked module constants by name, compile (`Scripts/setup_water_material.py`) |
 | Editor | `UVCAnimAuthoringLibrary` (`VoxelCharacterEditor`) | Anim layers, interfaces, graph nodes, pins and properties, a montage's sections and slot, copies of assets with their references among them, from Python, which the engine does not expose: `Scripts/setup_character_layers.py`, `setup_character_ik.py` and `setup_character_locomotion.py` build the content with it |
-| Core | `UVCSettings` | Project Settings > Plugins > Voxel Character (CR4): `NPCHealthBars`, overridden by `vc.UI.NPCHealthBars` once set; the player's action sets, motion-matching AnimBP and appearances |
+| Core | `UVCSettings` | Project Settings > Plugins > Voxel Character (CR4): `NPCHealthBars`, overridden by `vc.UI.NPCHealthBars` once set; the player's action sets, motion-matching AnimBP and appearances; the water's underwater material, splash and wake systems and sounds (W1) |
 | Core | `VCTypes.h`, `VCGameplayTags.h` | `EVCViewMode`, `EVCSurfaceType`, `EVCVoxelModificationType`, `EVCOutOfHealthPolicy`, `EVCNPCBehavior`, `EVCNPCTemperament`, `EVCRespawnPolicy`, `FVCTerrainContext`, `FVCEquipmentSocketMapping`, `FVCItemSnapshot`, `FVCProgressionStats`, `FVCPlayerSaveState`; the native tags |
 | Movement | `UVCMovementComponent` | Voxel-aware character movement (players and NPCs): terrain context, swimming, sprint, planet gravity, block steps, embed resolve, world-edge push-back, debug flight |
 | Movement | `FVCGravityFrame` | Conversions between world space and the gravity frame |
-| Movement | `FVCTerrainQueryHelper` | Static terrain queries: `QueryTerrainContext`, `IsPositionUnderwater`, `FindSpawnablePosition` and the pure spawn searches |
+| Movement | `FVCTerrainQueryHelper` | Static terrain queries: `QueryTerrainContext`, `IsPositionUnderwater`, `SampleWaterSurface` (the sea's depth and up at a position and whether water is there: what a view or an effect at the surface needs), `FindSpawnablePosition` and the pure spawn searches |
 | Camera | `UVCCameraManager`, `UVCCameraModeBase`, `UVCFirstPersonCameraMode`, `UVCThirdPersonCameraMode` | The camera mode stack and its blend; third-person collision against voxel terrain; the block-step ease |
-| Camera | `UVCUnderwaterPostProcess` | Post-process tint and fog while the local player's camera is in a water voxel; on that player's pawn only |
+| Camera | `UVCUnderwaterPostProcess` | The local player's view under water: the waterline, a tint and a fog by scene depth from a post-process material, a vignette and bloom, a loop; on that player's pawn only (Water, below) |
+| Effects | `UVCWaterEffectsComponent` | A character's splash, wake and their sounds at the water's surface, from its own movement mode on every machine but a dedicated server (Water, below) |
 | Combat | `UVCCombatComponent`, `UVCCombatAttributeSet`, `UVCDamageEffect`, `UVCDamageExecution`, `UVCMeleeAttackAbility`, `UVCCombatStatics`, `UVCEquipmentStatEffect`, `IVCDamageReceiver` | Faction, damage intake, death and downed state; AttackPower and Defense; the damage pipeline; equipment stats |
 | Combat | `UVCRangedAttackAbility`, `AVCArrowProjectile`, `UVCArrowMovementComponent` | The bow: the draw timed and the shot taken on the server; the replicated arrow, its hits and sticking; its flight under local gravity (The bow, below) |
 | Editing | `UVCBlockInteractionComponent` | Cubic worlds: the block outline, the placement ghost and timed breaking |
@@ -815,7 +817,7 @@ and destroys it, volume included, when that controller goes. A pawn with no loca
 character on a client, an NPC, every pawn on a dedicated server) has no view to tint and gets none; it used to get one
 that read the pawn's own terrain context, so a swimming remote player or NPC blended the local view blue, several of
 them stacking. Test `VoxelCharacter.Underwater.LocalPlayerOnly`; the dedicated-server PIE check (one client swims, the
-other's view stays clear) is in the G133 row of `Documentation/FINDINGS.md`.
+other's view stays clear) is in the G133 row of `Documentation/FINDINGS.md`. What the view shows is in Water, below.
 
 `AVCCharacterBase::SetViewMode` pushes the camera mode, switches rotation (first person: yaw follows the controller;
 third person: orient to movement), hides the body for the local first-person view after the blend, attaches the
@@ -828,6 +830,65 @@ server's interaction range check keeps the third-person range). It used to repli
 received a client's change; a listen-server host in first person sent its mode to the clients, which attached its
 weapon to arms they do not draw. Test `VoxelCharacter.ViewMode.NotReplicated`. A system that cares about the view mode
 joins this sequence, on the local machine.
+
+## Water
+
+The water's look is the parent project's material (`Documentation/WATER_EPIC_PLAN.md`, W1, 2026-11-13); this plugin
+owns the view under it and a character's effects at its surface. Both read the sea through one function,
+`FVCTerrainQueryHelper::SampleWaterSurface`: the sea's depth at a position (positive under), the surface's up there
+(radial on a planet), and whether water is there. Under the sea's level that is the position's own voxel (a dry cave
+is not water; a flooded dig is, G86); up to a reach above the surface it is the voxel just under the surface below, so
+a camera or a splash a little over the water still knows it is over water. "Submerged" is both: in water and below the
+level. The voxel that holds the water line is flagged top to bottom, and the flag alone (`IsPositionUnderwater`, what
+the view tested before W1) called a camera just above the line under water.
+
+**The view under water** (`UVCUnderwaterPostProcess`, the local player's pawn only: Camera, above). Two unbound
+volumes, both driven by the camera's position:
+
+- The view volume: a vignette and bloom, eased in while the camera is submerged. The depth of field it used to set is
+  gone: the fog is the distance cue, and the blur reached across the waterline and hid the surface's ripples from below.
+- The water volume, when `UVCSettings::UnderwaterMaterial` names a material (the parent's `M_VoxelUnderwater`): a
+  post-process material before depth of field. The component gives it the camera's depth under the surface and the
+  surface's up, and the material works camera-relative from those: per pixel, the depth of the near plane's point under
+  the surface, so the screen splits at the waterline as the camera crosses (with a thin dark meniscus), on a planet's
+  sea 5 x 10^6 uu from the origin as cleanly as on a plane's. Under the line the scene is tinted
+  (`UnderwaterShallowTint` to `UnderwaterTint` over `TintFullDepth`) and fogged by scene depth (`UnderwaterFogDensity`
+  per uu, complete at `UnderwaterFogMaxDistance`): the view ends in fog, where the seabed used to show to the horizon
+  (G185; the three fog fields were declared and read nowhere). The fog's colour is `UnderwaterFogColor` under the sun's
+  and the moon's light reaching the ground at the view (the view's atmosphere lights, so it darkens at dusk and by the
+  sun's height on a planet), dimming with the camera's depth (`UnderwaterLightFalloffDepth`), over a floor at
+  `UnderwaterNightFloor` of what the eye is adapted to (a night dive is a dim murk, not a black screen). The volume is
+  on while the camera is in water or within reach of it above (`WaterlineReach`, and never less than 1.6 near-plane
+  distances: the near plane's lower edge dips under before the camera does), with no easing: the line itself is the transition.
+- Without the material (the plugin alone) the view volume carries the tint for the whole screen, as before W1.
+- A loop plays while the camera is submerged (`UVCSettings::WaterUnderLoopSound`, not spatialized).
+
+**The crossings** (`UVCWaterEffectsComponent`, D114). A splash and its sound when a character starts to swim (its
+strength, the system's scale and the sound's volume, by the speed into the water: `SplashStrength`) and a smaller one
+when it leaves onto the shore or into the air; a wake and a swim loop while it moves at the surface (`LeavesWake`: at
+least `WakeMinSpeed` along the surface, the head no deeper than `WakeMaxHeadDepth`). Out of a hold (`MOVE_None`: the
+spawn's terrain wait, a teleport's settle) there is no splash, and two splashes are at least `SplashMinInterval` apart
+(the swim's entry and exit depths are close). The effects are cosmetic and made on each machine from the character's
+own movement mode, which replicates with its movement: no RPC and no state of their own, so a client sees and hears
+another player's splash because it sees that player start to swim. `AVCCharacterBase` creates the component at
+`BeginPlay` on every machine but a dedicated server (`PlaysIn`); it binds `MovementModeChangedDelegate` and ticks only
+while the character swims (the wake follows the surface over it). The sounds share one attenuation
+(`SoundFalloffDistance`): a sound played at a location with none is heard everywhere at full volume. The systems and
+sounds are the project's (`UVCSettings`: `WaterSplashSystem`, `WaterWakeSystem`, `WaterSplashInSound`,
+`WaterSplashOutSound`, `WaterSwimLoopSound`); one that is missing is that effect absent. NPCs avoid water and have no
+such component (`AVCNPCCharacterBase` is not an `AVCCharacterBase`).
+
+**A swimmer's body and the foam.** While a character swims, the component turns custom depth on for its visible meshes
+(its own and its attached actors': a MetaHuman's parts, a held item) and back off for exactly those when it leaves the
+water. The water material reads it: where the depth behind the water is a body's custom depth it draws no shore foam.
+Any shading by the water's depth takes a body just under the surface for a shallow bed: the material every world drew
+before W1 tinted a swimmer's submerged half bright cyan that way (the earlier evaluation's "cyan swimmer"), and W1's
+foam turned it white until this test. It needs `r.CustomDepth` on (the engine's default); with it off the foam draws
+over a swimmer again.
+
+Tests: `VoxelCharacter.Water.SurfaceSample` (the sample under, at and above the line, in the seabed, with no sea) and
+`VoxelCharacter.Water.EffectsRules` (where the effects play, the splash's strength, the wake's rule, the tint by
+depth, the component on a character); `VoxelCharacter.Underwater.LocalPlayerOnly` counts the water volume too.
 
 ## Input
 
@@ -1180,6 +1241,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 | The bow's draw and shot | Server (`UVCRangedAttackAbility`: the draw's time, the arrow used, the spawn) | The activation and the input release over the ability system component, in order; the owner's montages at input, the others' from the server |
 | Arrows | Server (spawned there, no client prediction, D54) | A replicated actor: its flight, mesh and stuck state; hits and damage on the server |
 | Facing while drawn | The owner and the server alike (`SetFacesAim`) | Through the movement: the server simulates the same turn from the client's moves |
+| Water effects (splash, wake, sounds), the view under water | Each machine, from the pawn's replicated movement mode; the view on the local player's alone | Not replicated; nothing on a dedicated server |
 | Camera, input, edit mode, debug flight | Local | Not replicated |
 
 ## Console variables
@@ -1193,7 +1255,7 @@ and `ToggleVoxelDebug` are on the controller and the character. Every name, defa
 ## Tests
 
 `VoxelCharacter.*` in `Private/Tests/`: AI, Anim, Camera, Combat, Config, Cubic, Edit, EditMode, EquipmentLoop, Gather,
-Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, WorldEdge; the weather's `Movement.WindPush`,
+Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, Water, WorldEdge; the weather's `Movement.WindPush`,
 `Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)

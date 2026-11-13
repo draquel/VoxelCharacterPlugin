@@ -25,6 +25,7 @@ class UVCActionMontageComponent;
 class UVCAppearanceComponent;
 class UVCCharacterAppearance;
 class UVCUnderwaterPostProcess;
+class UVCWaterEffectsComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
 enum class EVCAnimAction : uint8;
@@ -863,6 +864,13 @@ protected:
 
 	/** Create or destroy UnderwaterPostProcess so it exists exactly while a local player controller views through this pawn. */
 	void UpdateUnderwaterPostProcess();
+
+	/**
+	 * The effects at the water's surface (a splash, a wake, their sounds; the water plan's W1), made from this pawn's own
+	 * movement mode on every machine but a dedicated server (UVCWaterEffectsComponent::PlaysIn). Null on a dedicated server.
+	 */
+	UPROPERTY(Transient)
+	TObjectPtr<UVCWaterEffectsComponent> WaterEffects;
 
 	/** Replicated corpse flag: clients apply the corpse state when it arrives. */
 	UPROPERTY(ReplicatedUsing = OnRep_IsCorpse)
