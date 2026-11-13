@@ -466,6 +466,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Camera")
 	void SetViewMode(EVCViewMode NewMode);
 
+	/**
+	 * The farthest near clip plane the blend into first person can use, in uu: the camera passes through the body, and
+	 * a plane farther out cuts it open. A project whose plane is already this near (this one's is 1 uu) is unchanged by
+	 * the blend; one at the engine's 10 uu gets this for the blend and its own back after it (G192).
+	 */
+	static constexpr float FirstPersonBlendNearPlane = 1.f;
+
 	/** Fired when view mode changes. */
 	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Camera")
 	FOnVCViewModeChanged OnViewModeChanged;
@@ -1032,6 +1039,21 @@ protected:
 
 	/** When true, mesh hide is deferred until the FP camera blend is nearly complete. */
 	bool bPendingFPMeshHide = false;
+
+	/**
+	 * Hold the process's near clip plane at FirstPersonBlendNearPlane or nearer for the blend into first person
+	 * (FVCNearClipOverride: the plane found is remembered, and lowered only if it is farther). Once per blend.
+	 */
+	void HoldBlendNearClip();
+
+	/**
+	 * End this pawn's hold: the near plane goes back as it was found. Called on every way out of the blend (the body
+	 * hidden, the switch reversed, EndPlay); does nothing without a hold.
+	 */
+	void ReleaseBlendNearClip();
+
+	/** True while this pawn holds the near plane for the blend into first person. */
+	bool bHoldsBlendNearClip = false;
 
 	// --- Terrain Ready Spawn ---
 
