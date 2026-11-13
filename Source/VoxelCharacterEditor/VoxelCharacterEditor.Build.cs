@@ -29,6 +29,8 @@ public class VoxelCharacterEditor : ModuleRules
 			"AssetTools",     // CopyAssetsWithReferences (character animation P5)
 			"AnimGraphRuntime",     // FAnimNode_SkeletalControlBase (character animation P6)
 			"VoxelCharacterPlugin", // FVCAnimNode_FootBoneIK: its graph node, UVCAnimGraphNode_FootBoneIK
+			"Niagara",        // UVCEffectsAuthoringLibrary: the water effects' systems (the water plan's W1)
+			"NiagaraEditor",  // FNiagaraEditorUtilities::AddEmitterToSystem
 		});
 	}
 }

@@ -9,6 +9,7 @@
 #include "Components/PostProcessComponent.h"
 #include "Core/VCCharacterBase.h"
 #include "Core/VCPlayerController.h"
+#include "Effects/VCWaterEffectsComponent.h"
 #include "Movement/VCTerrainQueryHelper.h"
 #include "VoxelChunkManager.h"
 #include "VoxelCoordinates.h"
@@ -29,6 +30,9 @@
 // - G87: the view mode is local to the machine that set it: not replicated, no RepNotify.
 // - G133: the underwater view tint (UVCUnderwaterPostProcess, an unbound post-process volume) exists only on the pawn a
 //   local player controller views through, following possession; never on an unpossessed or AI-controlled pawn.
+// - W1 (the water plan): the water over a position (FVCTerrainQueryHelper::SampleWaterSurface) is the position's own voxel
+//   under the surface and the voxel under the surface a little above it; the view is under water only below the sea's
+//   level; the crossing effects (UVCWaterEffectsComponent) exist on every machine but a dedicated server.
 // ---------------------------------------------------------------------------
 
 namespace VCTerrainQueriesTestHelpers
@@ -332,10 +336,12 @@ bool FVCUnderwater_LocalPlayerOnly::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Player: a local player view"), UVCUnderwaterPostProcess::IsLocalPlayerView(Player));
 	UVCUnderwaterPostProcess* Effect = Tint(Player);
 	TestNotNull(TEXT("Player: the tint, on possession"), Effect);
-	TestEqual(TEXT("Player: one unbound volume"), Volumes(Player), 1);
+	// The view volume, and the water volume when the project names an underwater material (W1; the plugin alone has none).
+	const int32 OwnVolumes = (Effect && Effect->HasWaterView()) ? 2 : 1;
+	TestEqual(TEXT("Player: the effect's unbound volume(s)"), Volumes(Player), OwnVolumes);
 	Link(Player, nullptr);
 	TestNull(TEXT("Player, unpossessed: the tint is gone"), Tint(Player));
-	TestEqual(TEXT("Player, unpossessed: the volume went with it"), Volumes(Player), 0);
+	TestEqual(TEXT("Player, unpossessed: the volume(s) went with it"), Volumes(Player), 0);
 	TestTrue(TEXT("Player, unpossessed: the component is destroyed, not merely detached"), !IsValid(Effect));
 
 	// Possessed again: created again (a respawn's possession, a pawn swap); then handed to the AI: gone again.
@@ -350,8 +356,130 @@ bool FVCUnderwater_LocalPlayerOnly::RunTest(const FString& Parameters)
 	if (TestNotNull(TEXT("Early"), Early))
 	{
 		TestNotNull(TEXT("Possessed before BeginPlay: the tint from BeginPlay"), Tint(Early));
-		TestEqual(TEXT("Possessed before BeginPlay: one volume"), Volumes(Early), 1);
+		TestEqual(TEXT("Possessed before BeginPlay: the effect's volume(s)"), Volumes(Early), OwnVolumes);
 		Link(Early, nullptr);
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// W1: the water over a position. A plane with a sea at Z 0 streams around a flat seabed. Under the surface the sample is
+// the position's own voxel (water over the seabed, not the rock under it); a little above the surface it is the voxel
+// just under the surface below, within the reach only; the depth and the surface point are the sea's. "Submerged" needs
+// both: the voxel that holds the water line is flagged top to bottom, and the flag alone called a camera above the line
+// under water (the depth guard).
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCWater_SurfaceSample, "VoxelCharacter.Water.SurfaceSample", VC_TERRAIN_FLAGS)
+bool FVCWater_SurfaceSample::RunTest(const FString& Parameters)
+{
+	using namespace VCTerrainQueriesTestHelpers;
+	VoxelTesting::FTestChunkWorld W;
+	W.Create(TEXT("VCWaterSurfaceSampleWorld"));
+	W.ConfigureSmallPlane();
+	W.Config->bEnableWaterLevel = true;
+	W.Config->WaterLevel = 0.0f;
+	W.StartManager();
+
+	FVector Site;
+	if (!FindSeabed(W, Site))
+	{
+		AddError(TEXT("No flat seabed 5-10 voxels under the sea within 20,000 uu of the origin"));
+		return true;
+	}
+	W.SetViewer(Site + FVector(0.0, 0.0, 300.0));
+	TestTrue(TEXT("The world settles"), SettleWithWater(W));
+	const float VS = W.Config->VoxelSize;
+
+	auto At = [&Site](double Z) { return FVector(Site.X, Site.Y, Z); };
+	FVCWaterSurfaceSample Sample;
+
+	// Under the surface, in the water over the seabed.
+	TestTrue(TEXT("The world has a sea"), FVCTerrainQueryHelper::SampleWaterSurface(W.World, At(-1.5 * VS), 40.f, Sample));
+	TestTrue(TEXT("Under the surface: water"), Sample.bWater);
+	TestTrue(TEXT("Under the surface: the depth is the sea's"), FMath::IsNearlyEqual(Sample.Depth, 1.5 * VS, 0.01));
+	TestTrue(TEXT("Under the surface: submerged"), Sample.IsSubmerged());
+	TestTrue(TEXT("The up is +Z on a plane"), Sample.Up.Equals(FVector::UpVector));
+	TestTrue(TEXT("The surface point is on the sea's plane"), FMath::IsNearlyZero(Sample.SurfacePoint(At(-1.5 * VS)).Z, 0.01));
+
+	// A little above the surface over water: at the water within the reach, never submerged; out of reach, not water.
+	FVCTerrainQueryHelper::SampleWaterSurface(W.World, At(20.0), 40.f, Sample);
+	TestTrue(TEXT("20 uu above, reach 40: at the water"), Sample.bWater);
+	TestFalse(TEXT("20 uu above: not submerged"), Sample.IsSubmerged());
+	TestTrue(TEXT("20 uu above: a negative depth"), FMath::IsNearlyEqual(Sample.Depth, -20.0, 0.01));
+	FVCTerrainQueryHelper::SampleWaterSurface(W.World, At(20.0), 10.f, Sample);
+	TestFalse(TEXT("20 uu above, reach 10: not at the water"), Sample.bWater);
+
+	// Just above the line the sample is at the water and not submerged (the depth guard); just under it, submerged.
+	float FlagDepth = 0.f;
+	TestTrue(TEXT("Just under the line: the flag reads water"), FVCTerrainQueryHelper::IsPositionUnderwater(W.World, At(-1.0), FlagDepth));
+	FVCTerrainQueryHelper::SampleWaterSurface(W.World, At(1.0), 40.f, Sample);
+	TestTrue(TEXT("Just above the line: at the water"), Sample.bWater);
+	TestFalse(TEXT("Just above the line: not submerged (the depth guard)"), Sample.IsSubmerged());
+	FVCTerrainQueryHelper::SampleWaterSurface(W.World, At(-1.0), 40.f, Sample);
+	TestTrue(TEXT("Just under the line: submerged"), Sample.IsSubmerged());
+
+	// In the seabed's rock, under the sea's level: not water.
+	FVCTerrainQueryHelper::SampleWaterSurface(W.World, Site - FVector(0.0, 0.0, 1.5 * VS), 40.f, Sample);
+	TestTrue(TEXT("In the seabed: under the sea's level"), Sample.Depth > 0.0);
+	TestFalse(TEXT("In the seabed: not water"), Sample.bWater);
+	TestFalse(TEXT("In the seabed: not submerged"), Sample.IsSubmerged());
+
+	// No sea: the sample says so.
+	W.Config->bEnableWaterLevel = false;
+	TestFalse(TEXT("No sea: no sample"), FVCTerrainQueryHelper::SampleWaterSurface(W.World, At(-1.5 * VS), 40.f, Sample));
+	W.Config->bEnableWaterLevel = true;
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// W1: the crossing effects' rules. Pure: where they play (not on a dedicated server), how hard a splash is by the speed
+// into the water, when a swimmer leaves a wake, the view's tint by the camera's depth. And the component is on a
+// character in a world that is not a dedicated server, silent until the character swims.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCWater_EffectsRules, "VoxelCharacter.Water.EffectsRules", VC_TERRAIN_FLAGS)
+bool FVCWater_EffectsRules::RunTest(const FString& Parameters)
+{
+	TestFalse(TEXT("A dedicated server plays no effects"), UVCWaterEffectsComponent::PlaysIn(NM_DedicatedServer));
+	TestTrue(TEXT("A client plays them"), UVCWaterEffectsComponent::PlaysIn(NM_Client));
+	TestTrue(TEXT("A listen server plays them"), UVCWaterEffectsComponent::PlaysIn(NM_ListenServer));
+	TestTrue(TEXT("Standalone plays them"), UVCWaterEffectsComponent::PlaysIn(NM_Standalone));
+
+	TestEqual(TEXT("Wading in: the least splash"), UVCWaterEffectsComponent::SplashStrength(0.f, 900.f, 0.35f), 0.35f);
+	TestEqual(TEXT("Rising out of the water: the least splash"), UVCWaterEffectsComponent::SplashStrength(-300.f, 900.f, 0.35f), 0.35f);
+	TestEqual(TEXT("At the full speed: a full splash"), UVCWaterEffectsComponent::SplashStrength(900.f, 900.f, 0.35f), 1.f);
+	TestEqual(TEXT("Faster: still full"), UVCWaterEffectsComponent::SplashStrength(4000.f, 900.f, 0.35f), 1.f);
+	const float Half = UVCWaterEffectsComponent::SplashStrength(450.f, 900.f, 0.35f);
+	TestTrue(TEXT("Half the speed: half way"), FMath::IsNearlyEqual(Half, 0.675f, 1.0e-4f));
+
+	TestTrue(TEXT("Swimming at the surface: a wake"), UVCWaterEffectsComponent::LeavesWake(200.f, 10.0, 60.f, 45.f));
+	TestTrue(TEXT("Head above the surface: a wake"), UVCWaterEffectsComponent::LeavesWake(200.f, -30.0, 60.f, 45.f));
+	TestFalse(TEXT("Treading water: no wake"), UVCWaterEffectsComponent::LeavesWake(20.f, 10.0, 60.f, 45.f));
+	TestFalse(TEXT("Diving: no wake"), UVCWaterEffectsComponent::LeavesWake(200.f, 300.0, 60.f, 45.f));
+
+	const FLinearColor Shallow(0.7f, 0.85f, 0.92f), Deep(0.35f, 0.62f, 0.8f);
+	TestTrue(TEXT("At the surface: the shallow tint"), UVCUnderwaterPostProcess::TintAtDepth(0.0, Shallow, Deep, 600.f).Equals(Shallow));
+	TestTrue(TEXT("Above the surface: the shallow tint"), UVCUnderwaterPostProcess::TintAtDepth(-50.0, Shallow, Deep, 600.f).Equals(Shallow));
+	TestTrue(TEXT("At the full depth: the deep tint"), UVCUnderwaterPostProcess::TintAtDepth(600.0, Shallow, Deep, 600.f).Equals(Deep));
+	TestTrue(TEXT("Deeper: still the deep tint"), UVCUnderwaterPostProcess::TintAtDepth(5000.0, Shallow, Deep, 600.f).Equals(Deep));
+
+	// The component on a character: there in a standalone world, with nothing played and no wake before any swim.
+	VCTesting::FPlayWorld W(TEXT("VCWaterEffectsWorld"), /*bDestroyActorsFirst=*/true);
+	const FTransform Stand(FVector::ZeroVector);
+	AVCCharacterBase* Character = W.World->SpawnActorDeferred<AVCCharacterBase>(AVCCharacterBase::StaticClass(), Stand, nullptr, nullptr,
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (!TestNotNull(TEXT("Character"), Character))
+	{
+		return false;
+	}
+	Character->bWaitForTerrain = false;
+	Character->FinishSpawning(Stand);
+	TestTrue(TEXT("The test world is not a dedicated server"), UVCWaterEffectsComponent::PlaysIn(W.World->GetNetMode()));
+	const UVCWaterEffectsComponent* Effects = Character->FindComponentByClass<UVCWaterEffectsComponent>();
+	if (TestNotNull(TEXT("The character has the water effects"), Effects))
+	{
+		TestEqual(TEXT("No splash before any swim"), Effects->GetSplashCount(), 0);
+		TestFalse(TEXT("No wake before any swim"), Effects->IsWakeActive());
+		TestFalse(TEXT("The effects do not tick on land"), Effects->IsComponentTickEnabled());
 	}
 	return true;
 }

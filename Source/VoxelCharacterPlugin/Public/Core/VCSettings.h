@@ -8,6 +8,9 @@
 #include "VCSettings.generated.h"
 
 class UAnimInstance;
+class UMaterialInterface;
+class UNiagaraSystem;
+class USoundBase;
 class UVCActionAnimSet;
 class UVCCharacterAppearance;
 
@@ -66,4 +69,37 @@ public:
 	 */
 	UPROPERTY(config, EditAnywhere, Category = "Appearance")
 	TMap<EMeshingMode, TSoftObjectPtr<UVCCharacterAppearance>> PlayerAppearanceByMeshing;
+
+	/**
+	 * The underwater view's post-process material (the water plan's W1): the waterline per pixel, and under it a tint and
+	 * a fog by scene depth; UVCUnderwaterPostProcess sets its parameters (CameraDepth, SurfaceUp, Amount, FogDensity,
+	 * FogMaxDistance, DepthFalloff, FogColor, Tint). The parent's Scripts/setup_water_material.py builds it. Empty or
+	 * missing: the view under water is the whole-screen tint alone, with no fog and no waterline.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<UMaterialInterface> UnderwaterMaterial;
+
+	/** The splash where a character enters or leaves the water (UVCWaterEffectsComponent); +Z is the surface's up. Empty: none. */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<UNiagaraSystem> WaterSplashSystem;
+
+	/** The wake a character leaves while it swims at the surface, in world space. Empty: none. */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<UNiagaraSystem> WaterWakeSystem;
+
+	/** The sound of a character entering the water, at the surface. Empty: silent. */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<USoundBase> WaterSplashInSound;
+
+	/** The sound of a character leaving the water. Empty: silent. */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<USoundBase> WaterSplashOutSound;
+
+	/** The loop of a character swimming at the surface (a looping sound). Empty: silent. */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<USoundBase> WaterSwimLoopSound;
+
+	/** The loop the local player hears while its camera is under the surface (a looping sound, not spatialized). Empty: silent. */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<USoundBase> WaterUnderLoopSound;
 };
