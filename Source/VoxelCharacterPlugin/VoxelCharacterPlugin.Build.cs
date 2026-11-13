@@ -39,6 +39,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"VoxelStreaming",
 				"VoxelGeneration", // IVoxelWorldMode.h (VCTerrainQueryHelper.cpp)
 				"PhysicsCore", // CollisionShape.h
+				"RenderCore", // SetNearClipPlaneGlobals: FVCNearClipOverride (G192)
 				"GameplayTasks", // UAbilityTask_WaitDelay: the melee hit waits for its montage (character animation P3)
 				"AnimationCore", // AnimationCore::SolveTwoBoneIK: FVCAnimNode_FootBoneIK (character animation P6)
 				"AnimationBudgetAllocator", // USkeletalMeshComponentBudgeted: the NPCs' animation budget (character animation P7)

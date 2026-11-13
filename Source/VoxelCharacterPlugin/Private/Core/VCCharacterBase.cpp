@@ -25,6 +25,7 @@
 #include "Interfaces/CGFRestPointInterface.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Camera/VCCameraManager.h"
+#include "Camera/VCNearClipOverride.h"
 #include "Camera/VCFirstPersonCameraMode.h"
 #include "Camera/VCThirdPersonCameraMode.h"
 #include "Movement/VCMovementComponent.h"
@@ -453,6 +454,10 @@ void AVCCharacterBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	CachedCollisionManager.Reset();
 	PendingTerrainChunks.Empty();
 
+	// A pawn destroyed, or a PIE stopped, during the blend into first person: the near plane goes back as it was
+	// found, so the process (the editor, the next PIE) does not keep this pawn's value (G192).
+	ReleaseBlendNearClip();
+
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -655,8 +660,8 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 		{
 			bPendingFPMeshHide = false;
 			UpdateMeshVisibility();
-			// Restore default near clip plane now that the body mesh is hidden
-			GNearClippingPlane = 10.f;
+			// The body is hidden: the near plane goes back as the blend found it (the project's, G192).
+			ReleaseBlendNearClip();
 		}
 	}
 
@@ -1431,13 +1436,16 @@ void AVCCharacterBase::SetViewMode(EVCViewMode NewMode)
 	if (NewMode == EVCViewMode::FirstPerson && IsLocallyControlled())
 	{
 		bPendingFPMeshHide = true;
-		// Temporarily shrink near clip plane so the mesh doesn't get clipped
-		// as the camera zooms through it during the blend.
-		GNearClippingPlane = 1.f;
+		// The camera passes through the body during the blend: a near plane no farther than
+		// FirstPersonBlendNearPlane for that long, so the body is not cut open on the way in. It goes back as it was
+		// found when the body is hidden (Tick), when the switch is reversed (below) or when the pawn ends play.
+		HoldBlendNearClip();
 	}
 	else
 	{
 		bPendingFPMeshHide = false;
+		// Back to third person before the blend finished: the near plane goes back here.
+		ReleaseBlendNearClip();
 		UpdateMeshVisibility();
 	}
 
@@ -1454,6 +1462,24 @@ void AVCCharacterBase::SetViewMode(EVCViewMode NewMode)
 
 	// 5. Broadcast
 	OnViewModeChanged.Broadcast(OldMode, NewMode);
+}
+
+void AVCCharacterBase::HoldBlendNearClip()
+{
+	if (!bHoldsBlendNearClip)
+	{
+		bHoldsBlendNearClip = true;
+		FVCNearClipOverride::Acquire(FirstPersonBlendNearPlane);
+	}
+}
+
+void AVCCharacterBase::ReleaseBlendNearClip()
+{
+	if (bHoldsBlendNearClip)
+	{
+		bHoldsBlendNearClip = false;
+		FVCNearClipOverride::Release();
+	}
 }
 
 void AVCCharacterBase::UpdateMeshVisibility()

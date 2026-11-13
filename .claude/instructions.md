@@ -123,6 +123,9 @@ calls.
   the chain; they do not replace or bypass it. Dead or downed characters ignore both.
 - Edit mode is local input state and gates unarmed digging and placing; the server validates every request regardless.
 - A view-mode-dependent system joins `AVCCharacterBase::SetViewMode`'s sequence.
+- The near clip plane is the process's and the project's (`NearClipPlane` in the project's engine settings): never
+  assign `GNearClippingPlane`. A view that needs a nearer plane for a while holds it through `FVCNearClipOverride`
+  (the plane found is remembered and put back) and ends the hold on every way out, `EndPlay` included (G192).
 - The underwater post-process (`UVCUnderwaterPostProcess`) is local-player-only (G133): the character creates it on the
   pawn a local player controller views through and destroys it when that controller goes (`UpdateUnderwaterPostProcess`
   on `BeginPlay` and `NotifyControllerChanged`). A view effect never lives on a remote player's or an NPC's pawn: an

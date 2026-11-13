@@ -834,6 +834,21 @@ received a client's change; a listen-server host in first person sent its mode t
 weapon to arms they do not draw. Test `VoxelCharacter.ViewMode.NotReplicated`. A system that cares about the view mode
 joins this sequence, on the local machine.
 
+**The near clip plane across the blend** (G192, 2026-11-13). The camera passes through the body on its way into first
+person, so for the blend the local pawn holds the near plane at `FirstPersonBlendNearPlane` (1 uu) or nearer. The
+engine has one near plane for the process (`GNearClippingPlane`, set at start from the project's `NearClipPlane`; this
+project's is 1 uu), not one per view, so the hold goes through `FVCNearClipOverride`: the first holder remembers the
+plane it finds and lowers it only if it is farther, and the last holder puts that plane back, unless something else set
+the plane meanwhile (`r.SetNearClipPlane`), which is then kept. The character ends its hold on every way out of the
+blend: the body hidden (`Tick`, at a blend weight of 0.9), the switch reversed before that (`SetViewMode`), and
+`EndPlay` (the pawn destroyed, a PIE stopped), so the plane is the same before and after a switch and nothing of it
+passes from one PIE session to the next. In this project the hold changes nothing (the plane is already 1 uu); a
+project at the engine's 10 uu gets 1 uu for the blend and its 10 back. Before the fix the blend wrote 1 and then the
+engine's default of 10 "back", so a session that had entered first person rendered with a 10 uu near plane from then
+on: the sea's surface clipped at a swimmer's eye, and the underwater view's waterline band (Water, below) was sized for
+another plane than in a session that never switched. Tests `VoxelCharacter.NearClip.OverrideRestoresWhatItFound`,
+`VoxelCharacter.ViewMode.NearClipRestored`.
+
 ## Water
 
 The water's look is the parent project's material (`Documentation/WATER_EPIC_PLAN.md`, W1, 2026-11-13); this plugin
@@ -1295,7 +1310,7 @@ and `ToggleVoxelDebug` are on the controller and the character. Every name, defa
 ## Tests
 
 `VoxelCharacter.*` in `Private/Tests/`: AI, Anim, Camera, Combat, Config, Cubic, Edit, EditMode, EquipmentLoop, Gather,
-Island, Map, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, Water, WorldEdge; the weather's `Movement.WindPush`,
+Island, Map, NearClip, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, Water, WorldEdge; the weather's `Movement.WindPush`,
 `Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
