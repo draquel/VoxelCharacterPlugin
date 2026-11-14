@@ -415,6 +415,15 @@ re-mesh).
   resolve, the sprint's ground speed) works in gravity space (`GetGravitySpaceZ`). After placing a pawn on a planet call
   `UpdatePlanetGravity()` then `SnapUprightToGravity()`. Heightmap worlds never set a custom gravity, and every
   expression is then the old Z arithmetic (`VoxelCharacter.Planet.GravityFrame`).
+- **Terrain as the movement base.** A pawn on terrain stands on its chunk's collision component, which every machine
+  cooks for itself and which is static (VoxelWorlds' `STREAMING_AND_SEAMS.md`, "Collision cooking"). The engine sends a
+  position relative to the base only for a movable base, so on terrain the client's moves and the server's corrections
+  carry world positions: the client applies a correction though it cannot resolve the server's component, and finds
+  its own floor where it lands. The movement component has no code of its own for this, and the floor is checked every
+  move (`bAlwaysCheckFloor`), so a base an edit replaced or took away is seen at once. While the terrain's components
+  were Movable a client dropped every correction on terrain and a dedicated server corrected every move (G215, fixed
+  in VoxelWorlds 2026-11-14). Test `VoxelEngine.Replication.TerrainBase` in the game module: a dedicated server and a
+  client on `VoxelDemo`, the client walks, the server moves and teleports its pawn and the client follows.
 - **Block steps.** In a cubic world (`UVoxelChunkManager::IsBlockSurface`) `RefreshBlockStepHeight` sets `MaxStepHeight`
   to one block (`GetBlockStepHeight`: voxel size + `BlockStepMargin`, 80 at 75 uu), so one block is walked up and two are
   a wall (D29; `bStepUpOneBlock`). Smooth worlds keep 50. Surface navigation uses the same rule.

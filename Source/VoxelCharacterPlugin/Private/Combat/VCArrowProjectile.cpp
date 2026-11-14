@@ -215,7 +215,7 @@ void AVCArrowProjectile::Stick(const FHitResult& Hit)
 	bStuck = true;
 	ApplyStuck();
 	// A movable prop every machine knows (replicated, or loaded with the level) carries the arrow, so clients can follow the
-	// attachment. Anything else keeps it where it stuck: the terrain's collision is movable but local to each machine.
+	// attachment. Anything else keeps it where it stuck: the terrain's collision is static, and each machine's own.
 	UPrimitiveComponent* Surface = Hit.GetComponent();
 	const AActor* Prop = Hit.GetActor();
 	if (IsValid(Surface) && Surface->Mobility == EComponentMobility::Movable && Prop && (Prop->GetIsReplicated() || Prop->IsNetStartupActor()))
