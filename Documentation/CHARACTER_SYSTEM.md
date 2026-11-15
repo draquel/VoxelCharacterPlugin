@@ -1,6 +1,6 @@
 # Character System
 
-> State as of 2026-11-02 (code review CR5); Water as of 2026-11-13 (the water plan's W1). Terms: `Documentation/GLOSSARY.md`.
+> State as of 2026-11-02 (code review CR5); Water as of 2026-11-13 (the water plan's W1); the current as of 2026-11-15 (the hydrology plan's H6). Terms: `Documentation/GLOSSARY.md`.
 
 VoxelCharacterPlugin is the player and NPC layer of the project: the character, its controller, player state and game
 mode, the movement component and camera, input, combat on GAS, NPC AI, surface gameplay (dig, place, chop, rest, craft)
@@ -336,6 +336,19 @@ re-mesh).
 - **Swimming.** Entered at `SwimmingEntryDepth` (40 uu) of voxel water, left under `SwimmingExitDepth`; buoyancy, drag,
   surface damping, a shore climb and dive keys (jump rises, crouch dives; the held rise is a saved-move flag). Breath
   drains under water. `ImmersionDepth` uses the voxel sea, not physics volumes.
+- **The current.** A river reach carries a swimmer downstream at the river's own speed (the hydrology plan's H6,
+  D150); a lake and the sea are still. The swim move (`PhysSwimming`) reads the current where the pawn is as the move
+  starts (`GetSwimCurrentAt`: the flow of the voxel world's water sample there, a river reach's direction downstream
+  along its surface times its speed, times `WaterCurrentFactor`, 1 by default) and moves the pawn by its own velocity
+  and the current together; the velocity it keeps is the pawn's own, through the water, so the braking and the drag
+  act on the swimmer and not on the river, and an idle swimmer drifts with the idle animation. Nothing about the
+  current is kept between moves: it is a function of where the pawn is and of the world's bodies, which every machine
+  builds alike, so a client's prediction, its replay after a correction and the server's simulation of the same move
+  add the same current, and a swim down a river is corrected no more than one on still water (the wind's push is
+  read on each machine's own schedule, which is G220). `ComputeSwimCurrent` is the rule on a sample. Only a swimmer
+  is carried: a wading pawn is not, a floating item rests over the column it was dropped in, and a dead body is held
+  to the column it met the water in. A copy of another player's pawn follows the positions the server sends; its
+  velocity is the swimmer's own, without the river's.
 - **Sprint and crouch.** `SetSprinting` (a saved-move flag, so clients predict it) spends stamina; regeneration waits
   `StaminaRegenDelay`. With the gait table on (players) the sprint row sets the speed; with it off (NPCs) the sprint is
   the walk times `SprintSpeedMultiplier`. Crouch is a slow walk. `SetWalking` (a third saved-move flag) asks for the walk
@@ -950,7 +963,12 @@ depth, the component on a character); `VoxelCharacter.Underwater.LocalPlayerOnly
 `VoxelCharacter.Water.ItemFloats.Plane`, `.Island`, `.Blocks` and `.Planet` (the bridge's answer and a dropped item in
 each kind of world: in the water, over it, out of reach, in the bed's rock, in a dry cave dug under the sea, with the sea
 off) and `VoxelCharacter.Water.BodyFloats.Rule` (the rule's acceleration, and a part followed through time from deep and
-from a fall into the water).
+from a fall into the water); `VoxelCharacter.Water.Current.Rule` (the current from a sample: a river reach's flow, none
+for a lake, the sea or dry ground) and `VoxelCharacter.Water.Current.Plane` and `.Planet` (a streamed world with a
+river and a lake over its ground: a swimmer with no input moves downstream at the reach's speed and stays in the lake,
+a dropped item and a dead body's part stay in their column). The game module's `VoxelEngine.Replication.RiverSwim`
+(the in-editor gate) swims a client down a river against a dedicated server and counts the server's corrections
+against the same swim in a lake.
 
 ## Input
 

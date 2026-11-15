@@ -1,6 +1,6 @@
 # VoxelCharacterPlugin — Claude Code Instructions
 
-> State as of 2026-11-02 (code review CR5). Terms: `Documentation/GLOSSARY.md`.
+> State as of 2026-11-15 (the hydrology plan's H6: the current). Terms: `Documentation/GLOSSARY.md`.
 
 The player and NPC layer: character, controller, player state, game mode, movement, camera, input, combat on GAS, NPC
 AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; a runtime module, `VoxelCharacterPlugin`, a second
@@ -135,6 +135,11 @@ calls.
   everywhere but on a dedicated server (`PlaysIn`). Read the sea for a view or an effect through
   `FVCTerrainQueryHelper::SampleWaterSurface` (in water and below the level; the water flag alone is true just above
   the line), not `IsPositionUnderwater`.
+- The current of a river reach (the hydrology plan's H6) is read inside the swim move, at the pawn's position as the
+  move starts (`UVCMovementComponent::GetSwimCurrentAt`), and `Velocity` stays the swimmer's own: never cache the
+  current with the terrain context or keep any of it between moves, or a client's replay and the server's simulation
+  of one move differ and the client is corrected along the river (the wind's push is cached, and that is G220). Only
+  a swimmer is carried (D150). `VoxelEngine.Replication.RiverSwim` (the in-editor gate) holds it.
 - Buoyancy (the water plan's W2B). The framework's dropped item gets the voxel world's water through
   `UVCWaterSurfaceBridge`, which implements CommonGameFramework's `ICGFWaterSurfaceInterface` and registers with
   `UCGFWaterSubsystem`: never make a framework plugin read VoxelWorlds, and never cache a level in the bridge (the
