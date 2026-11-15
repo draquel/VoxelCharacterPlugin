@@ -94,8 +94,8 @@ bool FVCTerrainQueryHelper::IsPositionUnderwater(const UWorld* World, const FVec
 		return false;
 	}
 
-	const FVoxelWaterLevels Water = ChunkMgr->GetWaterLevels();
-	if (!ChunkMgr->GetConfiguration() || !Water.HasWater())
+	// No sea, no lake and no river reach: nothing to be under.
+	if (!ChunkMgr->GetConfiguration() || !(ChunkMgr->GetWaterLevels().HasWater() || ChunkMgr->HasWaterBodies()))
 	{
 		return false;
 	}
@@ -105,7 +105,8 @@ bool FVCTerrainQueryHelper::IsPositionUnderwater(const UWorld* World, const FVec
 	const FVoxelData VoxelAtLocation = ChunkMgr->GetVoxelAt(Location);
 	if (VoxelAtLocation.HasWaterFlag())
 	{
-		OutWaterDepth = FMath::Max(0.0, Water.GetDepth(Location));
+		// The depth under the body over the position: the sea, a lake or a river reach (the chunk manager's point gather).
+		OutWaterDepth = FMath::Max(0.0, ChunkMgr->GetWaterDepth(Location));
 		return true;
 	}
 
@@ -116,10 +117,11 @@ bool FVCTerrainQueryHelper::SampleWaterSurface(const UWorld* World, const FVecto
 {
 	OutSample = FVCWaterSurfaceSample();
 
-	// The water over the position: the water levels' sample (the body's surface there, the depth under it, its up).
+	// The water over the position: the world's sample there (the body's surface, the depth under it, its up), the sea, a
+	// lake or a river reach (UVoxelChunkManager::SampleWater).
 	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
 	FVoxelWaterSample Over;
-	if (!ChunkMgr || !ChunkMgr->GetConfiguration() || !ChunkMgr->GetWaterLevels().Sample(Location, Over))
+	if (!ChunkMgr || !ChunkMgr->GetConfiguration() || !ChunkMgr->SampleWater(Location, Over))
 	{
 		return false;
 	}
@@ -222,8 +224,13 @@ bool FVCTerrainQueryHelper::FindSpawnablePosition(
 
 	const float ChunkWorldSize = Config->ChunkSize * Config->VoxelSize;
 	// Terrain heights are world Z, so the water surface is too: the sea at its level, where generation floods, wherever
-	// WorldOrigin is (G19; the nav, swim and NPC code read the same water levels); its sphere on a planet, SP-E1.
-	const FVoxelWaterLevels Water = ChunkMgr->GetWaterLevels();
+	// WorldOrigin is (G19; the nav, swim and NPC code read the same water levels); its sphere on a planet, SP-E1. With a
+	// lake or a river reach in the world, the levels gathered over the search (the bodies at hand: a search may cover
+	// the whole world, and the world's start has the bodies around it worked out), so a spawn point is dry of those too.
+	const FVoxelWaterLevels Water = ChunkMgr->HasWaterBodies()
+		? ChunkMgr->GatherWaterLevels(bSearchWholeWorld ? FVoxelWaterLevels::WholeWorld()
+			: FBox::BuildAABB(NearPosition, FVector(static_cast<double>(MaxSearchRadius) + ChunkWorldSize)), EVoxelConditioningGather::Ready)
+		: ChunkMgr->GetWaterLevels();
 
 	// Only points inside the world can host a spawn (world modes review WM-I3, KI8): past an island's R + falloff
 	// generation writes a flat floor (dry with water off) and then nothing, so a pawn placed there waits for terrain that

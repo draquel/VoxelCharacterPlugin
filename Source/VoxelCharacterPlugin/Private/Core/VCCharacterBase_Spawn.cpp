@@ -111,7 +111,7 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 		// The water over the pawn (the water levels' sample: on a planet its level is the distance from the centre).
 		const FVoxelWaterLevels Water = ChunkMgr->GetWaterLevels();
 		FVoxelWaterSample Over;
-		const bool bWater = Water.Sample(GetActorLocation(), Over);
+		const bool bWater = ChunkMgr->SampleWater(GetActorLocation(), Over);
 		const FVector Centre = ChunkMgr->GetWorldBounds().Center;
 		const FVector Direction = (GetActorLocation() - Centre).GetSafeNormal();
 		if (bWater && Water.IsRadial() && !Direction.IsNearlyZero())
