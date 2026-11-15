@@ -9,6 +9,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/PhysicsVolume.h"
 #include "VoxelChunkManager.h"
+#include "VoxelWaterLevels.h"
 #include "VoxelCollisionManager.h"
 #include "VoxelWorldConfiguration.h"
 #include "VoxelMaterialRegistry.h"
@@ -707,7 +708,11 @@ void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
 	bJustTeleported = false;
 
 	FVector OldLocation = UpdatedComponent->GetComponentLocation();
-	const FVector Adjusted = Velocity * DeltaTime;
+	// The current of a river reach (D150), read where the pawn is as the move starts: the pawn moves by its own velocity
+	// and the river's together. Zero anywhere else, and the move is then the one it was.
+	const FVector Current = GetSwimCurrentAt(OldLocation);
+	const bool bCarried = !Current.IsZero();
+	const FVector Adjusted = bCarried ? (Velocity + Current) * DeltaTime : Velocity * DeltaTime;
 	FHitResult Hit(1.f);
 	const FQuat Rotation = UpdatedComponent->GetComponentQuat();
 
@@ -728,7 +733,44 @@ void UVCMovementComponent::PhysSwimming(float DeltaTime, int32 Iterations)
 	if (!bJustTeleported && !HasAnimRootMotion() && !CurrentRootMotion.HasOverrideVelocity())
 	{
 		Velocity = (UpdatedComponent->GetComponentLocation() - OldLocation) / DeltaTime;
+		if (bCarried)
+		{
+			// The velocity kept is the swimmer's own, through the water: the next move's braking and drag act on that,
+			// and the river's part is read again where the pawn then is.
+			Velocity -= Current;
+		}
 	}
+}
+
+FVector UVCMovementComponent::ComputeSwimCurrent(const FVoxelWaterSample& Water, float Factor, float ReachAbove)
+{
+	if (Factor <= 0.f || !Water.bWater || Water.Kind != EVoxelWaterBodyKind::Reach || Water.Depth < -static_cast<double>(FMath::Max(ReachAbove, 0.f)))
+	{
+		return FVector::ZeroVector;
+	}
+	return Water.Flow * static_cast<double>(Factor);
+}
+
+FVector UVCMovementComponent::GetSwimCurrentAt(const FVector& Location) const
+{
+	if (WaterCurrentFactor <= 0.f)
+	{
+		return FVector::ZeroVector;
+	}
+	// The world's own sample of the water over the position: with no lake and no river in the world there is no
+	// current, and nothing is sampled.
+	const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
+	if (!ChunkMgr || !ChunkMgr->HasWaterBodies())
+	{
+		return FVector::ZeroVector;
+	}
+	FVoxelWaterSample Water;
+	if (!ChunkMgr->SampleWater(Location, Water))
+	{
+		return FVector::ZeroVector;
+	}
+	const float HalfHeight = CharacterOwner ? CharacterOwner->GetSimpleCollisionHalfHeight() : 0.f;
+	return ComputeSwimCurrent(Water, WaterCurrentFactor, HalfHeight);
 }
 
 // ---------------------------------------------------------------------------

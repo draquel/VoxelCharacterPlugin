@@ -10,6 +10,7 @@
 
 struct FGameplayAttributeData;
 struct FOnAttributeChangeData;
+struct FVoxelWaterSample;
 enum class EEditSource : uint8;
 
 /** The gaits the gait table has a row for (the character refinement plan's C4, D75). */
@@ -349,6 +350,41 @@ public:
 	/** Dampens upward velocity near water surface to prevent breaching. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float SwimmingSurfaceDamping = 0.85f;
+
+	// --- The current (the hydrology plan's H6, D150) ---
+	// A river reach carries a swimmer downstream at the river's own speed; a lake and the sea are still. The swim move
+	// reads the current at the pawn's own position at the start of the move (GetSwimCurrentAt) and moves the pawn by its
+	// velocity and the current together, and the velocity it keeps afterwards is the pawn's own, through the water: the
+	// braking and the drag act on the swimmer and never on the river, and nothing about the current is kept between
+	// moves. The current is so a function of where the pawn is and of the world's bodies, which every machine builds
+	// alike, and a client's prediction, its replay after a correction and the server's simulation of the same move add
+	// the same current (the wind's push is read on each machine's own schedule, which is G220). Only a swimmer is
+	// carried: floating items and dead bodies rest where they are.
+
+	/** How much of a river reach's flow carries a swimmer: 1 at the river's own speed, 0 not at all. The same on every machine (a class default). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0"))
+	float WaterCurrentFactor = 1.f;
+
+	/**
+	 * The current that carries a swimmer at a position: the flow of the river reach over it (the voxel world's sample
+	 * of the water there, UVoxelChunkManager::SampleWater) times WaterCurrentFactor. Zero in a lake, in the sea, over
+	 * dry ground, further above the river's surface than the capsule's half height, and in a world with no lake and no
+	 * river. The one function the client's prediction and the server's simulation of a swim move both call (D-CR16).
+	 * @param Location The pawn's location
+	 * @return The current, world units a second
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Swimming")
+	FVector GetSwimCurrentAt(const FVector& Location) const;
+
+	/**
+	 * Pure: the current a sample of the water gives a swimmer. A river reach's flow times the factor where the position
+	 * is under the reach's surface or no more than ReachAbove over it; zero for a lake, the sea and no water.
+	 * @param Water The water over the position (FVoxelWaterLevels::Sample)
+	 * @param Factor WaterCurrentFactor
+	 * @param ReachAbove How far over the surface the position may be and still be carried (the capsule's half height)
+	 * @return The current, world units a second
+	 */
+	static FVector ComputeSwimCurrent(const FVoxelWaterSample& Water, float Factor, float ReachAbove);
 
 	/** Current logical surface type (derived from voxel material). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
