@@ -10,8 +10,11 @@
 #include "Core/VCCharacterBase.h"
 #include "Core/VCPlayerController.h"
 #include "Effects/VCWaterEffectsComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/WorldSettings.h"
 #include "Movement/VCTerrainQueryHelper.h"
 #include "VoxelChunkManager.h"
+#include "VoxelCollisionManager.h"
 #include "VoxelCoordinates.h"
 #include "VoxelData.h"
 #include "VoxelEditManager.h"
@@ -230,6 +233,55 @@ bool FVCTerrain_WaitChunkUnderFeet::RunTest(const FString& Parameters)
 			Wait.Contains(Planet.Manager->WorldToChunkCoord(Pawn - FVector(0.0, 0.0, 0.5 * ChunkWorldSize))));
 		TestEqual(TEXT("Planet, at the pole: 9 chunks of the grid and the one under the feet"), Wait.Num(), 10);
 	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// G205: the engine's restart of a possessed pawn (ACharacter::Restart, from the server's possession and the owning client's
+// PawnClientRestart, both after BeginPlay began the terrain wait) sets the default movement mode. A waiting pawn has its
+// collision off: it fell through the ground it waited for, and past the placement trace's reach it never came back. The
+// wait holds it through the restart, and places it once its chunks have collision.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCTerrain_WaitHoldsThroughRestart, "VoxelCharacter.Terrain.WaitHoldsThroughRestart", VC_TERRAIN_FLAGS)
+bool FVCTerrain_WaitHoldsThroughRestart::RunTest(const FString& Parameters)
+{
+	VoxelTesting::FTestChunkWorld Plane;
+	Plane.Create(TEXT("VCWaitRestartPlane"), /*bInitializeActorsForPlay=*/true);
+	if (AWorldSettings* WorldSettings = Plane.World->GetWorldSettings())
+	{
+		WorldSettings->NotifyBeginPlay(); // an actor spawned afterwards begins play, and its terrain wait with it
+	}
+	Plane.ConfigureSmallPlane();
+	Plane.Config->bGenerateCollision = true; // the wait binds to the collision manager
+	Plane.StartManager();
+	if (!TestNotNull(TEXT("The collision manager"), Plane.Manager->GetCollisionManager()))
+	{
+		return false;
+	}
+
+	// Nothing is ticked: no chunk has collision, so the wait holds the pawn.
+	const FTransform Stand(FVector(100.0, 100.0, 2000.0));
+	AVCCharacterBase* Character = Plane.World->SpawnActor<AVCCharacterBase>(AVCCharacterBase::StaticClass(), Stand);
+	if (!TestNotNull(TEXT("The character"), Character))
+	{
+		return false;
+	}
+	UCharacterMovementComponent* Move = Character->GetCharacterMovement();
+	TestTrue(TEXT("BeginPlay: the wait holds the pawn"), Character->bIsWaitingForTerrain);
+	TestEqual(TEXT("BeginPlay: no movement mode"), static_cast<int32>(Move->MovementMode.GetValue()), static_cast<int32>(MOVE_None));
+	TestFalse(TEXT("BeginPlay: its collision is off"), Character->GetActorEnableCollision());
+
+	// The restart that follows possession (public on APawn).
+	static_cast<APawn*>(Character)->Restart();
+	TestTrue(TEXT("Restart: the wait still holds the pawn"), Character->bIsWaitingForTerrain);
+	TestEqual(TEXT("Restart: still no movement mode (it does not fall with its collision off)"),
+		static_cast<int32>(Move->MovementMode.GetValue()), static_cast<int32>(MOVE_None));
+	TestTrue(TEXT("Restart: still no velocity"), Move->Velocity.IsNearlyZero());
+
+	Plane.World->DestroyActor(Character);
+	// The world began play here: end it before the helper destroys the world (the manager's EndPlay shuts it down, and
+	// the helper's Stop finds it shut down).
+	Plane.World->EndPlay(EEndPlayReason::Quit);
 	return true;
 }
 
