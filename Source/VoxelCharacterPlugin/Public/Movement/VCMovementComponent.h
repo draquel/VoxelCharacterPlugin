@@ -999,6 +999,14 @@ protected:
 		FMovementBaseInterfaceData* NewMovementBaseInterfaceData, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode,
 		FVector ServerGravityDirection) override;
 
+	/**
+	 * One [VCMove] line for a networked move (vc.Net.TraceMoves): the pawn after it and the inputs this machine read for it.
+	 * @param Side "C" for the client that sent the move, "S" for the server that simulated it
+	 * @param TimeStamp the move's client time stamp (the server's correction lines name the same)
+	 * @param DeltaTime the move's time as this machine simulated it
+	 */
+	void TraceMove(const TCHAR* Side, float TimeStamp, float DeltaTime) const;
+
 	/** Cached terrain data, refreshed every TerrainCacheDuration seconds. */
 	FVCTerrainContext CachedTerrainContext;
 

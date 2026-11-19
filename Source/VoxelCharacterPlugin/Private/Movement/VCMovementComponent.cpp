@@ -30,6 +30,15 @@
 
 namespace
 {
+	TAutoConsoleVariable<int32> CVarTraceMoves(
+		TEXT("vc.Net.TraceMoves"),
+		0,
+		TEXT("1 logs every networked move of a player's pawn on the client that sends it and the server that simulates it\n")
+		TEXT("([VCMove] C / S, by the move's time stamp): the move's end, velocity and the inputs each machine reads for\n")
+		TEXT("itself (the surface's friction scale, the wetness, the gait's values, the floor), to set beside the server's\n")
+		TEXT("correction lines (p.NetShowCorrections 1, the same time stamp)."),
+		ECVF_Default);
+
 	/**
 	 * Saved move carrying the sprint, swim-rise and walk keys and whether the held set's gait caps apply, so a client's
 	 * predicted moves replay the same way (the gait table reads them, C4; the caps, the locomotion plan's L2); and the
@@ -481,6 +490,31 @@ void UVCMovementComponent::ReplicateMoveToServer(float DeltaTime, const FVector&
 	// This move's air from this machine's read; the saved move keeps it and the move data sends it (G220).
 	MoveWindAir = ReadWindAir();
 	Super::ReplicateMoveToServer(DeltaTime, NewAcceleration);
+	if (CVarTraceMoves.GetValueOnGameThread() != 0)
+	{
+		const FNetworkPredictionData_Client_Character* ClientData = GetPredictionData_Client_Character();
+		if (ClientData && ClientData->SavedMoves.Num() > 0)
+		{
+			const FSavedMovePtr& Move = ClientData->SavedMoves.Last();
+			TraceMove(TEXT("C"), Move->TimeStamp, Move->DeltaTime);
+		}
+	}
+}
+
+void UVCMovementComponent::TraceMove(const TCHAR* Side, float TimeStamp, float DeltaTime) const
+{
+	if (!UpdatedComponent || !CharacterOwner)
+	{
+		return;
+	}
+	const FHitResult& Floor = CurrentFloor.HitResult;
+	UE_LOG(LogVoxelCharacter, Log,
+		TEXT("[VCMove] %s %s t=%.4f dt=%.4f loc=(%.2f,%.2f,%.2f) vel=(%.2f,%.2f,%.2f) acc=(%.1f,%.1f) mode=%d fric=%.3f scale=%.4f wet=%.4f surf=%d maxspd=%.2f maxacc=%.1f brake=%.1f air=(%.0f,%.0f) floor=%s z=%.2f n=%.4f"),
+		Side, *CharacterOwner->GetName(), TimeStamp, DeltaTime,
+		UpdatedComponent->GetComponentLocation().X, UpdatedComponent->GetComponentLocation().Y, UpdatedComponent->GetComponentLocation().Z,
+		Velocity.X, Velocity.Y, Velocity.Z, Acceleration.X, Acceleration.Y, static_cast<int32>(MovementMode.GetValue()),
+		GroundFriction, GroundFrictionScale, CachedWeatherWetness, static_cast<int32>(CurrentSurfaceType), MaxWalkSpeed, MaxAcceleration,
+		BrakingDecelerationWalking, MoveWindAir.X, MoveWindAir.Y, *GetNameSafe(Floor.GetComponent()), Floor.ImpactPoint.Z, Floor.ImpactNormal.Z);
 }
 
 void UVCMovementComponent::MoveAutonomous(float ClientTimeStamp, float DeltaTime, uint8 CompressedFlags, const FVector& NewAccel)
@@ -502,6 +536,10 @@ void UVCMovementComponent::MoveAutonomous(float ClientTimeStamp, float DeltaTime
 		}
 	}
 	Super::MoveAutonomous(ClientTimeStamp, DeltaTime, CompressedFlags, NewAccel);
+	if (CVarTraceMoves.GetValueOnGameThread() != 0 && CharacterOwner && CharacterOwner->GetLocalRole() == ROLE_Authority)
+	{
+		TraceMove(TEXT("S"), ClientTimeStamp, DeltaTime);
+	}
 }
 
 void UVCMovementComponent::OnClientCorrectionReceived(FNetworkPredictionData_Client_Character& ClientData, float TimeStamp, FVector NewLocation, FVector NewVelocity,
