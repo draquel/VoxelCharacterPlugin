@@ -92,6 +92,51 @@ void FVCRagdollBuoyancy::SetCustomDepth(const USkeletalMeshComponent* Body, FVCR
 	}
 }
 
+bool FVCRagdollBuoyancy::SampleAtRoot(const USkeletalMeshComponent* Body, FVector& OutRoot, FVCWaterSurfaceSample& OutWater) const
+{
+	const UWorld* World = Body ? Body->GetWorld() : nullptr;
+	const FBodyInstance* RootBody = Body ? Body->GetBodyInstance() : nullptr;
+	if (!World || !RootBody)
+	{
+		return false;
+	}
+
+	// One sample for the body, at its root: the surface over it, the depth and the up. Each part's depth follows from
+	// its height over the root (a body is short against a planet's curve).
+	OutRoot = RootBody->GetUnrealWorldTransform().GetLocation();
+	if (!FVCTerrainQueryHelper::SampleWaterSurface(World, OutRoot, ReachAbove, OutWater))
+	{
+		return false;
+	}
+	if (!OutWater.bWater && OutWater.Depth > 0.0)
+	{
+		// A root lying on the bed may read the bed's own voxel: look one voxel up before calling the place dry. A dry
+		// cave below the sea's level is dry there too.
+		const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
+		const float VoxelSize = ChunkMgr && ChunkMgr->GetConfiguration() ? ChunkMgr->GetConfiguration()->VoxelSize : 100.0f;
+		FVCWaterSurfaceSample Above;
+		if (OutWater.Depth > VoxelSize && FVCTerrainQueryHelper::SampleWaterSurface(World, OutRoot + OutWater.Up * VoxelSize, ReachAbove, Above))
+		{
+			OutWater.bWater = Above.bWater;
+		}
+	}
+	return OutWater.bWater;
+}
+
+bool FVCRagdollBuoyancy::ApplyPlaced(const USkeletalMeshComponent* Body, FVCRagdollBuoyancyState& State) const
+{
+	FVector Root;
+	FVCWaterSurfaceSample Water;
+	const bool bInWater = IsEnabled() && SampleAtRoot(Body, Root, Water);
+	if (bInWater != State.bInWater && Body && Body->GetNetMode() != NM_DedicatedServer)
+	{
+		SetCustomDepth(Body, State, bInWater);
+	}
+	State.bInWater = bInWater;
+	State.RootDepth = bInWater ? Water.Depth : 0.0;
+	return bInWater;
+}
+
 bool FVCRagdollBuoyancy::ApplyForces(USkeletalMeshComponent* Body, FVCRagdollBuoyancyState& State) const
 {
 	State.bInWater = false;
@@ -100,33 +145,9 @@ bool FVCRagdollBuoyancy::ApplyForces(USkeletalMeshComponent* Body, FVCRagdollBuo
 		return false;
 	}
 	const UWorld* World = Body->GetWorld();
-	const FBodyInstance* RootBody = Body->GetBodyInstance();
-	if (!World || !RootBody)
-	{
-		return false;
-	}
-
-	// One sample for the body, at its root: the surface over it, the depth and the up. Each part's depth follows from
-	// its height over the root (a body is short against a planet's curve).
-	const FVector Root = RootBody->GetUnrealWorldTransform().GetLocation();
+	FVector Root;
 	FVCWaterSurfaceSample Water;
-	if (!FVCTerrainQueryHelper::SampleWaterSurface(World, Root, ReachAbove, Water))
-	{
-		return false;
-	}
-	if (!Water.bWater && Water.Depth > 0.0)
-	{
-		// A root lying on the bed may read the bed's own voxel: look one voxel up before calling the place dry. A dry
-		// cave below the sea's level is dry there too.
-		const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
-		const float VoxelSize = ChunkMgr && ChunkMgr->GetConfiguration() ? ChunkMgr->GetConfiguration()->VoxelSize : 100.0f;
-		FVCWaterSurfaceSample Above;
-		if (Water.Depth > VoxelSize && FVCTerrainQueryHelper::SampleWaterSurface(World, Root + Water.Up * VoxelSize, ReachAbove, Above))
-		{
-			Water.bWater = Above.bWater;
-		}
-	}
-	if (!Water.bWater)
+	if (!World || !SampleAtRoot(Body, Root, Water))
 	{
 		return false;
 	}

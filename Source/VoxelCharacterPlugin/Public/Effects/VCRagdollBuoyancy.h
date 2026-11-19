@@ -6,6 +6,7 @@
 
 class UPrimitiveComponent;
 class USkeletalMeshComponent;
+struct FVCWaterSurfaceSample;
 
 /** What a ragdoll's buoyancy remembers between ticks (one per body, on each machine). */
 struct FVCRagdollBuoyancyState
@@ -90,7 +91,25 @@ struct VOXELCHARACTERPLUGIN_API FVCRagdollBuoyancy
 	 */
 	bool Apply(USkeletalMeshComponent* Body, FVCRagdollBuoyancyState& State) const;
 
+	/**
+	 * A body placed rather than floated (a client putting its copy in the server's frozen pose, G204): no force, the
+	 * custom depth a floated body would have (on while its root is in the water), and the state's water and depth.
+	 *
+	 * @param Body The body's mesh, in its place
+	 * @param State The body's state
+	 * @return True when the body is in water
+	 */
+	bool ApplyPlaced(const USkeletalMeshComponent* Body, FVCRagdollBuoyancyState& State) const;
+
 private:
+	/**
+	 * The water at the body's root: the one sample a tick takes (a root on the bed looks one voxel up first).
+	 * @param OutRoot The root body's world location
+	 * @param OutWater The sample there
+	 * @return True when the root is in water
+	 */
+	bool SampleAtRoot(const USkeletalMeshComponent* Body, FVector& OutRoot, FVCWaterSurfaceSample& OutWater) const;
+
 	/** The lift itself (Apply adds the custom depth around it). */
 	bool ApplyForces(USkeletalMeshComponent* Body, FVCRagdollBuoyancyState& State) const;
 

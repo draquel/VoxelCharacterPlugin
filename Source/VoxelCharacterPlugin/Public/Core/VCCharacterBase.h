@@ -11,6 +11,7 @@
 #include "Interfaces/CGFInventoryInterface.h"
 #include "Interfaces/CGFLightBearerInterface.h"
 #include "Effects/VCRagdollBuoyancy.h"
+#include "Engine/NetSerialization.h"
 #include "VCCharacterBase.generated.h"
 
 class UVCCameraManager;
@@ -45,6 +46,24 @@ class UEquipmentManagerComponent;
 #if WITH_INVENTORY_PLUGIN
 class UInventoryComponent;
 #endif
+
+/**
+ * One physics body of a frozen corpse, in world space (G204): the server's pose, which every client copies so the body
+ * lies where the server's does (and where its query collision is).
+ */
+USTRUCT()
+struct VOXELCHARACTERPLUGIN_API FVCCorpseBodyPose
+{
+	GENERATED_BODY()
+
+	/** The body's world location (a tenth of a unit). */
+	UPROPERTY()
+	FVector_NetQuantize10 Location = FVector::ZeroVector;
+
+	/** The body's world rotation. */
+	UPROPERTY()
+	FRotator Rotation = FRotator::ZeroRotator;
+};
 
 /**
  * Base character class for the voxel character controller.
@@ -262,6 +281,12 @@ public:
 	/** This body is a kept corpse (no longer anyone's pawn). */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
 	bool IsCorpse() const { return bIsCorpse; }
+
+	/**
+	 * Where the server's corpse froze, each physics body's world transform (G204).
+	 * @return The pose, empty until the server's ragdoll has settled
+	 */
+	const TArray<FVCCorpseBodyPose>& GetCorpsePose() const { return CorpsePose; }
 
 	/** A corpse whose ragdoll never settles freezes after this long. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "1"))
@@ -904,6 +929,26 @@ protected:
 	UFUNCTION()
 	void OnRep_IsCorpse();
 
+	/**
+	 * Where the server's corpse froze (G204): each physics body's world transform, in the physics asset's order; empty
+	 * until the server's ragdoll settles. A client places its copy there, frozen, instead of keeping its own simulation.
+	 */
+	UPROPERTY(ReplicatedUsing = OnRep_CorpsePose)
+	TArray<FVCCorpseBodyPose> CorpsePose;
+
+	UFUNCTION()
+	void OnRep_CorpsePose();
+
+	/**
+	 * The appearance the corpse wears (G204). A kept corpse has no player state to be dressed from, so a client it becomes
+	 * relevant to after the death takes it from here: it wore the class's own body, which the server's pose does not fit.
+	 */
+	UPROPERTY(ReplicatedUsing = OnRep_CorpseAppearance)
+	TSoftObjectPtr<UVCCharacterAppearance> CorpseAppearance;
+
+	UFUNCTION()
+	void OnRep_CorpseAppearance();
+
 	/** Seconds after a shot before the reload starts, the release's loose played first (D101). */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0"))
 	float ReloadAfterShotSeconds = 0.35f;
@@ -1035,6 +1080,69 @@ protected:
 	/** Freeze the ragdoll once it has settled (or after CorpseFreezeAfterSeconds). */
 	void CheckCorpseSettled();
 
+	/** Stop simulating and keep the bones where the bodies are: the frozen corpse, with query collision for item recovery. */
+	void FreezeCorpse();
+
+	/**
+	 * Start the death's ragdoll on this machine (G204): the server's frozen pose when it has replicated, else the
+	 * simulation once the terrain's collision under the body is cooked here (a body that became relevant to a client
+	 * far from where it streamed would fall through the ground); nothing without a physics asset.
+	 */
+	void StartDeathRagdoll();
+
+	/**
+	 * Whether this machine has the terrain's collision under the body: the spawn wait's chunks (FVCTerrainQueryHelper::
+	 * GetTerrainWaitChunks, TerrainWaitChunkRadius: the grid around it and the chunk half a chunk under it), since a body
+	 * lying on a chunk's border rests on both. Requests the missing chunks' collision.
+	 * @param OutMissing The chunks with no collision yet
+	 * @return True when there is none missing, or no voxel world
+	 */
+	bool HasRagdollGround(TSet<FIntVector>& OutMissing);
+
+	/** A held ragdoll's chunk got its collision: start the ragdoll once none is missing. */
+	void OnRagdollChunkCollisionReady(const FIntVector& ChunkCoord);
+
+	/** Stop holding the ragdoll for the terrain (unbinds from the collision manager). */
+	void ReleaseRagdollHold();
+
+	/** Put a client's body in the server's frozen pose (CorpsePose) and freeze it there a few frames later. */
+	void PlaceCorpsePose();
+
+	/**
+	 * Hold a simulating body still (no gravity, pull, lift or velocity) for two frames, then freeze it: the bones then lie
+	 * where the bodies do. Freezes at once a body that does not simulate.
+	 * @param Pose Where to put the bodies first (the server's pose, on a client), or null to hold them where they are
+	 */
+	void HoldInPose(const TArray<FVCCorpseBodyPose>* Pose);
+
+	/**
+	 * Wear CorpseAppearance when it is set and not yet worn (a client's late copy of a corpse).
+	 * @return True when the body changed
+	 */
+	bool ApplyCorpseAppearance();
+
+	/** The chunks a held ragdoll waits for; empty when none is held. */
+	TSet<FIntVector> RagdollHoldChunks;
+
+	/** The held ragdoll's binding to the collision manager. */
+	FDelegateHandle RagdollHoldHandle;
+	TWeakObjectPtr<UVoxelCollisionManager> RagdollHoldManager;
+
+	/** The body is held still in its pose (on a client the server's), gravity and the water's lift off, until it freezes. */
+	bool bPlacingCorpsePose = false;
+
+	/** This machine has put its copy in the server's pose (once: the pose replicates once). */
+	bool bCorpsePosePlaced = false;
+
+	/** The server's pose did not fit this machine's mesh (another body count): the body keeps its own ragdoll. */
+	bool bCorpsePoseRejected = false;
+
+	/** The frame the pose was put in: the freeze waits for the physics step after it. */
+	uint64 CorpsePlacedFrame = 0;
+
+	/** How often the hold began again before the freeze: the bodies rebuilt off the pose, or the bones behind them. */
+	int32 CorpsePlaceRetries = 0;
+
 	FTimerHandle CorpseSettleTimer;
 	int32 CorpseCalmChecks = 0;
 	double CorpseStartTime = 0.0;
@@ -1119,6 +1227,15 @@ protected:
 
 	/** Freeze character movement and collision until terrain is ready. */
 	void FreezeForTerrainWait();
+
+	/** Dead or a kept corpse: no terrain wait, no placement (G204). */
+	bool IsDeadBody() const;
+
+	/**
+	 * End a terrain wait without placing the pawn: a body that died, or became a corpse, while the wait held it. Its
+	 * collision comes back, and a client's copy goes back to the server's place.
+	 */
+	void StopTerrainWaitForBody();
 
 	/** Begin event-driven wait for surrounding chunks to have collision. */
 	void InitiateChunkBasedWait();
@@ -1231,6 +1348,9 @@ protected:
 	 * and the first-person visibility. Nothing to do when it already wears it.
 	 */
 	void ApplyPlayerAppearance();
+
+	/** Wear an appearance (null: the class's own body) and refit what depends on the body: anim class, layers, attachments. */
+	void WearAppearance(const UVCCharacterAppearance* Wanted);
 
 	/** The player state's appearance changed (resolved on the server, replicated to clients). */
 	UFUNCTION()

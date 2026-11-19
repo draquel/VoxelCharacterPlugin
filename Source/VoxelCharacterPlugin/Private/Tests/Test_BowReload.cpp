@@ -165,7 +165,7 @@ bool FVCBowReload_Cycle::RunTest(const FString& Parameters)
 		return false;
 	}
 	UItemDefinition* Bow = W.DefineBow();
-	UItemDefinition* Arrow = W.Define(TEXT("ReloadTestArrow"), 50, FGameplayTagContainer(AmmoTag()));
+	UItemDefinition* Arrow = W.Define(TEXT("ReloadTestArrow"), 50, FGameplayTagContainer(VCBowReloadTestHelpers::AmmoTag()));
 	UItemDefinition* Quiver = W.DefineQuiver();
 	AVCCharacterBase* Player = W.SpawnPlayer(W.MakeBowSet(1.f));
 	UEquipmentManagerComponent* Equipment = Player ? Player->FindComponentByClass<UEquipmentManagerComponent>() : nullptr;
@@ -231,7 +231,7 @@ bool FVCBowReload_Cycle::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Drawn again: nocked"), Player->IsArrowNocked());
 
 	// The last arrows leave the bag: the nock stays (it is on the string), no reload follows the next shot.
-	Bag->TryRemoveItem(Bag->FindItemsByTag(FGameplayTagContainer(AmmoTag()))[0].InstanceId, -1);
+	Bag->TryRemoveItem(Bag->FindItemsByTag(FGameplayTagContainer(VCBowReloadTestHelpers::AmmoTag()))[0].InstanceId, -1);
 	Player->HandleArrowLoosed();
 	W.TickFor(1.5f);
 	TestFalse(TEXT("No arrows left: no reload"), Player->IsReloading() || Player->IsArrowNocked());
