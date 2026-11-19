@@ -234,6 +234,19 @@ struct FVCGaitValues
 };
 
 /**
+ * The wind's state that a move carries and restores (G220): the air the move is simulated with (the wind at the pawn
+ * times its exposure, quantized), the drift the move left on the velocity and the seconds the pawn has been falling.
+ * The saved move keeps it so a combined or replayed move starts where the original did, and a correction takes the
+ * acknowledged move's end.
+ */
+struct FVCWindMoveState
+{
+	FVector Air = FVector::ZeroVector;
+	FVector Drift = FVector::ZeroVector;
+	float AirborneSeconds = 0.f;
+};
+
+/**
  * Extended CharacterMovementComponent with voxel terrain awareness.
  *
  * Caches terrain context (surface type, friction, water state) and adjusts
@@ -440,9 +453,12 @@ public:
 
 	// --- Weather (the weather plan's P4) ---
 	// The wind leans on the pawn and wet ground loses grip. Both read the weather at the pawn once per terrain-context
-	// refresh (UpdateVoxelTerrainContext, WorldWeatherPlugin's GetConditionsAt) and apply inside the movement simulation,
-	// so the client's prediction and the server agree (the sync point is the same on both; the trace's exposure may
-	// differ a frame). Without WorldWeatherPlugin (WITH_WORLD_WEATHER 0) nothing changes. Flying is exempt, as the edge is.
+	// refresh (UpdateVoxelTerrainContext, WorldWeatherPlugin's GetConditionsAt) and apply inside the movement simulation.
+	// The wind's push is a function of the move alone (G220): a machine's read is its own (the gust changes faster than
+	// the reads, the exposure is its own trace), so a locally controlled move takes the air from the read and carries it
+	// in the saved move and the move data, and the server simulates a client's move with the air the client sent,
+	// clamped to the gust's envelope about its own read (ClampClientWindAir). Without WorldWeatherPlugin
+	// (WITH_WORLD_WEATHER 0) nothing changes. Flying is exempt, as the edge is.
 
 	/** The fraction of the wind's speed the pawn drifts at in the open (a storm's 900 uu/s carries it at 90). 0 turns the push off. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0", ClampMax = "1.0"))
@@ -520,6 +536,51 @@ public:
 	 * @return The drift, world uu/s
 	 */
 	static FVector ComputeWindDrift(const FVector& Wind, float Factor, float Exposure, float OwnSpeed, float MaxSpeed, bool bAirborne);
+
+	/**
+	 * How far a client's air on a move may stray from the server's own read before the server clamps it (G220): the slack
+	 * is this fraction of the server's mean wind plus WindClientSlackFloor, across the wind and past the gust's top.
+	 * An honest client's air passes as sent (its read differs from the server's by the gust's phase, the exposure and
+	 * the latency of a change); a forged one gains at most the slack's drift (WindPushFactor of it).
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float WindClientTolerance = 0.25f;
+
+	/** The slack's floor, uu/s: what a client may claim with no wind at the server (a calm's change on its way). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0"))
+	float WindClientSlackFloor = 50.f;
+
+	/**
+	 * Pure: the air a move carries, the wind times the exposure rounded to whole uu/s per axis within an int16, so the
+	 * client simulates with exactly what the move data sends (G220).
+	 * @param Air The wind at the pawn times its exposure, world uu/s
+	 * @return The quantized air
+	 */
+	static FVector QuantizeWindAir(const FVector& Air);
+
+	/**
+	 * Pure: the server's check of a client's air (G220, D-CR16). Along the server's mean wind the air may run from minus
+	 * the slack to the gust's top (the mean x (1 + Gustiness)) plus the slack, the exposure being anywhere in [0, 1];
+	 * across it, the slack; the slack is Mean x Tolerance + SlackFloor. Inside the envelope the air is returned as sent,
+	 * bit for bit; outside, each part is clamped to it.
+	 * @param ClientAir  The air the client sent with the move, world uu/s
+	 * @param MeanWind   The server's read of the wind at the pawn without the gust, world uu/s
+	 * @param Gustiness  The front's gustiness (0..1)
+	 * @param Tolerance  WindClientTolerance
+	 * @param SlackFloor WindClientSlackFloor
+	 * @param bOutClamped Receives whether the air was outside the envelope
+	 * @return The air the server simulates the move with
+	 */
+	static FVector ClampClientWindAir(const FVector& ClientAir, const FVector& MeanWind, float Gustiness, float Tolerance, float SlackFloor, bool& bOutClamped);
+
+	/** The wind's state of the move being simulated (the saved move's and the corrections' bookkeeping, G220). */
+	FVCWindMoveState GetWindMoveState() const;
+
+	/** Restores the wind's state (a combined move's start, a correction's acknowledged move). */
+	void SetWindMoveState(const FVCWindMoveState& State);
+
+	/** The air of the move being simulated (a replayed move's own). */
+	void SetMoveWindAir(const FVector& Air) { MoveWindAir = Air; }
 
 	// --- Planet gravity (VoxelWorlds SPHERICAL_PLANET_REQUIREMENTS.md SP-F1; WORLD_MODES_REVIEW_PLAN.md §17, WM-W1) ---
 	// On a planet (the voxel world's bounds are a shell) gravity points at the centre: the engine's custom gravity
@@ -926,6 +987,18 @@ public:
 	virtual FNetworkPredictionData_Client* GetPredictionData_Client() const override;
 
 protected:
+	/** A locally controlled client's move: the air from this machine's read, quantized, before the move is saved (G220). */
+	virtual void ReplicateMoveToServer(float DeltaTime, const FVector& NewAcceleration) override;
+
+	/** The server's simulation of a client's move: the air the client sent with it, checked (ClampClientWindAir, G220). */
+	virtual void MoveAutonomous(float ClientTimeStamp, float DeltaTime, uint8 CompressedFlags, const FVector& NewAccel) override;
+
+	/** A correction: the wind's drift and airborne time from the acknowledged move's end, before the replay (G220). */
+	using Super::OnClientCorrectionReceived;
+	virtual void OnClientCorrectionReceived(class FNetworkPredictionData_Client_Character& ClientData, float TimeStamp, FVector NewLocation, FVector NewVelocity,
+		FMovementBaseInterfaceData* NewMovementBaseInterfaceData, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode,
+		FVector ServerGravityDirection) override;
+
 	/** Cached terrain data, refreshed every TerrainCacheDuration seconds. */
 	FVCTerrainContext CachedTerrainContext;
 
@@ -955,8 +1028,17 @@ protected:
 	double LastWeatherReadSeconds = -1.0;
 	/** The wind drift on the velocity since the last CalcVelocity (ComputeWindDrift), taken off before the next one's braking. */
 	FVector WindDrift = FVector::ZeroVector;
-	/** Seconds the pawn has been falling (0 on the ground): the full drift past WindAirborneDelay. */
+	/** Seconds the pawn has been falling (0 on the ground), advanced once a move (PerformMovement): the full drift past WindAirborneDelay. */
 	float WindAirborneSeconds = 0.f;
+	/** The air the move being simulated pushes with (the wind times the exposure, quantized; G220): the read on a machine that moves the pawn itself, the client's sent air on the server, the saved move's in a replay. */
+	FVector MoveWindAir = FVector::ZeroVector;
+	/** The server's last read of the wind at the pawn without the gust, and the front's gustiness: ClampClientWindAir's envelope (G220). */
+	FVector CachedWeatherMeanWind = FVector::ZeroVector;
+	float CachedWeatherGustiness = 0.f;
+	/** The air this machine's own read gives (CachedWeatherWind x CachedWeatherExposure), quantized. */
+	FVector ReadWindAir() const;
+	/** The packed move data that carries the air to the server (G220); the engine's container is replaced in the constructor. */
+	TUniquePtr<FCharacterNetworkMoveDataContainer> WindMoveDataContainer;
 
 	/** Push-back band proximity, 0..1 (see GetWorldEdgeProximity). */
 	float WorldEdgeProximity = 0.f;

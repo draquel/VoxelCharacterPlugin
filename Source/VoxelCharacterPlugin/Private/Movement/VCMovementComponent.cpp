@@ -24,13 +24,17 @@
 #include "Tags/CGFGameplayTags.h"
 #if WITH_WORLD_WEATHER
 #include "WorldWeatherSubsystem.h"
+#include "WorldWeatherMath.h"
 #endif
+#include "GameFramework/CharacterMovementReplication.h"
 
 namespace
 {
 	/**
 	 * Saved move carrying the sprint, swim-rise and walk keys and whether the held set's gait caps apply, so a client's
-	 * predicted moves replay the same way (the gait table reads them, C4; the caps, the locomotion plan's L2).
+	 * predicted moves replay the same way (the gait table reads them, C4; the caps, the locomotion plan's L2); and the
+	 * wind's state (G220): the air the move pushed with, sent to the server with it, and the drift and airborne time at
+	 * its start (a combined move reverts to them) and at its end (a correction resumes from them).
 	 */
 	class FSavedMove_VC : public FSavedMove_Character
 	{
@@ -42,6 +46,12 @@ namespace
 		uint8 bSavedWantsToWalk : 1;
 		uint8 bSavedWantsClipGaitCaps : 1;
 
+		/** The air the move pushed with (G220). */
+		FVector SavedWindAir = FVector::ZeroVector;
+		/** The wind's drift and airborne time before the move and after it. */
+		FVCWindMoveState StartWind;
+		FVCWindMoveState EndWind;
+
 		virtual void Clear() override
 		{
 			Super::Clear();
@@ -49,6 +59,9 @@ namespace
 			bSavedWantsToAscend = 0;
 			bSavedWantsToWalk = 0;
 			bSavedWantsClipGaitCaps = 0;
+			SavedWindAir = FVector::ZeroVector;
+			StartWind = FVCWindMoveState();
+			EndWind = FVCWindMoveState();
 		}
 
 		virtual uint8 GetCompressedFlags() const override
@@ -93,6 +106,38 @@ namespace
 				bSavedWantsToAscend = Movement->bWantsToAscend;
 				bSavedWantsToWalk = Movement->bWantsToWalk;
 				bSavedWantsClipGaitCaps = Movement->bWantsClipGaitCaps;
+				SavedWindAir = Movement->GetWindMoveState().Air;
+			}
+		}
+
+		virtual void SetInitialPosition(ACharacter* InCharacter) override
+		{
+			Super::SetInitialPosition(InCharacter);
+			if (const UVCMovementComponent* Movement = Cast<UVCMovementComponent>(InCharacter->GetCharacterMovement()))
+			{
+				StartWind = Movement->GetWindMoveState();
+			}
+		}
+
+		virtual void CombineWith(const FSavedMove_Character* OldMove, ACharacter* InCharacter, APlayerController* PC, const FVector& OldStartLocation) override
+		{
+			Super::CombineWith(OldMove, InCharacter, PC, OldStartLocation);
+			// The engine reverts the pawn to the pending move's start; the wind's drift and airborne time go back with it,
+			// or the combined move would take the pending move's drift off a velocity that never had it (G220).
+			if (UVCMovementComponent* Movement = Cast<UVCMovementComponent>(InCharacter->GetCharacterMovement()))
+			{
+				FVCWindMoveState Reverted = static_cast<const FSavedMove_VC*>(OldMove)->StartWind;
+				Reverted.Air = SavedWindAir;
+				Movement->SetWindMoveState(Reverted);
+			}
+		}
+
+		virtual void PostUpdate(ACharacter* InCharacter, EPostUpdateMode PostUpdateMode) override
+		{
+			Super::PostUpdate(InCharacter, PostUpdateMode);
+			if (const UVCMovementComponent* Movement = Cast<UVCMovementComponent>(InCharacter->GetCharacterMovement()))
+			{
+				EndWind = Movement->GetWindMoveState();
 			}
 		}
 
@@ -105,7 +150,54 @@ namespace
 				Movement->bWantsToAscend = bSavedWantsToAscend;
 				Movement->bWantsToWalk = bSavedWantsToWalk;
 				Movement->bWantsClipGaitCaps = bSavedWantsClipGaitCaps;
+				// A replay pushes with the air the move was sent with, not the read at the time of the replay.
+				Movement->SetMoveWindAir(SavedWindAir);
 			}
+		}
+	};
+
+	/** The move data sent to the server: the engine's, and the move's air (G220), a bit when calm, three int16 when not. */
+	struct FVCNetworkMoveData : public FCharacterNetworkMoveData
+	{
+		typedef FCharacterNetworkMoveData Super;
+
+		FVector WindAir = FVector::ZeroVector;
+
+		virtual void ClientFillNetworkMoveData(const FSavedMove_Character& ClientMove, ENetworkMoveType MoveType) override
+		{
+			Super::ClientFillNetworkMoveData(ClientMove, MoveType);
+			WindAir = static_cast<const FSavedMove_VC&>(ClientMove).SavedWindAir;
+		}
+
+		virtual bool Serialize(UCharacterMovementComponent& CharacterMovement, FArchive& Ar, UPackageMap* PackageMap, ENetworkMoveType MoveType) override
+		{
+			Super::Serialize(CharacterMovement, Ar, PackageMap, MoveType);
+			uint8 bHasAir = Ar.IsSaving() && !WindAir.IsZero() ? 1 : 0;
+			Ar.SerializeBits(&bHasAir, 1);
+			if (bHasAir)
+			{
+				// QuantizeWindAir keeps every axis a whole number within an int16, so this is lossless.
+				int16 X = static_cast<int16>(WindAir.X), Y = static_cast<int16>(WindAir.Y), Z = static_cast<int16>(WindAir.Z);
+				Ar << X << Y << Z;
+				WindAir = FVector(X, Y, Z);
+			}
+			else
+			{
+				WindAir = FVector::ZeroVector;
+			}
+			return !Ar.IsError();
+		}
+	};
+
+	struct FVCNetworkMoveDataContainer : public FCharacterNetworkMoveDataContainer
+	{
+		FVCNetworkMoveData Moves[3];
+
+		FVCNetworkMoveDataContainer()
+		{
+			NewMoveData = &Moves[0];
+			PendingMoveData = &Moves[1];
+			OldMoveData = &Moves[2];
 		}
 	};
 
@@ -130,6 +222,10 @@ namespace
 UVCMovementComponent::UVCMovementComponent()
 {
 	SetIsReplicatedByDefault(true);
+
+	// The move data carries the wind's air to the server (G220).
+	WindMoveDataContainer = MakeUnique<FVCNetworkMoveDataContainer>();
+	SetNetworkMoveDataContainer(*WindMoveDataContainer);
 
 	// Third-person defaults: character faces movement direction
 	bOrientRotationToMovement = true;
@@ -264,6 +360,16 @@ void UVCMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 		WorldEdgeProximity = 0.f;
 	}
 
+	// The air a move pushes with (G220): from this machine's read wherever this machine moves the pawn itself
+	// (standalone, a listen server's own pawn, NPCs, a simulated proxy's extrapolation). A locally controlled client
+	// takes it in ReplicateMoveToServer and the server, for a client's pawn, from the move data (MoveAutonomous).
+	const bool bServesClientMoves = CharacterOwner && CharacterOwner->GetLocalRole() == ROLE_Authority && CharacterOwner->IsPlayerControlled()
+		&& !CharacterOwner->IsLocallyControlled();
+	if (CharacterOwner && CharacterOwner->GetLocalRole() != ROLE_AutonomousProxy && !bServesClientMoves)
+	{
+		MoveWindAir = ReadWindAir();
+	}
+
 	// A simulated proxy runs no moves: it takes a montage's root motion only while it stands, by its speed (D106).
 	if (CharacterOwner && CharacterOwner->GetLocalRole() == ROLE_SimulatedProxy)
 	{
@@ -364,7 +470,101 @@ void UVCMovementComponent::PerformMovement(float DeltaTime)
 	ApplyGaitTable();
 	// A montage's root motion only while the move has no input (D106), decided from the move itself.
 	ApplyMontageRootMotionMode(!Acceleration.IsNearlyZero());
+	// The time in the air, once a move by the move's own time (G220): CalcVelocity runs per substep, and twice a substep
+	// in a fall with limited air control, which counted the same time more than once.
+	WindAirborneSeconds = IsFalling() ? WindAirborneSeconds + FMath::Max(DeltaTime, 0.f) : 0.f;
 	Super::PerformMovement(DeltaTime);
+}
+
+void UVCMovementComponent::ReplicateMoveToServer(float DeltaTime, const FVector& NewAcceleration)
+{
+	// This move's air from this machine's read; the saved move keeps it and the move data sends it (G220).
+	MoveWindAir = ReadWindAir();
+	Super::ReplicateMoveToServer(DeltaTime, NewAcceleration);
+}
+
+void UVCMovementComponent::MoveAutonomous(float ClientTimeStamp, float DeltaTime, uint8 CompressedFlags, const FVector& NewAccel)
+{
+	// The server simulates a client's move with the air the client pushed with, inside the envelope of its own read
+	// (G220, D-CR16). A client's replay takes the saved move's air in PrepMoveFor instead.
+	if (CharacterOwner && CharacterOwner->GetLocalRole() == ROLE_Authority)
+	{
+		if (const FVCNetworkMoveData* MoveData = static_cast<const FVCNetworkMoveData*>(GetCurrentNetworkMoveData()))
+		{
+			bool bClamped = false;
+			MoveWindAir = ClampClientWindAir(MoveData->WindAir, CachedWeatherMeanWind, CachedWeatherGustiness, WindClientTolerance, WindClientSlackFloor, bClamped);
+			if (bClamped)
+			{
+				UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s: the client's wind air %s is outside the server's envelope (mean %s, gustiness %.2f); clamped to %s."),
+					*GetNameSafe(CharacterOwner), *MoveData->WindAir.ToCompactString(), *CachedWeatherMeanWind.ToCompactString(), CachedWeatherGustiness,
+					*MoveWindAir.ToCompactString());
+			}
+		}
+	}
+	Super::MoveAutonomous(ClientTimeStamp, DeltaTime, CompressedFlags, NewAccel);
+}
+
+void UVCMovementComponent::OnClientCorrectionReceived(FNetworkPredictionData_Client_Character& ClientData, float TimeStamp, FVector NewLocation, FVector NewVelocity,
+	FMovementBaseInterfaceData* NewMovementBaseInterfaceData, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode,
+	FVector ServerGravityDirection)
+{
+	Super::OnClientCorrectionReceived(ClientData, TimeStamp, NewLocation, NewVelocity, NewMovementBaseInterfaceData, NewBaseBoneName, bHasBase,
+		bBaseRelativePosition, ServerMovementMode, ServerGravityDirection);
+	// The server's velocity after the acknowledged move carries that move's drift: the replay takes it off from there,
+	// so the drift and the airborne time resume from the move's end, not from this machine's latest tick (G220).
+	if (const FSavedMove_VC* Acked = static_cast<const FSavedMove_VC*>(ClientData.LastAckedMove.Get()))
+	{
+		FVCWindMoveState State = Acked->EndWind;
+		State.Air = MoveWindAir;
+		SetWindMoveState(State);
+	}
+}
+
+FVCWindMoveState UVCMovementComponent::GetWindMoveState() const
+{
+	FVCWindMoveState State;
+	State.Air = MoveWindAir;
+	State.Drift = WindDrift;
+	State.AirborneSeconds = WindAirborneSeconds;
+	return State;
+}
+
+void UVCMovementComponent::SetWindMoveState(const FVCWindMoveState& State)
+{
+	MoveWindAir = State.Air;
+	WindDrift = State.Drift;
+	WindAirborneSeconds = State.AirborneSeconds;
+}
+
+FVector UVCMovementComponent::ReadWindAir() const
+{
+	return QuantizeWindAir(CachedWeatherWind * FMath::Clamp(CachedWeatherExposure, 0.f, 1.f));
+}
+
+FVector UVCMovementComponent::QuantizeWindAir(const FVector& Air)
+{
+	auto Axis = [](double V)
+	{
+		return static_cast<double>(FMath::Clamp(FMath::RoundToInt32(V), static_cast<int32>(MIN_int16), static_cast<int32>(MAX_int16)));
+	};
+	return FVector(Axis(Air.X), Axis(Air.Y), Axis(Air.Z));
+}
+
+FVector UVCMovementComponent::ClampClientWindAir(const FVector& ClientAir, const FVector& MeanWind, float Gustiness, float Tolerance, float SlackFloor, bool& bOutClamped)
+{
+	const double Mean = MeanWind.Size();
+	const double Slack = Mean * FMath::Max(Tolerance, 0.f) + FMath::Max(SlackFloor, 0.f);
+	const FVector Dir = Mean > UE_KINDA_SMALL_NUMBER ? MeanWind / Mean : FVector::ZeroVector;
+	const double Along = FVector::DotProduct(ClientAir, Dir);
+	const FVector Across = ClientAir - Dir * Along;
+	const double MaxAlong = Mean * (1.0 + FMath::Clamp(Gustiness, 0.f, 1.f)) + Slack;
+	bOutClamped = Along < -Slack || Along > MaxAlong || Across.SizeSquared() > Slack * Slack;
+	if (!bOutClamped)
+	{
+		// As sent, bit for bit: the client simulated with exactly this.
+		return ClientAir;
+	}
+	return Dir * FMath::Clamp(Along, -Slack, MaxAlong) + Across.GetClampedToMaxSize(Slack);
 }
 
 void UVCMovementComponent::ApplyMontageRootMotionMode(bool bWantsToMove)
@@ -574,14 +774,14 @@ void UVCMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bF
 			WorldEdgePushBackDistance, WorldEdgePushBackSpeed, Proximity);
 	}
 
-	// The wind's drift (the weather plan's P4), from the weather read with the terrain context; flying exempt as above.
-	// On the pawn's own motion and on a sustained fall only (a floor lost for a frame on rough voxel ground is not a
-	// fall): a standing pawn idles in any wind.
-	WindAirborneSeconds = IsFalling() ? WindAirborneSeconds + FMath::Max(DeltaTime, 0.f) : 0.f;
-	if (WindPushFactor > 0.f && MovementMode != MOVE_Flying && MovementMode != MOVE_None && !CachedWeatherWind.IsNearlyZero())
+	// The wind's drift (the weather plan's P4), from the move's air (the wind times the exposure, the same on the client
+	// and the server for the same move, G220); flying exempt as above. On the pawn's own motion and on a sustained fall
+	// only (a floor lost for a frame on rough voxel ground is not a fall; PerformMovement counts the time once a move): a
+	// standing pawn idles in any wind.
+	if (WindPushFactor > 0.f && MovementMode != MOVE_Flying && MovementMode != MOVE_None && !MoveWindAir.IsNearlyZero())
 	{
-		WindDrift = ComputeWindDrift(CachedWeatherWind, WindPushFactor, CachedWeatherExposure, static_cast<float>(Velocity.Size()), GetMaxSpeed(),
-			WindAirborneSeconds >= WindAirborneDelay);
+		WindDrift = ComputeWindDrift(MoveWindAir, WindPushFactor, 1.f, static_cast<float>(Velocity.Size()), GetMaxSpeed(),
+			IsFalling() && WindAirborneSeconds >= WindAirborneDelay);
 		Velocity += WindDrift;
 	}
 }
@@ -812,6 +1012,9 @@ void UVCMovementComponent::UpdateVoxelTerrainContext()
 		const FWorldWeatherConditions Conditions = Weather->GetConditionsAt(Owner->GetActorLocation(), Owner);
 		CachedWeatherWind = Conditions.WindVector;
 		CachedWeatherExposure = Conditions.Exposure;
+		// The wind without the gust: the server's envelope for a client's air (G220).
+		CachedWeatherMeanWind = UWorldWeatherMath::WindVector(Conditions.Front.WindSpeed, Conditions.Front.WindAzimuth, Conditions.Up, 0.f, 0.0);
+		CachedWeatherGustiness = Conditions.Front.Gustiness;
 		CachedWeatherWetness = Conditions.Wetness;
 		CachedWeatherTemperatureC = Conditions.TemperatureC;
 		// The wet level (P5): what falls on the pawn, by the real time between reads (the first read is a step of nothing).
