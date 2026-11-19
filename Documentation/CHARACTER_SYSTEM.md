@@ -328,7 +328,12 @@ again with a line trace, and keeps a pawn grounded for `FloorGraceDuration` when
 re-mesh).
 
 - **Terrain context.** `FVCTerrainContext` (surface type, material, friction, water depth, chunk) is refreshed every
-  `TerrainCacheDuration` (0.1 s) and at once when an edit touches the pawn's chunk. `EVCSurfaceType` sets ground
+  `TerrainCacheDuration` (0.1 s) and at once when an edit touches the pawn's chunk. The surface type is the voxel
+  material's surface class in the world's material table (`MaterialIDToSurfaceType` with
+  `UVoxelChunkManager::GetMaterialTable`, `SurfaceClassToSurfaceType`; VoxelWorlds' Material System, "Surface Class";
+  G247, 2026-11-19): the registry's defaults carry the classes this plugin once kept in a table by ID, and an atlas
+  classes the materials it adds (the demo's road Stone, its trail Dirt), the same on a server and a client; a material
+  with none is `Default`. Test `VoxelCharacter.Movement.SurfaceClass`. `EVCSurfaceType` sets ground
   friction (`GetSurfaceFriction`, times `VoxelSurfaceGripMultiplier`). The context and `IsPositionUnderwater` read the
   voxel with its edits (`UVoxelChunkManager::GetVoxelAt`; G86, 2026-11-02): a dig under the sea floods in the edit layer
   (VoxelWorlds' water propagation), and a pawn in it swims and the camera in it gets the underwater post-process. Test

@@ -55,7 +55,6 @@ namespace VCCombatTestHelpers
 	}
 }
 
-using namespace VCCombatTestHelpers;
 
 #define VC_COMBAT_FLAGS (EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
@@ -66,6 +65,7 @@ using namespace VCCombatTestHelpers;
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCombat_HostilityRule, "VoxelCharacter.Combat.HostilityRule", VC_COMBAT_FLAGS)
 bool FVCCombat_HostilityRule::RunTest(const FString& Parameters)
 {
+	using namespace VCCombatTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	using namespace CGFGameplayTags;
 	TestTrue(TEXT("Player vs Monster hostile"), UCGFCombatStatics::AreHostileFactions(Faction_Player, Faction_Monster));
 	TestTrue(TEXT("Monster vs Player hostile"), UCGFCombatStatics::AreHostileFactions(Faction_Monster, Faction_Player));
@@ -80,6 +80,7 @@ bool FVCCombat_HostilityRule::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCombat_DamageFormula, "VoxelCharacter.Combat.DamageFormula", VC_COMBAT_FLAGS)
 bool FVCCombat_DamageFormula::RunTest(const FString& Parameters)
 {
+	using namespace VCCombatTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	TestEqual(TEXT("Base + AP - Def"), UVCDamageExecution::ComputeDamage(10.f, 2.f, 3.f, false), 9.f);
 	TestEqual(TEXT("Floors at zero"), UVCDamageExecution::ComputeDamage(2.f, 0.f, 10.f, false), 0.f);
 	TestEqual(TEXT("Pure ignores both"), UVCDamageExecution::ComputeDamage(10.f, 2.f, 3.f, true), 10.f);
@@ -95,6 +96,7 @@ bool FVCCombat_DamageFormula::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCombat_DamageReducesHealth, "VoxelCharacter.Combat.DamageReducesHealth", VC_COMBAT_FLAGS)
 bool FVCCombat_DamageReducesHealth::RunTest(const FString& Parameters)
 {
+	using namespace VCCombatTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FWorldHarness H;
 	AVCNPCCharacterBase* Attacker = SpawnCombatant(H.World, CGFGameplayTags::Faction_Player, 100.f, 2.f, 0.f);
 	AVCNPCCharacterBase* Target = SpawnCombatant(H.World, CGFGameplayTags::Faction_Monster, 100.f, 0.f, 3.f, EVCOutOfHealthPolicy::Die, FVector(500, 0, 0));
@@ -112,6 +114,7 @@ bool FVCCombat_DamageReducesHealth::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCombat_PureIgnoresDefense, "VoxelCharacter.Combat.PureIgnoresDefense", VC_COMBAT_FLAGS)
 bool FVCCombat_PureIgnoresDefense::RunTest(const FString& Parameters)
 {
+	using namespace VCCombatTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FWorldHarness H;
 	AVCNPCCharacterBase* Attacker = SpawnCombatant(H.World, CGFGameplayTags::Faction_Player, 100.f, 2.f, 0.f);
 	AVCNPCCharacterBase* Target = SpawnCombatant(H.World, CGFGameplayTags::Faction_Monster, 100.f, 0.f, 3.f, EVCOutOfHealthPolicy::Die, FVector(500, 0, 0));
@@ -125,6 +128,7 @@ bool FVCCombat_PureIgnoresDefense::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCombat_SelfAppliedIgnoresAttackPower, "VoxelCharacter.Combat.SelfAppliedIgnoresAttackPower", VC_COMBAT_FLAGS)
 bool FVCCombat_SelfAppliedIgnoresAttackPower::RunTest(const FString& Parameters)
 {
+	using namespace VCCombatTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FWorldHarness H;
 	// A hazard with no instigator applies the spec from the target's own ASC; the target's
 	// attack power must not inflate the damage it takes.
@@ -140,6 +144,7 @@ bool FVCCombat_SelfAppliedIgnoresAttackPower::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCombat_HazardHitsNeutral, "VoxelCharacter.Combat.HazardHitsNeutral", VC_COMBAT_FLAGS)
 bool FVCCombat_HazardHitsNeutral::RunTest(const FString& Parameters)
 {
+	using namespace VCCombatTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FWorldHarness H;
 	AVCNPCCharacterBase* Target = SpawnCombatant(H.World, CGFGameplayTags::Faction_Neutral, 100.f, 0.f, 0.f);
 	if (!Target) { AddError(TEXT("Spawn failed")); return false; }
@@ -153,6 +158,7 @@ bool FVCCombat_HazardHitsNeutral::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCombat_InvulnerableRejected, "VoxelCharacter.Combat.InvulnerableRejected", VC_COMBAT_FLAGS)
 bool FVCCombat_InvulnerableRejected::RunTest(const FString& Parameters)
 {
+	using namespace VCCombatTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FWorldHarness H;
 	AVCNPCCharacterBase* Attacker = SpawnCombatant(H.World, CGFGameplayTags::Faction_Player, 100.f, 0.f, 0.f);
 	AVCNPCCharacterBase* Target = SpawnCombatant(H.World, CGFGameplayTags::Faction_Monster, 100.f, 0.f, 0.f, EVCOutOfHealthPolicy::Die, FVector(500, 0, 0));
@@ -171,6 +177,7 @@ bool FVCCombat_InvulnerableRejected::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCombat_FriendlyFireRejected, "VoxelCharacter.Combat.FriendlyFireRejected", VC_COMBAT_FLAGS)
 bool FVCCombat_FriendlyFireRejected::RunTest(const FString& Parameters)
 {
+	using namespace VCCombatTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FWorldHarness H;
 	AVCNPCCharacterBase* Attacker = SpawnCombatant(H.World, CGFGameplayTags::Faction_Monster, 100.f, 0.f, 0.f);
 	AVCNPCCharacterBase* Target = SpawnCombatant(H.World, CGFGameplayTags::Faction_Monster, 100.f, 0.f, 0.f, EVCOutOfHealthPolicy::Die, FVector(500, 0, 0));
@@ -190,6 +197,7 @@ bool FVCCombat_FriendlyFireRejected::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCombat_LethalHitKillsOnce, "VoxelCharacter.Combat.LethalHitKillsOnce", VC_COMBAT_FLAGS)
 bool FVCCombat_LethalHitKillsOnce::RunTest(const FString& Parameters)
 {
+	using namespace VCCombatTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FWorldHarness H;
 	AVCNPCCharacterBase* Attacker = SpawnCombatant(H.World, CGFGameplayTags::Faction_Player, 100.f, 0.f, 0.f);
 	AVCNPCCharacterBase* Target = SpawnCombatant(H.World, CGFGameplayTags::Faction_Monster, 50.f, 0.f, 0.f, EVCOutOfHealthPolicy::Die, FVector(500, 0, 0));
@@ -209,6 +217,7 @@ bool FVCCombat_LethalHitKillsOnce::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCombat_DownedPolicyRecoverable, "VoxelCharacter.Combat.DownedPolicyRecoverable", VC_COMBAT_FLAGS)
 bool FVCCombat_DownedPolicyRecoverable::RunTest(const FString& Parameters)
 {
+	using namespace VCCombatTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FWorldHarness H;
 	AVCNPCCharacterBase* Attacker = SpawnCombatant(H.World, CGFGameplayTags::Faction_Player, 100.f, 0.f, 0.f);
 	AVCNPCCharacterBase* Target = SpawnCombatant(H.World, CGFGameplayTags::Faction_Monster, 50.f, 0.f, 0.f, EVCOutOfHealthPolicy::Downed, FVector(500, 0, 0));
@@ -244,6 +253,7 @@ bool FVCCombat_DownedPolicyRecoverable::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCombat_NoTargetRejected, "VoxelCharacter.Combat.NoTargetRejected", VC_COMBAT_FLAGS)
 bool FVCCombat_NoTargetRejected::RunTest(const FString& Parameters)
 {
+	using namespace VCCombatTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FWorldHarness H;
 	AActor* Plain = H.World->SpawnActor<AActor>();
 	TestEqual(TEXT("Plain actor"), UVCCombatStatics::ApplyDamageToActor(Plain, Hit(nullptr, 10.f)), ECGFDamageResult::Rejected_NoTarget);

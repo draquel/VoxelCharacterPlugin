@@ -117,7 +117,6 @@ namespace VCArrowTestHelpers
 	}
 }
 
-using namespace VCArrowTestHelpers;
 
 #define VC_ARROW_FLAGS (EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
@@ -128,6 +127,7 @@ using namespace VCArrowTestHelpers;
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCArrow_GravityRule, "VoxelCharacter.Combat.Arrow.GravityRule", VC_ARROW_FLAGS)
 bool FVCArrow_GravityRule::RunTest(const FString& Parameters)
 {
+	using namespace VCArrowTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	const float G = -980.f;
 	const FVoxelWorldBounds Plane;
 	TestEqual(TEXT("A plane: the engine's -Z"), UVCArrowMovementComponent::ComputeGravityAcceleration(Plane, FVector(5000, -300, 900), G), FVector(0, 0, G));
@@ -156,6 +156,7 @@ bool FVCArrow_GravityRule::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCArrow_WindRule, "VoxelCharacter.Combat.Arrow.WindRule", VC_ARROW_FLAGS)
 bool FVCArrow_WindRule::RunTest(const FString& Parameters)
 {
+	using namespace VCArrowTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	const FVector V(6000, 0, 0);
 	const FVector Heading(1, 0, 0);
 	const FVector Up(0, 0, 1);
@@ -196,6 +197,7 @@ bool FVCArrow_WindRule::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCArrow_PlaneArc, "VoxelCharacter.Combat.Arrow.PlaneArc", VC_ARROW_FLAGS)
 bool FVCArrow_PlaneArc::RunTest(const FString& Parameters)
 {
+	using namespace VCArrowTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FArrowWorld H;
 	const FVector Start(0, 0, 10000);
 	AVCArrowProjectile* Arrow = SpawnArrow(H.World, nullptr, Start);
@@ -221,6 +223,7 @@ bool FVCArrow_PlaneArc::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCArrow_PlanetFall, "VoxelCharacter.Combat.Arrow.PlanetFall", VC_ARROW_FLAGS)
 bool FVCArrow_PlanetFall::RunTest(const FString& Parameters)
 {
+	using namespace VCArrowTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FArrowWorld H;
 	const FVector Centre(0, 0, 0);
 	const double R = 250000.0;
@@ -277,6 +280,7 @@ bool FVCArrow_PlanetFall::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCArrow_HitsPawn, "VoxelCharacter.Combat.Arrow.HitsPawn", VC_ARROW_FLAGS)
 bool FVCArrow_HitsPawn::RunTest(const FString& Parameters)
 {
+	using namespace VCArrowTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FArrowWorld H;
 	AVCNPCCharacterBase* Shooter = SpawnArrowTarget(H.World, CGFGameplayTags::Faction_Player, FVector(0, 0, 0));
 	AVCNPCCharacterBase* Target = SpawnArrowTarget(H.World, CGFGameplayTags::Faction_Monster, FVector(800, 0, 0));
@@ -299,6 +303,7 @@ bool FVCArrow_HitsPawn::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCArrow_Sticks, "VoxelCharacter.Combat.Arrow.Sticks", VC_ARROW_FLAGS)
 bool FVCArrow_Sticks::RunTest(const FString& Parameters)
 {
+	using namespace VCArrowTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FArrowWorld H;
 	const FVector Extent(50, 300, 300);
 	AActor* StaticWall = SpawnArrowWall(H.World, FVector(1000, 0, 1000), Extent, EComponentMobility::Static);
@@ -339,6 +344,7 @@ bool FVCArrow_Sticks::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCArrow_DamageAndFactions, "VoxelCharacter.Combat.Arrow.DamageAndFactions", VC_ARROW_FLAGS)
 bool FVCArrow_DamageAndFactions::RunTest(const FString& Parameters)
 {
+	using namespace VCArrowTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FArrowWorld H;
 	AVCNPCCharacterBase* Shooter = SpawnArrowTarget(H.World, CGFGameplayTags::Faction_Player, FVector(0, 0, 0));
 	AVCNPCCharacterBase* Monster = SpawnArrowTarget(H.World, CGFGameplayTags::Faction_Monster, FVector(800, 0, 0));

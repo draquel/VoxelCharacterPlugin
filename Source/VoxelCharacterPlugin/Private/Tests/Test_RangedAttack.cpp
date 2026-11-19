@@ -197,13 +197,13 @@ namespace VCRangedTestHelpers
 	}
 }
 
-using namespace VCRangedTestHelpers;
 
 #define VC_RANGED_FLAGS (EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCRanged_DrawRules, "VoxelCharacter.Combat.Ranged.DrawRules", VC_RANGED_FLAGS)
 bool FVCRanged_DrawRules::RunTest(const FString& Parameters)
 {
+	using namespace VCRangedTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FRangedWorld W;
 	if (!TestNotNull(TEXT("The item database"), W.Database))
 	{
@@ -237,6 +237,7 @@ bool FVCRanged_DrawRules::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCRanged_OneArrowPerShot, "VoxelCharacter.Combat.Ranged.OneArrowPerShot", VC_RANGED_FLAGS)
 bool FVCRanged_OneArrowPerShot::RunTest(const FString& Parameters)
 {
+	using namespace VCRangedTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FRangedWorld W;
 	if (!TestNotNull(TEXT("The item database"), W.Database))
 	{
@@ -298,6 +299,7 @@ bool FVCRanged_OneArrowPerShot::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCRanged_ReleaseWithoutArrowRefused, "VoxelCharacter.Combat.Ranged.ReleaseWithoutArrowRefused", VC_RANGED_FLAGS)
 bool FVCRanged_ReleaseWithoutArrowRefused::RunTest(const FString& Parameters)
 {
+	using namespace VCRangedTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FRangedWorld W;
 	if (!TestNotNull(TEXT("The item database"), W.Database))
 	{
@@ -332,6 +334,7 @@ bool FVCRanged_ReleaseWithoutArrowRefused::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCRanged_FacesAimWhileDrawn, "VoxelCharacter.Combat.Ranged.FacesAimWhileDrawn", VC_RANGED_FLAGS)
 bool FVCRanged_FacesAimWhileDrawn::RunTest(const FString& Parameters)
 {
+	using namespace VCRangedTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FRangedWorld W;
 	const FTransform Stand(FVector(0, 0, 1000));
 	AVCCharacterBase* Player = W.World->SpawnActorDeferred<AVCCharacterBase>(AVCCharacterBase::StaticClass(), Stand, nullptr, nullptr,
@@ -359,6 +362,7 @@ bool FVCRanged_FacesAimWhileDrawn::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCRanged_AimCameraLocation, "VoxelCharacter.Combat.AimCameraLocation", VC_RANGED_FLAGS)
 bool FVCRanged_AimCameraLocation::RunTest(const FString& Parameters)
 {
+	using namespace VCRangedTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	const FVector Actor(1000.0, -500.0, 200.0);
 	const FVector Offset(0.0, 60.0, 55.0);
 	const float Arm = 150.f;
@@ -422,6 +426,7 @@ namespace VCRangedTestHelpers
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCRanged_LaunchAlongAimRay, "VoxelCharacter.Combat.LaunchAlongAimRay", VC_RANGED_FLAGS)
 bool FVCRanged_LaunchAlongAimRay::RunTest(const FString& Parameters)
 {
+	using namespace VCRangedTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	// Pure, with CharacterTest's numbers: the aim camera 56 uu right of the nock and some 225 uu behind it.
 	const FVector Origin(-1649.0, -938.0, 137.0);
 	const FVector Ray = FVector(1.0, -0.013, 0.052).GetSafeNormal();
@@ -477,6 +482,7 @@ bool FVCRanged_LaunchAlongAimRay::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCMelee_HoldsMeleeWeapon, "VoxelCharacter.Combat.Melee.HoldsMeleeWeapon", VC_RANGED_FLAGS)
 bool FVCMelee_HoldsMeleeWeapon::RunTest(const FString& Parameters)
 {
+	using namespace VCRangedTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FRangedWorld W;
 	if (!TestNotNull(TEXT("The item database"), W.Database))
 	{
@@ -519,6 +525,7 @@ bool FVCMelee_HoldsMeleeWeapon::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCBlock_Rules, "VoxelCharacter.Combat.Block.Rules", VC_RANGED_FLAGS)
 bool FVCBlock_Rules::RunTest(const FString& Parameters)
 {
+	using namespace VCRangedTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	const FVector Forward(1, 0, 0);
 	const FVector Up(0, 0, 1);
 	TestTrue(TEXT("Straight ahead is in the arc"), UVCBlockAbility::IsInBlockArc(Forward, Up, FVector(100, 0, 0), 60.f));
@@ -552,6 +559,7 @@ bool FVCBlock_Rules::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCBlock_GuardTakesFrontHits, "VoxelCharacter.Combat.Block.GuardTakesFrontHits", VC_RANGED_FLAGS)
 bool FVCBlock_GuardTakesFrontHits::RunTest(const FString& Parameters)
 {
+	using namespace VCRangedTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FRangedWorld W;
 	if (!TestNotNull(TEXT("The item database"), W.Database))
 	{
