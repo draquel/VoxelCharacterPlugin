@@ -874,6 +874,13 @@ protected:
 	virtual void NotifyControllerChanged() override;
 
 	/**
+	 * The engine's restart of a possessed pawn (the server's possession, the owning client's PawnClientRestart) sets the
+	 * default movement mode; a pawn whose terrain wait holds it stays frozen (G205: it fell through the ground it waited
+	 * for, its collision off).
+	 */
+	virtual void Restart() override;
+
+	/**
 	 * The underwater view tint, on the pawn a local player controller views through and nowhere else (G133): its
 	 * volume is unbound and would tint the local view for a swimming remote player or NPC. Null on every other pawn.
 	 */
@@ -1059,6 +1066,36 @@ protected:
 
 	/** Elapsed time waiting for terrain (seconds). Used for timeout fallback. */
 	float TerrainWaitElapsed = 0.f;
+
+	/**
+	 * Server: the owning client reported its own terrain wait done (Server_ReportTerrainReady). A remote player's pawn is
+	 * released on the server only once the client has collision under it too, or the release would move the client's
+	 * pawn, still waiting with its collision off, onto ground the client has not cooked (G205).
+	 */
+	bool bOwningClientTerrainReady = false;
+
+	/** Server: the wait for the owning client's terrain was logged (once a wait). */
+	bool bLoggedOwningClientWait = false;
+
+	/**
+	 * Server: whether this wait still holds the pawn for its owning client's terrain: a remote player's pawn whose
+	 * client has not reported (Server_ReportTerrainReady), before the wait's timeout. Never for a local or AI pawn.
+	 * @return True while the server keeps the pawn frozen for the client
+	 */
+	bool IsWaitingForOwningClientTerrain() const;
+
+	/**
+	 * The owning client's terrain wait placed its pawn (G205): the server releases its own copy once its wait is done as
+	 * well.
+	 */
+	UFUNCTION(Server, Reliable)
+	void Server_ReportTerrainReady();
+
+	/** Client: this pawn's report was sent (once a pawn). */
+	bool bReportedTerrainReady = false;
+
+	/** Client: send Server_ReportTerrainReady once the owning client's own pawn is placed (its wait done). */
+	void ReportTerrainReadyToServer();
 
 	/** Max seconds to wait for terrain before falling back to line trace placement. */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Spawn")

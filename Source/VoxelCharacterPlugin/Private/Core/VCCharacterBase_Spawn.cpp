@@ -60,7 +60,54 @@ void AVCCharacterBase::FreezeForTerrainWait()
 	SetActorEnableCollision(false);
 	bIsWaitingForTerrain = true;
 	TerrainWaitElapsed = 0.f;
+	bLoggedOwningClientWait = false;
 	UE_LOG(LogVoxelCharacter, Log, TEXT("Waiting for terrain collision before placing character..."));
+}
+
+void AVCCharacterBase::Restart()
+{
+	Super::Restart();
+	// ACharacter::Restart sets the default movement mode (walking, falling where no floor is found): on the server at
+	// possession, on the owning client at PawnClientRestart, both after BeginPlay began the wait. A pawn with its
+	// collision off then fell through the ground it was waiting for, and once the wait ran longer than its trace reach
+	// (50,000 uu, some 13 s of falling) it was never put back (G205). The wait holds it until it places it.
+	if (bIsWaitingForTerrain)
+	{
+		if (UCharacterMovementComponent* Move = GetCharacterMovement())
+		{
+			Move->StopMovementImmediately();
+			Move->DisableMovement();
+		}
+	}
+	else
+	{
+		// A client whose wait placed the pawn before it became the client's own.
+		ReportTerrainReadyToServer();
+	}
+}
+
+bool AVCCharacterBase::IsWaitingForOwningClientTerrain() const
+{
+	if (!HasAuthority() || bOwningClientTerrainReady || TerrainWaitElapsed >= TerrainWaitTimeout)
+	{
+		return false;
+	}
+	// A remote player's pawn only: a local player (standalone, a listen server's host) and an AI have no other machine.
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	return PC && !PC->IsLocalController();
+}
+
+void AVCCharacterBase::Server_ReportTerrainReady_Implementation()
+{
+	bOwningClientTerrainReady = true;
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: the owning client's terrain wait is done (%.1fs into the server's)%s"),
+		*GetName(), TerrainWaitElapsed, bIsWaitingForTerrain ? TEXT("") : TEXT(", the server's had placed it"));
+	// The server's own wait done and holding only for the client: release now (an exact-location resume keeps its
+	// floor probe, which the tick polls every second).
+	if (bIsWaitingForTerrain && PendingTerrainChunks.Num() == 0 && !bResumeAtExactLocation)
+	{
+		PlaceOnTerrainAndResume();
+	}
 }
 
 void AVCCharacterBase::InitiateChunkBasedWait()
@@ -129,8 +176,9 @@ void AVCCharacterBase::InitiateChunkBasedWait()
 	}
 
 	UE_LOG(LogVoxelCharacter, Log,
-		TEXT("InitiateChunkBasedWait: Bound to CollisionManager %p in world '%s' (PIE=%d)"),
-		ColMgr, *GetWorld()->GetName(), GetWorld()->IsPlayInEditor());
+		TEXT("InitiateChunkBasedWait: %s (role %d) at %s bound to CollisionManager %p in world '%s' (PIE=%d)"),
+		*GetName(), static_cast<int32>(GetLocalRole()), *GetActorLocation().ToCompactString(), ColMgr, *GetWorld()->GetName(),
+		GetWorld()->IsPlayInEditor());
 
 	// Convert character world position to chunk coordinate
 	const FVector CharPos = GetActorLocation();
@@ -212,6 +260,21 @@ static constexpr float ExactFloorGraceSeconds = 15.f;
 
 void AVCCharacterBase::PlaceOnTerrainAndResume()
 {
+	// A remote player's pawn waits on the server for its client's own wait too: released before, the server's correction
+	// moves the client's pawn, still frozen with its collision off, into walking over ground the client has not cooked
+	// (G205). The tick keeps the wait (and its timeout); Server_ReportTerrainReady releases it.
+	if (IsWaitingForOwningClientTerrain())
+	{
+		bIsWaitingForTerrain = true;
+		if (!bLoggedOwningClientWait)
+		{
+			bLoggedOwningClientWait = true;
+			UE_LOG(LogVoxelCharacter, Log, TEXT("%s: terrain ready on the server after %.1fs; waiting for the owning client's."),
+				*GetName(), TerrainWaitElapsed);
+		}
+		return;
+	}
+
 	// Local up: +Z, or the radius on a planet (the movement component's gravity, set when the wait began).
 	const FVector Up = FVCGravityFrame::GetUp(GetCharacterMovement());
 	if (bResumeAtExactLocation)
@@ -329,10 +392,26 @@ void AVCCharacterBase::PlaceOnTerrainAndResume()
 	TerrainRecoveryAttempts = 0;
 
 	UE_LOG(LogVoxelCharacter, Log,
-		TEXT("Terrain ready — ActorCollision=%s, CapsuleCollision=%s, MovementMode=%d"),
+		TEXT("Terrain ready — %s (role %d) at %s, ActorCollision=%s, CapsuleCollision=%s, MovementMode=%d"),
+		*GetName(), static_cast<int32>(GetLocalRole()), *GetActorLocation().ToCompactString(),
 		GetActorEnableCollision() ? TEXT("Enabled") : TEXT("DISABLED"),
 		GetCapsuleComponent() ? (*StaticEnum<ECollisionEnabled::Type>()->GetNameStringByValue(static_cast<int64>(GetCapsuleComponent()->GetCollisionEnabled()))) : TEXT("?"),
 		static_cast<int32>(GetCharacterMovement()->MovementMode.GetValue()));
+
+	// The owning client tells the server its pawn has ground here (G205).
+	ReportTerrainReadyToServer();
+}
+
+void AVCCharacterBase::ReportTerrainReadyToServer()
+{
+	// The owning client's own pawn only, once a pawn; a pawn that became the client's after its wait (PawnClientRestart
+	// after the placement) reports from Restart.
+	if (bReportedTerrainReady || HasAuthority() || GetLocalRole() != ROLE_AutonomousProxy || bIsWaitingForTerrain)
+	{
+		return;
+	}
+	bReportedTerrainReady = true;
+	Server_ReportTerrainReady();
 }
 
 // ---------------------------------------------------------------------------
