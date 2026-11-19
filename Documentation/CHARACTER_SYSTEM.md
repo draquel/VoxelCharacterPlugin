@@ -1341,7 +1341,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 
 | Data | Authority | Replication |
 |---|---|---|
-| Movement | Server (character movement) | Built-in prediction; sprint and swim-rise as saved-move flags; planet gravity recomputed on both sides |
+| Movement | Server (character movement) | Built-in prediction; sprint and swim-rise as saved-move flags; planet gravity recomputed on both sides; the server simulates a move no longer than the client did (the project's `p.NetServerMaxMoveDeltaTimeScalar=1`: at the engine's 1.75 a frame over 0.125 s walked the server's pawn further and was corrected, G240); `vc.Net.TraceMoves` logs each move's inputs on both machines beside the corrections |
 | Voxel edits, block breaks | Server (`Server_RequestVoxelModification`, `Server_BeginBlockBreak`) | Edits are not replicated (VoxelWorlds); the client predicts cracks only |
 | Inventory, equipment | Server (the gameplay plugins' components on the pawn) | Their own replication |
 | Attributes, effects, abilities | Server (ASC on the player state; an NPC's on the NPC) | GAS replication; prediction keys for activation |
@@ -1361,7 +1361,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 ## Console variables
 
 `vc.*` groups: `vc.AI.*` (NPC AI), `vc.Buoyancy.Bodies` (dead bodies float), `vc.Anim.*` (the IK, pace and motion-matching switches, the trajectory tuning, the debug draw), `vc.Dig.*` (the cubic break times' scale, the highlight), `vc.Minimap.*` (the
-minimap's refill stats), `vc.Move.*` (the player's movement table: the preset, one value, the print), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
+minimap's refill stats), `vc.Move.*` (the player's movement table: the preset, one value, the print), `vc.Net.TraceMoves` (every networked move's inputs on the client and the server, beside the corrections), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
 and `ToggleVoxelDebug` are on the controller and the character. Every name, default and meaning:
 `Documentation/EDITOR_CONSOLE_GUIDE.md` §4 at the project root. The `vox.*` QA commands that drive this plugin's pawn
 (`vox.TP`, `vox.AutoRun`, `vox.Fly`, `vox.Mine`, `vox.Chop`, `vox.EditMode`, `vox.Shoot`, ...) live in the game module.
