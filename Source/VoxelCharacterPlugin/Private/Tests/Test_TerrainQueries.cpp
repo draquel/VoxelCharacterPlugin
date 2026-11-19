@@ -279,6 +279,9 @@ bool FVCTerrain_WaitHoldsThroughRestart::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Restart: still no velocity"), Move->Velocity.IsNearlyZero());
 
 	Plane.World->DestroyActor(Character);
+	// The world began play here: end it before the helper destroys the world (the manager's EndPlay shuts it down, and
+	// the helper's Stop finds it shut down).
+	Plane.World->EndPlay(EEndPlayReason::Quit);
 	return true;
 }
 
