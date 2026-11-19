@@ -210,7 +210,7 @@ bool FVCRanged_DrawRules::RunTest(const FString& Parameters)
 		return false;
 	}
 	UItemDefinition* Bow = DefineBow(W);
-	UItemDefinition* Arrow = W.Define(TEXT("RangedTestArrow"), 50, FGameplayTagContainer(AmmoTag()));
+	UItemDefinition* Arrow = W.Define(TEXT("RangedTestArrow"), 50, FGameplayTagContainer(VCRangedTestHelpers::AmmoTag()));
 	FShooter S = SpawnShooter(W.World, FVector(0, 0, 1000));
 	if (!S.NPC || !S.ASC) { AddError(TEXT("Spawn failed")); return false; }
 
@@ -243,7 +243,7 @@ bool FVCRanged_OneArrowPerShot::RunTest(const FString& Parameters)
 		return false;
 	}
 	UItemDefinition* Bow = DefineBow(W);
-	UItemDefinition* Arrow = W.Define(TEXT("RangedTestArrow"), 50, FGameplayTagContainer(AmmoTag()));
+	UItemDefinition* Arrow = W.Define(TEXT("RangedTestArrow"), 50, FGameplayTagContainer(VCRangedTestHelpers::AmmoTag()));
 	FShooter S = SpawnShooter(W.World, FVector(0, 0, 1000));
 	if (!S.NPC || !S.ASC) { AddError(TEXT("Spawn failed")); return false; }
 	S.Equipment->TryEquipToSlot(W.Database->CreateItemInstance(Bow->GetPrimaryAssetId()), CGFGameplayTags::Equipment_Slot_MainHand);
@@ -304,7 +304,7 @@ bool FVCRanged_ReleaseWithoutArrowRefused::RunTest(const FString& Parameters)
 		return false;
 	}
 	UItemDefinition* Bow = DefineBow(W);
-	UItemDefinition* Arrow = W.Define(TEXT("RangedTestArrow"), 50, FGameplayTagContainer(AmmoTag()));
+	UItemDefinition* Arrow = W.Define(TEXT("RangedTestArrow"), 50, FGameplayTagContainer(VCRangedTestHelpers::AmmoTag()));
 	FShooter S = SpawnShooter(W.World, FVector(0, 0, 1000));
 	if (!S.NPC || !S.ASC) { AddError(TEXT("Spawn failed")); return false; }
 	S.Equipment->TryEquipToSlot(W.Database->CreateItemInstance(Bow->GetPrimaryAssetId()), CGFGameplayTags::Equipment_Slot_MainHand);

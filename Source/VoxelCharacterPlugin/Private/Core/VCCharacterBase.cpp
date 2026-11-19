@@ -36,6 +36,9 @@
 #include "Input/VCInputConfig.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "PhysicsEngine/BodyInstance.h"
+#include "PhysicsEngine/BodySetup.h"
 #include "TimerManager.h"
 #include "AbilitySystemComponent.h"
 #include "EnhancedInputComponent.h"
@@ -433,7 +436,10 @@ void AVCCharacterBase::BeginPlay()
 	}
 
 	// --- Terrain Ready Spawn ---
-	if (bWaitForTerrain)
+	// Not for a dead body: one that becomes relevant to a client after the death arrives as a new actor, and the wait
+	// moved it to a spawn place, turned its collision off (its ragdoll's too: it fell through the ground) and placed it
+	// walking on the terrain later (G204).
+	if (bWaitForTerrain && !IsDeadBody())
 	{
 		FreezeForTerrainWait();
 		InitiateChunkBasedWait();
@@ -453,6 +459,7 @@ void AVCCharacterBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 	CachedCollisionManager.Reset();
 	PendingTerrainChunks.Empty();
+	ReleaseRagdollHold();
 
 	// A pawn destroyed, or a PIE stopped, during the blend into first person: the near plane goes back as it was
 	// found, so the process (the editor, the next PIE) does not keep this pawn's value (G192).
@@ -549,8 +556,8 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 		TickRadialRagdoll(GetMesh(), RagdollGravityDirection);
 	}
 	// A ragdoll in water floats: it rises to the surface and rests there (the water plan's W2B). Every machine runs
-	// its own, as it runs its own ragdoll.
-	if (USkeletalMeshComponent* Body = GetMesh(); Body && Body->IsSimulatingPhysics())
+	// its own, as it runs its own ragdoll, until the server's corpse freezes and a client takes its pose (G204).
+	if (USkeletalMeshComponent* Body = GetMesh(); Body && Body->IsSimulatingPhysics() && !bPlacingCorpsePose)
 	{
 		FVCRagdollBuoyancy::Get().Apply(Body, RagdollBuoyancy);
 	}
@@ -681,6 +688,8 @@ void AVCCharacterBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(AVCCharacterBase, bIsCorpse);
+	DOREPLIFETIME(AVCCharacterBase, CorpsePose);
+	DOREPLIFETIME(AVCCharacterBase, CorpseAppearance);
 	DOREPLIFETIME(AVCCharacterBase, bIsAiming);
 	DOREPLIFETIME(AVCCharacterBase, bArrowNocked);
 	DOREPLIFETIME(AVCCharacterBase, ArrowMesh);
@@ -827,6 +836,15 @@ void AVCCharacterBase::ApplyPlayerAppearance()
 	{
 		UE_LOG(LogVoxelCharacter, Warning, TEXT("%s: the appearance %s does not load (Scripts/setup_character_appearances.py builds it)"),
 			*GetName(), *PS->GetAppearance().ToString());
+	}
+	WearAppearance(Wanted);
+}
+
+void AVCCharacterBase::WearAppearance(const UVCCharacterAppearance* Wanted)
+{
+	if (!AppearanceComponent)
+	{
+		return;
 	}
 	AppearanceComponent->ApplyAppearance(Wanted);
 	bAppearanceApplied = true;
@@ -1283,6 +1301,9 @@ void AVCCharacterBase::BecomeCorpse()
 		return;
 	}
 	bIsCorpse = true;
+	// The body it wears, for a client it becomes relevant to later: the controller has let it go, and its player state
+	// with it (G204).
+	CorpseAppearance = TSoftObjectPtr<UVCCharacterAppearance>(FSoftObjectPath(AppearanceComponent ? AppearanceComponent->GetAppearance() : nullptr));
 	ApplyCorpseState();
 	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: kept as the player's corpse at %s."), *GetName(), *GetActorLocation().ToCompactString());
 }
@@ -1295,9 +1316,81 @@ void AVCCharacterBase::OnRep_IsCorpse()
 	}
 }
 
+void AVCCharacterBase::OnRep_CorpsePose()
+{
+	// The server's corpse froze: this machine's copy goes where it lies (G204), whether it was still simulating, had
+	// frozen on its own, or was held for the terrain.
+	if (CorpsePose.Num() > 0)
+	{
+		PlaceCorpsePose();
+	}
+}
+
+bool AVCCharacterBase::IsDeadBody() const
+{
+	return bIsCorpse || (CombatComponent && ICGFDamageableInterface::Execute_IsDead(CombatComponent));
+}
+
+void AVCCharacterBase::StopTerrainWaitForBody()
+{
+	if (!bIsWaitingForTerrain)
+	{
+		return;
+	}
+	if (UVoxelCollisionManager* ColMgr = CachedCollisionManager.Get(); ColMgr && CollisionReadyDelegateHandle.IsValid())
+	{
+		ColMgr->OnCollisionReady.Remove(CollisionReadyDelegateHandle);
+	}
+	CollisionReadyDelegateHandle.Reset();
+	PendingTerrainChunks.Empty();
+	bIsWaitingForTerrain = false;
+	// The wait had turned the actor's collision off and may have moved it to a spawn place: a client's copy goes back
+	// to where the server's actor is.
+	SetActorEnableCollision(true);
+	if (GetLocalRole() == ROLE_SimulatedProxy)
+	{
+		SetActorLocation(FRepMovement::RebaseOntoLocalOrigin(GetReplicatedMovement().Location, this), false, nullptr, ETeleportType::TeleportPhysics);
+	}
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: a dead body's terrain wait ended unplaced, at %s."), *GetName(), *GetActorLocation().ToCompactString());
+}
+
+void AVCCharacterBase::OnRep_CorpseAppearance()
+{
+	// A body put in the server's pose before its appearance came, or that kept its own ragdoll because the pose did not
+	// fit the class's own body: dressed now, it takes the pose again.
+	if (ApplyCorpseAppearance() && CorpsePose.Num() > 0)
+	{
+		bCorpsePoseRejected = false;
+		bCorpsePosePlaced = false;
+		PlaceCorpsePose();
+	}
+}
+
+bool AVCCharacterBase::ApplyCorpseAppearance()
+{
+	if (HasAuthority() || CorpseAppearance.IsNull() || !AppearanceComponent || GetPlayerState())
+	{
+		return false; // the server dressed it; a pawn with a player state is dressed from it
+	}
+	const UVCCharacterAppearance* Wanted = CorpseAppearance.LoadSynchronous();
+	if (!Wanted || AppearanceComponent->GetAppearance() == Wanted)
+	{
+		return false;
+	}
+	USkeletalMeshComponent* Body = GetMesh();
+	if (Body && Body->IsSimulatingPhysics())
+	{
+		Body->SetSimulatePhysics(false); // the new body's physics state is made for it
+	}
+	WearAppearance(Wanted);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: the corpse wears %s."), *GetName(), *Wanted->GetName());
+	return true;
+}
+
 void AVCCharacterBase::ApplyCorpseState()
 {
 	Tags.AddUnique(TEXT("Corpse"));
+	StopTerrainWaitForBody();
 	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
 	{
 		Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -1307,13 +1400,12 @@ void AVCCharacterBase::ApplyCorpseState()
 		Movement->DisableMovement();
 		Movement->SetComponentTickEnabled(false);
 	}
-	// A client that only now learns of the body (joined late) starts the ragdoll here.
-	USkeletalMeshComponent* Body = GetMesh();
-	if (Body && Body->GetPhysicsAsset() && !Body->IsSimulatingPhysics())
+	// A client that only now learns of the body (it became relevant after the death) starts the ragdoll here: in the
+	// server's pose when that came with it, else once the terrain's collision under it is cooked here (G204).
+	StartDeathRagdoll();
+	if (bPlacingCorpsePose || bCorpsePosePlaced)
 	{
-		Body->SetCollisionProfileName(TEXT("Ragdoll"));
-		Body->SetSimulatePhysics(true);
-		StartRadialRagdoll(Body, GetCharacterMovement(), RagdollGravityDirection);
+		return; // the placement freezes it (CheckCorpseSettled), or has
 	}
 	if (UWorld* World = GetWorld())
 	{
@@ -1331,6 +1423,56 @@ void AVCCharacterBase::CheckCorpseSettled()
 	{
 		return;
 	}
+	if (bPlacingCorpsePose)
+	{
+		// The bones take the bodies' places in the physics step after the hold began; frozen sooner, the body would keep
+		// the pose it had before (a timer can fire in the frame it was set in when that frame is long).
+		if (GFrameCounter < CorpsePlacedFrame + 2)
+		{
+			return;
+		}
+		// A client's copy: something rebuilt the bodies after they were put in the pose (the corpse's appearance swaps
+		// the mesh, whose physics state is made again from the bones): put them there again.
+		const FBodyInstance* Root = Body->GetBodyInstance();
+		const FVector RootAt = Root ? Root->GetUnrealWorldTransform().GetLocation() : FVector::ZeroVector;
+		const bool bBodiesOff = bCorpsePosePlaced && !HasAuthority() && CorpsePose.Num() > 0 && Root
+			&& (!Body->IsSimulatingPhysics() || FVector::Dist(RootAt, FVector(CorpsePose[0].Location)) > 1.0);
+		// The bones not yet where the bodies are: a mesh just swapped blends physics into the bones it requires, and
+		// it works those out at its next pose update, which a body nobody has drawn yet may not have had.
+		const FName RootBone = Root && Root->GetBodySetup() ? Root->GetBodySetup()->BoneName : NAME_None;
+		const bool bBonesOff = !RootBone.IsNone() && FVector::Dist(Body->GetBoneLocation(RootBone, EBoneSpaces::WorldSpace), RootAt) > 1.0;
+		// At most 30 holds, about a second: then frozen as it is, with a warning.
+		if ((bBodiesOff || bBonesOff) && ++CorpsePlaceRetries <= 30)
+		{
+			UE_LOG(LogVoxelCharacter, Log, TEXT("%s: the corpse's %s not in its pose before the freeze; held again (%d)."), *GetName(),
+				bBodiesOff ? TEXT("bodies are") : TEXT("bones are"), CorpsePlaceRetries);
+			if (!Body->bRequiredBonesUpToDate)
+			{
+				Body->RecalcRequiredBones(Body->GetPredictedLODLevel());
+			}
+			if (bBodiesOff)
+			{
+				Body->SetSimulatePhysics(true);
+				HoldInPose(&CorpsePose);
+			}
+			else
+			{
+				CorpsePlacedFrame = GFrameCounter;
+			}
+			return;
+		}
+		if (bBodiesOff || bBonesOff)
+		{
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("%s: the corpse's %s would not come to its pose; frozen as they are."), *GetName(),
+				bBodiesOff ? TEXT("bodies") : TEXT("bones"));
+		}
+		FreezeCorpse();
+		return;
+	}
+	if (RagdollHoldChunks.Num() > 0)
+	{
+		return; // held for the terrain: nothing to settle yet
+	}
 	if (Body->IsSimulatingPhysics())
 	{
 		const bool bCalm = Body->GetPhysicsLinearVelocity().Size() < 10.f;
@@ -1343,29 +1485,226 @@ void AVCCharacterBase::CheckCorpseSettled()
 		{
 			return;
 		}
+		// Still where it is for two frames, so the bones catch up with the bodies before the freeze keeps them (a body
+		// frozen on the timeout while it slid kept bones a physics step behind its bodies).
+		HoldInPose(nullptr);
+		return;
+	}
+	FreezeCorpse();
+}
+
+void AVCCharacterBase::FreezeCorpse()
+{
+	USkeletalMeshComponent* Body = GetMesh();
+	UWorld* World = GetWorld();
+	if (!Body || !World)
+	{
+		return;
+	}
+	World->GetTimerManager().ClearTimer(CorpseSettleTimer);
+	const bool bPlaced = bCorpsePosePlaced;
+	// The server's pose, read before the simulation stops, for the clients to put their copies in (G204): each machine
+	// simulated its own ragdoll and they came to rest apart (a metre on flat ground, more on a slope), while the query
+	// collision kept for item recovery is the server's.
+	if (HasAuthority() && bIsCorpse && Body->IsSimulatingPhysics())
+	{
+		CorpsePose.Reset(Body->Bodies.Num());
+		for (const FBodyInstance* Instance : Body->Bodies)
+		{
+			const FTransform Transform = Instance ? Instance->GetUnrealWorldTransform() : Body->GetComponentTransform();
+			FVCCorpseBodyPose& Pose = CorpsePose.AddDefaulted_GetRef();
+			Pose.Location = Transform.GetLocation();
+			Pose.Rotation = Transform.Rotator();
+		}
+		ForceNetUpdate();
 	}
 	// Freeze: stop updating the skeleton first so the bones keep the ragdoll pose, then stop simulating. The body
 	// then stays put even if the terrain under it unloads; it keeps query collision for later item recovery.
-	World->GetTimerManager().ClearTimer(CorpseSettleTimer);
 	Body->bNoSkeletonUpdate = true;
 	Body->SetSimulatePhysics(false);
 	Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: corpse settled and frozen."), *GetName());
+	RagdollGravityDirection = FVector::ZeroVector;
+	bPlacingCorpsePose = false;
+	const FBodyInstance* Root = Body->GetBodyInstance();
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: corpse %s and frozen, its root at %s."), *GetName(),
+		bPlaced ? TEXT("put in the server's pose") : HasAuthority() ? TEXT("settled (its pose recorded)") : TEXT("settled"),
+		Root ? *Root->GetUnrealWorldTransform().GetLocation().ToCompactString() : TEXT("(no body)"));
+}
+
+void AVCCharacterBase::StartDeathRagdoll()
+{
+	USkeletalMeshComponent* Body = GetMesh();
+	if (!Body || !Body->GetPhysicsAsset())
+	{
+		return;
+	}
+	// The server's corpse has frozen and its pose is here: no simulation of this machine's own.
+	if (CorpsePose.Num() > 0 && !HasAuthority() && !bCorpsePoseRejected)
+	{
+		if (!bCorpsePosePlaced)
+		{
+			PlaceCorpsePose();
+		}
+		return;
+	}
+	if (Body->IsSimulatingPhysics() || Body->bNoSkeletonUpdate)
+	{
+		return; // already simulating, or frozen
+	}
+	// Hold the ragdoll until this machine has the terrain's collision under it (G204): a body that became relevant to a
+	// client where its terrain was not cooked fell through the ground and the sea's bed.
+	TSet<FIntVector> Missing;
+	if (!HasRagdollGround(Missing))
+	{
+		const bool bAlreadyHeld = RagdollHoldChunks.Num() > 0;
+		RagdollHoldChunks = MoveTemp(Missing);
+		if (!bAlreadyHeld)
+		{
+			UE_LOG(LogVoxelCharacter, Log, TEXT("%s: ragdoll held at %s until %d chunk(s) under it have collision."),
+				*GetName(), *GetActorLocation().ToCompactString(), RagdollHoldChunks.Num());
+		}
+		return;
+	}
+	ReleaseRagdollHold();
+	Body->SetCollisionProfileName(TEXT("Ragdoll"));
+	Body->SetSimulatePhysics(true);
+	StartRadialRagdoll(Body, GetCharacterMovement(), RagdollGravityDirection);
+	// A corpse's settle wait counts from here, not from a hold before it.
+	if (const UWorld* World = GetWorld())
+	{
+		CorpseStartTime = World->GetTimeSeconds();
+		CorpseCalmChecks = 0;
+	}
+}
+
+bool AVCCharacterBase::HasRagdollGround(TSet<FIntVector>& OutMissing)
+{
+	OutMissing.Reset();
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
+	UVoxelCollisionManager* ColMgr = ChunkMgr ? ChunkMgr->GetCollisionManager() : nullptr;
+	if (!ColMgr)
+	{
+		return true; // no voxel world: the ground is the level's own
+	}
+	// The spawn wait's grid: a body lying on a chunk's border falls through the neighbour's ground, not its own.
+	for (const FIntVector& ChunkCoord : FVCTerrainQueryHelper::GetTerrainWaitChunks(*ChunkMgr, GetActorLocation(), TerrainWaitChunkRadius))
+	{
+		if (!ColMgr->HasCollision(ChunkCoord))
+		{
+			OutMissing.Add(ChunkCoord);
+			ColMgr->RequestCollision(ChunkCoord, 2000.f);
+		}
+	}
+	if (OutMissing.Num() > 0 && !RagdollHoldHandle.IsValid())
+	{
+		RagdollHoldManager = ColMgr;
+		RagdollHoldHandle = ColMgr->OnCollisionReady.AddUObject(this, &AVCCharacterBase::OnRagdollChunkCollisionReady);
+	}
+	return OutMissing.Num() == 0;
+}
+
+void AVCCharacterBase::OnRagdollChunkCollisionReady(const FIntVector& ChunkCoord)
+{
+	if (RagdollHoldChunks.Remove(ChunkCoord) > 0 && RagdollHoldChunks.Num() == 0)
+	{
+		UE_LOG(LogVoxelCharacter, Log, TEXT("%s: the terrain under the held ragdoll has collision; the ragdoll starts."), *GetName());
+		StartDeathRagdoll();
+	}
+}
+
+void AVCCharacterBase::ReleaseRagdollHold()
+{
+	if (UVoxelCollisionManager* ColMgr = RagdollHoldManager.Get(); ColMgr && RagdollHoldHandle.IsValid())
+	{
+		ColMgr->OnCollisionReady.Remove(RagdollHoldHandle);
+	}
+	RagdollHoldHandle.Reset();
+	RagdollHoldManager.Reset();
+	RagdollHoldChunks.Reset();
+}
+
+void AVCCharacterBase::PlaceCorpsePose()
+{
+	USkeletalMeshComponent* Body = GetMesh();
+	UWorld* World = GetWorld();
+	if (HasAuthority() || bCorpsePoseRejected || !Body || !World || !Body->GetPhysicsAsset() || CorpsePose.Num() == 0)
+	{
+		return;
+	}
+	ReleaseRagdollHold();
+	World->GetTimerManager().ClearTimer(CorpseSettleTimer);
+	// The pose fits the body the server's corpse wears.
+	ApplyCorpseAppearance();
+
+	// Simulating with the ragdoll's collision (the mesh has its bodies only with collision on), the skeleton updated from
+	// them again if this machine had frozen its own.
+	Body->bNoSkeletonUpdate = false;
+	Body->SetCollisionProfileName(TEXT("Ragdoll"));
+	if (Body->Bodies.Num() != CorpsePose.Num())
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("%s: the server's corpse pose has %d bodies, this machine's mesh %d; the body keeps its own ragdoll."),
+			*GetName(), CorpsePose.Num(), Body->Bodies.Num());
+		bCorpsePoseRejected = true;
+		StartDeathRagdoll();
+		if (bIsCorpse)
+		{
+			ApplyCorpseState();
+		}
+		return;
+	}
+	Body->SetSimulatePhysics(true);
+	bCorpsePosePlaced = true;
+	bPlacingCorpsePose = false;
+	HoldInPose(&CorpsePose);
+	// A body awash at the surface draws custom depth, as one that floated there does (the water plan's W2B).
+	FVCRagdollBuoyancy::Get().ApplyPlaced(Body, RagdollBuoyancy);
+}
+
+void AVCCharacterBase::HoldInPose(const TArray<FVCCorpseBodyPose>* Pose)
+{
+	USkeletalMeshComponent* Body = GetMesh();
+	UWorld* World = GetWorld();
+	if (!Body || !World || !Body->IsSimulatingPhysics())
+	{
+		FreezeCorpse();
+		return;
+	}
+	// No gravity, no planet's pull, no water's lift (Tick), no motion left: the bodies stay where they are put. The pose
+	// updates whether or not the body is drawn (a dedicated server, a corpse behind the camera), so the bones it keeps
+	// when it freezes are the bodies' (the freeze stops the updates: bNoSkeletonUpdate).
+	Body->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+	Body->SetEnableGravity(false);
+	RagdollGravityDirection = FVector::ZeroVector;
+	for (int32 Index = 0; Index < Body->Bodies.Num(); ++Index)
+	{
+		FBodyInstance* Instance = Body->Bodies[Index];
+		if (!Instance)
+		{
+			continue;
+		}
+		if (Pose && Pose->IsValidIndex(Index))
+		{
+			Instance->SetBodyTransform(FTransform((*Pose)[Index].Rotation, (*Pose)[Index].Location), ETeleportType::TeleportPhysics);
+		}
+		Instance->SetLinearVelocity(FVector::ZeroVector, /*bAddToCurrent=*/false);
+		Instance->SetAngularVelocityInRadians(FVector::ZeroVector, /*bAddToCurrent=*/false);
+	}
+	if (!bPlacingCorpsePose)
+	{
+		CorpsePlaceRetries = 0;
+	}
+	bPlacingCorpsePose = true;
+	CorpsePlacedFrame = GFrameCounter;
+	World->GetTimerManager().SetTimer(CorpseSettleTimer, this, &AVCCharacterBase::CheckCorpseSettled, 0.05f, true);
 }
 
 void AVCCharacterBase::HandleDied(const FCGFDamageContext& Context)
 {
 	Incapacitate();
+	StopTerrainWaitForBody();
 
-	if (USkeletalMeshComponent* Body = GetMesh())
-	{
-		if (Body->GetPhysicsAsset())
-		{
-			Body->SetCollisionProfileName(TEXT("Ragdoll"));
-			Body->SetSimulatePhysics(true);
-			StartRadialRagdoll(Body, GetCharacterMovement(), RagdollGravityDirection);
-		}
-	}
+	// The ragdoll, on every machine; held where this machine has no terrain collision under the body yet (G204).
+	StartDeathRagdoll();
 
 	BP_OnDied(Context);
 

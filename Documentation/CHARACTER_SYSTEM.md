@@ -320,6 +320,27 @@ Hold to draw, release to shoot; the server measures the draw, uses the arrow and
 
 A game mode must derive from `AVCGameModeBase`, or no respawn is scheduled (a warning is logged).
 
+**The corpse lies where the server's does (G204).** Each machine simulates the ragdoll for itself, and the copies came
+to rest apart: about 1 m on flat ground, 3.4 m where the server's slid down a slope. The corpse's query collision, kept
+for later item recovery, is the server's. Now, when the server's corpse settles and freezes (`CheckCorpseSettled`,
+`FreezeCorpse`), it records each physics body's world transform in `CorpsePose` (replicated, the physics asset's order).
+A client that receives it puts its copy there (`PlaceCorpsePose`): it teleports each body, holds it with gravity, the
+planet's pull and the water's lift off, and freezes it two frames later, once the bones have taken the bodies' places.
+This holds whether its own ragdoll was still moving, had frozen, or had not started. A body that becomes relevant to a
+client after the death starts the ragdoll in `StartDeathRagdoll`. With the pose there, it takes the pose and simulates
+nothing. Before the server has frozen, it holds the ragdoll until this machine's collision manager has cooked the spawn
+wait's chunks around the body (`HasRagdollGround`: the 3 by 3 grid and the chunk half a chunk below; a body on a chunk's
+border rests on both). A late client had dropped a body through the ground and the sea's bed. A corpse has no player
+state to be dressed from, so the body it wears replicates with it (`CorpseAppearance`): a late client's copy wore the
+class's own body (22 physics bodies against the appearance's 19), which the pose does not fit. The pose is 1.5 KB at
+most and is sent once. Test `VoxelEngine.Replication.CorpseRest` (the game module) kills the player in a
+dedicated server and client PIE and checks the client's copy against the server's pose, once seen dying and once
+after the corpse left the client's world and came back: within 5 uu.
+
+An NPC's body is left as it was: each machine's own ragdoll. It is presentation only. The server destroys it
+`DestroyAfterDeathDelay` (10 s) after the death, and nothing reads where it lies. A
+pose sent when the server's copy settles would arrive about when the body goes.
+
 ## Movement
 
 `UVCMovementComponent` extends the character movement component and is used by players and NPCs alike (the stock
@@ -953,8 +974,8 @@ items there settle again). One sample through the subsystem and the bridge measu
 `[Buoyancy]` line); an item takes one or two per drop and none per frame. The settle, the replicated resting place and
 the bob are the item's (`Plugins/InteractionPlugin/Documentation/INTERACTION_SYSTEM.md`, "In Water").
 
-**Floating: bodies** (D130). A dead character's ragdoll is simulated by each machine for itself (nothing of it
-replicates), so the rule runs on each: `FVCRagdollBuoyancy::Apply`, from `AVCCharacterBase::Tick` and
+**Floating: bodies** (D130). A dead character's ragdoll is simulated by each machine for itself (until the player's
+corpse freezes on the server and its pose replicates, G204), so the rule runs on each: `FVCRagdollBuoyancy::Apply`, from `AVCCharacterBase::Tick` and
 `AVCNPCCharacterBase::Tick` while the body simulates. It samples the water once at the body's root; every part under the
 surface gets an upward acceleration that grows with its depth to `Buoyancy` (1.6) gravities over `SubmergeDepth`
 (40 uu), the water's drag (`LinearDrag` 2 per second, `AngularDrag` 1.5) and a pull toward the column where the body
@@ -966,7 +987,9 @@ is given `CorpseFreezeAfterSecondsInWater` (40 s) instead of `CorpseFreezeAfterS
 deep is not frozen halfway up. An NPC's body floats until it is destroyed (`DestroyAfterDeathDelay`), and its tick
 stays on while it simulates. While the body is in the water its visible meshes (and its attached actors') draw custom
 depth, as a swimmer's do, and stay so when the corpse freezes at the surface: the water material then draws no shore
-foam over it (a body awash was painted white without it). `vc.Buoyancy.Bodies 0` turns the rule off on the machine it is set on. Not covered: a
+foam over it (a body awash was painted white without it). A client that puts its copy in the server's frozen pose
+(G204) gives it the same custom depth when the pose's root is in the water (`FVCRagdollBuoyancy::ApplyPlaced`), so a
+corpse that came to a client already floating looks like one that floated there. `vc.Buoyancy.Bodies 0` turns the rule off on the machine it is set on. Not covered: a
 body with no physics asset (it plays its death or topples where it stood), a frozen corpse when the water's level
 later changes, and a body whose chunk is not loaded on a machine (the sample has no voxel to read there).
 
@@ -1370,7 +1393,8 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 | Facing while drawn | The owner and the server alike (`SetFacesAim`) | Through the movement: the server simulates the same turn from the client's moves |
 | Water effects (splash, wake, sounds), the view under water | Each machine, from the pawn's replicated movement mode; the view on the local player's alone | Not replicated; nothing on a dedicated server |
 | A dropped item's place at the water's surface | Server (`AWorldItem::SnapToGround`, the water through `UVCWaterSurfaceBridge`) | The item's `Rest` (location, rotation, up, floating); each machine with a view draws the bob about it |
-| A dead body's float | Each machine, on its own ragdoll (`FVCRagdollBuoyancy`), the dedicated server included | Not replicated: the water is the same on every machine, and the pull toward the column the body met the water in keeps the copies together |
+| A dead body's float | Each machine, on its own ragdoll (`FVCRagdollBuoyancy`), the dedicated server included | Not replicated: the water is the same on every machine, and the pull toward the column the body met the water in keeps the copies together; a player's corpse then takes the server's frozen pose (next row) |
+| A player's corpse's resting place | Server (its ragdoll, frozen when it settles) | `CorpsePose` on the body: each physics body's world transform, sent once; a client puts its copy there and freezes it (G204). A client's ragdoll before then waits for its terrain's collision under the body. An NPC's ten-second body is each machine's own |
 | Camera, input, edit mode, debug flight | Local | Not replicated |
 
 ## Console variables
