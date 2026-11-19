@@ -116,6 +116,67 @@ bool FVCSurface_RespawnAtLastRest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
+// G244: a player who starts where another stands gets a place of its own; alone, the start itself.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCSurface_SpawnPlaces, "VoxelCharacter.Spawn.PlayerPlaces", VC_SURFACE_FLAGS)
+bool FVCSurface_SpawnPlaces::RunTest(const FString& Parameters)
+{
+	const FVector Start(0.0, -28.0, 1200.0);
+	const FVector Up = FVector::UpVector;
+	const FVector Forward = FVector::ForwardVector;
+	constexpr float Spacing = 250.f;
+	FVector Place;
+
+	// Alone (single player, or the first player): the start itself.
+	TestEqual(TEXT("No other player: the start"), AVCGameModeBase::FindFreeSpawnPlace(Start, Up, Forward, {}, Spacing, Place), 0);
+	TestTrue(TEXT("No other player: at the start"), Place.Equals(Start));
+
+	// The first player's pawn on the ground under the start (the wait placed it 900 uu lower): the second goes to the
+	// first ring, along the start's facing, Spacing away across up.
+	TArray<FVector> Taken = { Start - FVector(0.0, 0.0, 900.0) };
+	TestEqual(TEXT("Start taken: the first ring's first place"), AVCGameModeBase::FindFreeSpawnPlace(Start, Up, Forward, Taken, Spacing, Place), 1);
+	TestTrue(TEXT("... Spacing along the facing"), Place.Equals(Start + Forward * Spacing, 0.01));
+
+	// A third player: the next place, Spacing from both.
+	Taken.Add(Place);
+	TestEqual(TEXT("Two taken: the second place"), AVCGameModeBase::FindFreeSpawnPlace(Start, Up, Forward, Taken, Spacing, Place), 2);
+	for (const FVector& Other : Taken)
+	{
+		TestTrue(TEXT("... apart from every other player"), FVector::Dist2D(Place, Other) >= Spacing - 0.01);
+	}
+
+	// A pawn far below (a dungeon under the start) or just past half the spacing does not take the start.
+	TestFalse(TEXT("A pawn 6,000 uu down does not take it"),
+		AVCGameModeBase::IsSpawnPlaceTaken(Start, Up, { Start - FVector(0.0, 0.0, 6000.0) }, Spacing));
+	TestFalse(TEXT("A pawn 130 uu across does not take it"),
+		AVCGameModeBase::IsSpawnPlaceTaken(Start, Up, { Start + FVector(130.0, 0.0, 0.0) }, Spacing));
+	TestTrue(TEXT("A pawn 100 uu across takes it"),
+		AVCGameModeBase::IsSpawnPlaceTaken(Start, Up, { Start + FVector(100.0, 0.0, 0.0) }, Spacing));
+
+	// On a planet: the places lie across the radius, at the start's distance from the centre.
+	const FVector PlanetUp = FVector(1.0, 1.0, 0.0).GetSafeNormal();
+	const FVector PlanetStart = PlanetUp * 100000.0;
+	TestEqual(TEXT("Planet: the first ring"),
+		AVCGameModeBase::FindFreeSpawnPlace(PlanetStart, PlanetUp, Forward, { PlanetStart }, Spacing, Place), 1);
+	TestTrue(TEXT("Planet: across local up"), FMath::IsNearlyZero(FVector::DotProduct(Place - PlanetStart, PlanetUp), 0.01));
+	TestTrue(TEXT("Planet: Spacing from the start"), FMath::IsNearlyEqual(FVector::Dist(Place, PlanetStart), static_cast<double>(Spacing), 0.01));
+
+	// Every place taken: INDEX_NONE and the start.
+	TArray<FVector> All = { Start };
+	for (int32 Ring = 1; Ring <= AVCGameModeBase::PlayerSpawnRings; ++Ring)
+	{
+		for (int32 I = 0; I < 6 * Ring; ++I)
+		{
+			const double Angle = 2.0 * UE_DOUBLE_PI * I / (6 * Ring);
+			All.Add(Start + FVector(FMath::Cos(Angle), FMath::Sin(Angle), 0.0) * (Ring * Spacing));
+		}
+	}
+	TestEqual(TEXT("All taken: none"), AVCGameModeBase::FindFreeSpawnPlace(Start, Up, Forward, All, Spacing, Place), static_cast<int32>(INDEX_NONE));
+	TestTrue(TEXT("All taken: the start"), Place.Equals(Start));
+	return true;
+}
+
+// ---------------------------------------------------------------------------
 // Persistence (feature 9): the per-player save state survives a JSON round trip.
 // ---------------------------------------------------------------------------
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCSurface_PlayerSaveRoundTrip, "VoxelCharacter.Save.PlayerStateRoundTrip", VC_SURFACE_FLAGS)

@@ -258,6 +258,14 @@ void AVCCharacterBase::OnChunkCollisionReady(const FIntVector& ChunkCoord)
 /** Seconds an exact-location resume waits for a floor close under the feet before taking a deeper one. */
 static constexpr float ExactFloorGraceSeconds = 15.f;
 
+/** The placement traces' responses: the WorldStatic channel's, with every pawn ignored (G244). */
+static FCollisionResponseParams MakeGroundTraceResponse()
+{
+	FCollisionResponseParams Response;
+	Response.CollisionResponse.SetResponse(ECC_Pawn, ECR_Ignore);
+	return Response;
+}
+
 void AVCCharacterBase::PlaceOnTerrainAndResume()
 {
 	// A remote player's pawn waits on the server for its client's own wait too: released before, the server's correction
@@ -287,7 +295,7 @@ void AVCCharacterBase::PlaceOnTerrainAndResume()
 		Params.AddIgnoredActor(this);
 		FHitResult Hit;
 		const bool bFloor = GetWorld()->SweepSingleByChannel(Hit, Feet + Up * 20.f, Feet - Up * FloorProbeDistance,
-			FQuat::Identity, ECC_WorldStatic, FCollisionShape::MakeSphere(20.f), Params);
+			FQuat::Identity, ECC_WorldStatic, FCollisionShape::MakeSphere(20.f), Params, MakeGroundTraceResponse());
 		// The saved spot stood ON a floor, so the real one is within a few units of the feet. A hit far
 		// below is the voxel void under a dungeon whose tile floor has not streamed in yet: give the
 		// tiles a grace period before accepting it.
@@ -343,15 +351,18 @@ void AVCCharacterBase::PlaceOnTerrainAndResume()
 
 	FCollisionQueryParams Params;
 	Params.AddIgnoredActor(this);
+	// The ground, never another pawn: a player released first at a shared spawn blocks the WorldStatic channel, and the
+	// trace stood this one on its head, from where it fell off down the slope (G244).
+	const FCollisionResponseParams IgnorePawns = MakeGroundTraceResponse();
 
 	FHitResult Hit;
 	const FCollisionShape SweepShape = FCollisionShape::MakeSphere(SweepRadius);
-	bool bTraceHit = GetWorld()->SweepSingleByChannel(Hit, TraceStart, TraceEnd, FQuat::Identity, ECC_WorldStatic, SweepShape, Params);
+	bool bTraceHit = GetWorld()->SweepSingleByChannel(Hit, TraceStart, TraceEnd, FQuat::Identity, ECC_WorldStatic, SweepShape, Params, IgnorePawns);
 
 	// Fallback: line trace without sweep
 	if (!bTraceHit)
 	{
-		bTraceHit = GetWorld()->LineTraceSingleByChannel(Hit, TraceStart, TraceEnd, ECC_WorldStatic, Params);
+		bTraceHit = GetWorld()->LineTraceSingleByChannel(Hit, TraceStart, TraceEnd, ECC_WorldStatic, Params, IgnorePawns);
 	}
 
 	if (bTraceHit)
