@@ -67,6 +67,52 @@ bool FVCWindPushTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
+// The wind's air on a move (G220): the client pushes with its own read, quantized so the move data sends exactly what
+// it simulated, and the server takes that air as sent inside the gust's envelope about its own mean wind, clamped
+// outside it. The saved move's and the correction's bookkeeping is the net walk's (poi_roads.py walk --net).
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCWindAirTest, "VoxelCharacter.Movement.WindAir",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FVCWindAirTest::RunTest(const FString& Parameters)
+{
+	// Quantized to whole uu/s per axis, within an int16, and stable (a quantized air quantizes to itself).
+	const FVector Q = UVCMovementComponent::QuantizeWindAir(FVector(599.6, -127.4, 0.49));
+	TestTrue(TEXT("Rounded per axis"), Q.Equals(FVector(600.0, -127.0, 0.0), 0.0));
+	TestTrue(TEXT("A quantized air is its own quantization"), UVCMovementComponent::QuantizeWindAir(Q).Equals(Q, 0.0));
+	TestTrue(TEXT("Clamped to an int16"), UVCMovementComponent::QuantizeWindAir(FVector(1.0e6, -1.0e6, 0.0)).Equals(FVector(MAX_int16, MIN_int16, 0.0), 0.0));
+
+	const FVector Mean(600.0, 0.0, 0.0); // the server's mean wind, along +X
+	const float Gust = 0.2f, Tol = 0.25f, Floor = 50.f;
+	bool bClamped = true;
+
+	// An honest client: anywhere in the gust's range times an exposure, a little off the server's direction.
+	for (const FVector& Air : { FVector(720.0, 0.0, 0.0), FVector(480.0, 30.0, 0.0), FVector::ZeroVector, FVector(300.0, -100.0, 0.0), FVector(870.0, 0.0, 0.0) })
+	{
+		const FVector Out = UVCMovementComponent::ClampClientWindAir(Air, Mean, Gust, Tol, Floor, bClamped);
+		TestFalse(*FString::Printf(TEXT("%s: inside the envelope"), *Air.ToCompactString()), bClamped);
+		TestTrue(*FString::Printf(TEXT("%s: as sent, bit for bit"), *Air.ToCompactString()), Out == Air);
+	}
+
+	// Past the gust's top plus the slack (600 x 1.2 + 200 = 920): back to it. Against the wind past the slack: to -200.
+	// Across past the slack: to 200 across.
+	FVector Out = UVCMovementComponent::ClampClientWindAir(FVector(5000.0, 0.0, 0.0), Mean, Gust, Tol, Floor, bClamped);
+	TestTrue(TEXT("Too strong: clamped"), bClamped);
+	TestTrue(TEXT("Too strong: to the envelope's top"), Out.Equals(FVector(920.0, 0.0, 0.0), 1.0e-3)); // 0.2f is not 0.2
+	Out = UVCMovementComponent::ClampClientWindAir(FVector(-900.0, 0.0, 0.0), Mean, Gust, Tol, Floor, bClamped);
+	TestTrue(TEXT("Against the wind: to minus the slack"), bClamped && Out.Equals(FVector(-200.0, 0.0, 0.0), 1.0e-6));
+	Out = UVCMovementComponent::ClampClientWindAir(FVector(600.0, 900.0, 0.0), Mean, Gust, Tol, Floor, bClamped);
+	TestTrue(TEXT("Across: the cross part to the slack, the along part kept"), bClamped && Out.Equals(FVector(600.0, 200.0, 0.0), 1.0e-6));
+
+	// No wind at the server: the floor alone, in any direction.
+	TestTrue(TEXT("Calm: a small air passes"), UVCMovementComponent::ClampClientWindAir(FVector(30.0, 30.0, 0.0), FVector::ZeroVector, Gust, Tol, Floor, bClamped) == FVector(30.0, 30.0, 0.0) && !bClamped);
+	Out = UVCMovementComponent::ClampClientWindAir(FVector(0.0, 600.0, 0.0), FVector::ZeroVector, Gust, Tol, Floor, bClamped);
+	TestTrue(TEXT("Calm: a strong air to the floor"), bClamped && Out.Equals(FVector(0.0, 50.0, 0.0), 1.0e-6));
+	return true;
+}
+
+// ---------------------------------------------------------------------------
 // The wet level (the weather plan's P5): soaked by the rain over WetSoakSeconds, at once by a swim, dry again over
 // WetDrySeconds; and the character's hysteresis for the wet and cold states.
 // ---------------------------------------------------------------------------

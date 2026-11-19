@@ -453,9 +453,22 @@ re-mesh).
   own speed over its max speed, or full in the air), after the braking and the friction, and takes the previous
   tick's off before them, which would otherwise eat it: a standing pawn idles in any wind, a pawn walking into the
   wind is slowed by it and one walking with it helped, a fall past `WindAirborneDelay` (0.35 s: a jump or a real
-  drop, not a floor lost for a frame on rough ground) is carried; flying is exempt. The ground friction loses `Wetness x WetGripFactor` (0.4) of itself. Both run inside the predicted movement,
-  so the client and the server agree (the weather's sync point is the same on both). Test
-  `VoxelCharacter.Movement.WindPush`. The same read keeps the air temperature and a wet level (P5, `AdvanceWetLevel`):
+  drop, not a floor lost for a frame on rough ground; counted once a move in `PerformMovement`) is carried; flying is
+  exempt. The ground friction loses `Wetness x WetGripFactor` (0.4) of itself. Both run inside the predicted movement.
+  **The wind's push is a function of the move alone** (G220, 2026-11-18): a machine's read of the wind is its own (the
+  gust's two sines have periods of 7.3 and 2.9 clock seconds, a tenth of a real second at the default 60x clock, so two
+  reads 0.1 s apart are unrelated, and the exposure is each machine's own trace), so the drift reads the move's air,
+  `MoveWindAir` (the wind times the exposure, rounded to whole uu/s, `QuantizeWindAir`), not the read. A machine that
+  moves the pawn itself (standalone, a listen server's own pawn, NPCs) takes it from its read every tick; a locally
+  controlled client takes it in `ReplicateMoveToServer`, keeps it in the saved move (a replay pushes with it) and sends
+  it in the move data (`FVCNetworkMoveData`: a bit in a calm, three int16 in a wind); the server simulates the move
+  with the client's air, as sent inside the gust's envelope about its own mean wind and clamped outside it
+  (`ClampClientWindAir`: from minus the slack to the mean x (1 + gustiness) plus the slack along the wind, the slack
+  across it; the slack is `WindClientTolerance` (0.25) of the mean plus `WindClientSlackFloor` (50 uu/s), so a forged
+  air gains a tenth of that). The saved move also keeps the drift and the airborne time at the move's start and end:
+  a combined move reverts to the pending move's start as the engine reverts the velocity, and a correction resumes
+  from the acknowledged move's end (`OnClientCorrectionReceived`). Tests `VoxelCharacter.Movement.WindPush` and
+  `.WindAir`; the net walk (`poi_roads.py walk --net`, `--wind=90,600`). The same read keeps the air temperature and a wet level (P5, `AdvanceWetLevel`):
   the rain reaching the pawn (its rate times the exposure, snow at a third) soaks it over `WetSoakSeconds` (12), a swim
   at once, and nothing falling dries it over `WetDrySeconds` (90); the character's weather states read them
   (`VoxelCharacter.Movement.WetLevel`).
