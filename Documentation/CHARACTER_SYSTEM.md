@@ -1074,6 +1074,25 @@ A pawn spawns frozen (`FreezeForTerrainWait`: no movement, no collision) until t
    Test `VoxelCharacter.Terrain.WaitChunkUnderFeet`.
 3. `PlaceOnTerrainAndResume` traces along local up for the surface, stands the pawn upright and restores movement.
 
+**Each machine waits for its own ground (G205).** Every machine that has the pawn runs the wait in its own world, since
+each cooks its own collision: the server, the owning client and the other clients. Two rules keep the frozen pawn from
+falling through ground that machine has not cooked:
+
+- **The wait outlives the restart.** The engine restarts a possessed pawn after `BeginPlay` began the wait (the server's
+  possession, the owning client's `PawnClientRestart`), and `ACharacter::Restart` sets the default movement mode.
+  `AVCCharacterBase::Restart` freezes the pawn again while the wait holds it. Before this, every waiting pawn fell with
+  its collision off from the first second. Once a wait ran past the placement trace's reach (50,000 uu, some 13 s of
+  falling) the pawn was not put back and fell out of the world. Test
+  `VoxelCharacter.Terrain.WaitHoldsThroughRestart`.
+- **The server releases a remote player's pawn after its client.** The owning client reports the end of its own wait
+  (`Server_ReportTerrainReady`). Until that report, or the wait's `TerrainWaitTimeout`, the server keeps its own copy
+  frozen even with its chunks ready (`IsWaitingForOwningClientTerrain`). A server copy released first sends the
+  client a correction into walking, and the client's pawn, still waiting with its collision off, moves over ground the
+  client has not cooked. A local player (standalone, a listen server's host) and an AI do not wait for this report.
+  On `VoxelDemo` the server's own wait takes 2 to 4 s, and the clients report 4 to 8 s in with a dedicated server and
+  two clients. `Scripts/qa/net_spawn.py` runs networked first spawns and fails a start on any pawn that moves while its
+  wait holds it.
+
 `AVCPlayerState::PendingSpawnTransform` (a loaded save) puts a player back where they stood; the wait then settles the
 height. `AVCGameModeBase` parks the world-item pool at the planet centre once the voxel world is up.
 
