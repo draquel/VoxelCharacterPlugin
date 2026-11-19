@@ -20,7 +20,7 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Core | `AVCCharacterBase` | The player pawn: components, view mode, input, the primary-action chain, voxel edit targets, the terrain wait, leaving the world, surface gameplay. Implements `IAbilitySystemInterface` (a pass-through to the player state), `ICGFInventoryInterface`, `ICGFLightBearerInterface` and `IVCAnimatedCharacter` |
 | Core | `AVCPlayerController` | HUD and panels, the click-to-move item state machine, the voxel edit server path, gathering, chopping, rest and crafting RPCs, rotation in the gravity frame |
 | Core | `AVCPlayerState` | Hosts the ASC and both attribute sets; item snapshot across death, progression, rest point, save state; the player's appearance (replicated; the player's own choice saved) |
-| Core | `AVCGameModeBase` | Respawn (`RespawnPolicy`, `RespawnDelay`), the corpse kept per player (`bKeepCorpse`), log-in / log-out events, save requests; the players' appearance on its map (`PlayerAppearance`) |
+| Core | `AVCGameModeBase` | Respawn (`RespawnPolicy`, `RespawnDelay`), the corpse kept per player (`bKeepCorpse`), log-in / log-out events, save requests; the players' appearance on its map (`PlayerAppearance`); each player's own spawn place (`PlayerSpawnSpacing`, G244) |
 | Core | `AVCNPCCharacterBase` | NPC pawn with its own ASC and attribute sets, behaviour and temperament, a floating health bar (`UVCNPCHealthBarWidget`), a skeletal body within the animation budget, the item it holds (`HeldItem`) and an animal's locomotion (`LocomotionAnimSet`); implements `IVCAnimatedCharacter` |
 | Core | `UVCCharacterAttributeSet` | Health, Stamina, Breath (each with a max), MoveSpeedMultiplier, MiningSpeed, InteractionRange, IncomingDamage (meta) |
 | Core | `UVCAnimInstance`, `IVCAnimatedCharacter` | The anim instance of the player and the NPCs, every value in the gravity frame (Animation, below); the interface it reads a character's view mode, action set and combat state through |
@@ -1093,6 +1093,21 @@ falling through ground that machine has not cooked:
   two clients. `Scripts/qa/net_spawn.py` runs networked first spawns and fails a start on any pawn that moves while its
   wait holds it.
 
+**Each player spawns at a place of its own (G244).** Players who start together can share a start: a map with
+one player start, every player at a "Play from Here" start, and `VoxelDemo`, which has none (the engine falls back to the
+world settings actor at the origin). The engine's `ChoosePlayerStart` judges a start free by its collision test, and a
+pawn the wait holds has its collision off, so with several starts too it could hand every player the same one. The pawns
+spawned inside each other, and the second one's placement trace, which hit any pawn, stood it on the first one's head.
+It fell off down the slope, 600 to 1,000 uu, sometimes into the lake. `AVCGameModeBase` now gives each player a place of
+its own. `ChoosePlayerStart` takes another start that no player's pawn stands at, when there is one. Otherwise
+`SpawnDefaultPawnFor` spawns the player at the first free place at the start (`FindFreeSpawnPlace`): the start itself,
+then rings of 6, 12 and 18 places `PlayerSpawnSpacing` (250 uu) apart around it, across local up (the radius on a
+planet). A place is taken when another player's pawn stands within half the spacing of it across up and within
+5,000 uu along it (`IsSpawnPlaceTaken`). A player alone, the first player and a save's transform spawn where they did.
+The placement traces (`PlaceOnTerrainAndResume`, the exact-location floor probe) ignore pawns, so a pawn is placed on
+the ground, never on another pawn. Test `VoxelCharacter.Spawn.PlayerPlaces`; `Scripts/qa/net_spawn.py` fails a start
+when a pawn ends more than 600 uu from the start, or two players' pawns end within 100 uu of each other.
+
 `AVCPlayerState::PendingSpawnTransform` (a loaded save) puts a player back where they stood; the wait then settles the
 height. `AVCGameModeBase` parks the world-item pool at the planet centre once the voxel world is up.
 
@@ -1369,7 +1384,7 @@ and `ToggleVoxelDebug` are on the controller and the character. Every name, defa
 ## Tests
 
 `VoxelCharacter.*` in `Private/Tests/`: AI, Anim, Camera, Combat, Config, Cubic, Edit, EditMode, EquipmentLoop, Gather,
-Island, Map, NearClip, Plane, Planet, Progression, Respawn, Save, Terrain, ViewMode, Water, WorldEdge; the weather's `Movement.WindPush`,
+Island, Map, NearClip, Plane, Planet, Progression, Respawn, Save, Spawn, Terrain, ViewMode, Water, WorldEdge; the weather's `Movement.WindPush`,
 `Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
