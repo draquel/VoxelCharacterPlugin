@@ -152,13 +152,13 @@ namespace VCBowReloadTestHelpers
 	};
 }
 
-using namespace VCBowReloadTestHelpers;
 
 #define VC_RELOAD_FLAGS (EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCBowReload_Cycle, "VoxelCharacter.Combat.Ranged.ReloadCycle", VC_RELOAD_FLAGS)
 bool FVCBowReload_Cycle::RunTest(const FString& Parameters)
 {
+	using namespace VCBowReloadTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
 	FReloadWorld W;
 	if (!TestNotNull(TEXT("The item database"), W.Database))
 	{

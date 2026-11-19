@@ -12,6 +12,8 @@ struct FGameplayAttributeData;
 struct FOnAttributeChangeData;
 struct FVoxelWaterSample;
 enum class EEditSource : uint8;
+enum class EVoxelSurfaceClass : uint8;
+class FVoxelMaterialTable;
 
 /** The gaits the gait table has a row for (the character refinement plan's C4, D75). */
 UENUM(BlueprintType)
@@ -271,8 +273,31 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement")
 	const FVCTerrainContext& GetTerrainContext() const { return CachedTerrainContext; }
 
-	/** Map a voxel MaterialID to a logical surface type. */
+	/**
+	 * A voxel material's surface underfoot: its surface class in the world's material table (FVoxelMaterialDefinition::
+	 * SurfaceClass, G247; the registry's defaults carry the classes this plugin once held in a table by ID, an atlas sets
+	 * them for the materials it adds, such as the demo's road and trail). A material the table does not know, or with no
+	 * class, is Default.
+	 * @param MaterialID The voxel's material
+	 * @param Materials The world's material table (UVoxelChunkManager::GetMaterialTable)
+	 * @return The surface type
+	 */
+	static EVCSurfaceType MaterialIDToSurfaceType(uint8 MaterialID, const FVoxelMaterialTable& Materials);
+
+	/**
+	 * A voxel material's surface underfoot in the registry's default materials, for a caller with no world.
+	 * @param MaterialID The voxel's material
+	 * @return The surface type (MaterialIDToSurfaceType against FVoxelMaterialTable::Defaults)
+	 */
 	static EVCSurfaceType MaterialIDToSurfaceType(uint8 MaterialID);
+
+	/**
+	 * The movement's surface type for a voxel material's surface class (G247): the voxel engine names the ground, this
+	 * plugin gives it friction, hardness and footsteps.
+	 * @param SurfaceClass The material's surface class
+	 * @return The surface type; Default for Unset
+	 */
+	static EVCSurfaceType SurfaceClassToSurfaceType(EVoxelSurfaceClass SurfaceClass);
 
 	/** Get friction multiplier for a given surface type. */
 	static float GetSurfaceFriction(EVCSurfaceType Surface);

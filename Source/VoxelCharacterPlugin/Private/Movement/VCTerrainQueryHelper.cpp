@@ -7,6 +7,7 @@
 #include "VoxelWorldConfiguration.h"
 #include "VoxelCoordinates.h"
 #include "VoxelData.h"
+#include "VoxelMaterialRegistry.h"
 #include "IVoxelWorldMode.h"
 #include "VoxelCharacterPlugin.h"
 
@@ -37,7 +38,8 @@ FVCTerrainContext FVCTerrainQueryHelper::QueryTerrainContext(const UWorld* World
 
 	// Material and surface type
 	Context.VoxelMaterialID = VoxelAtFeet.MaterialID;
-	Context.SurfaceType = UVCMovementComponent::MaterialIDToSurfaceType(VoxelAtFeet.MaterialID);
+	// The material's surface class in the world's table: its atlas's, so a material the atlas adds (a road) has its own (G247)
+	Context.SurfaceType = UVCMovementComponent::MaterialIDToSurfaceType(VoxelAtFeet.MaterialID, ChunkMgr->GetMaterialTable());
 	Context.FrictionMultiplier = UVCMovementComponent::GetSurfaceFriction(Context.SurfaceType);
 
 	// Surface hardness based on material

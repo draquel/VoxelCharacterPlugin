@@ -1301,27 +1301,34 @@ void UVCMovementComponent::OnMoveSpeedAttributeChanged(const FOnAttributeChangeD
 // Surface Type Mapping
 // ---------------------------------------------------------------------------
 
+EVCSurfaceType UVCMovementComponent::MaterialIDToSurfaceType(uint8 MaterialID, const FVoxelMaterialTable& Materials)
+{
+	// The surface is data on the material (G247; code review CR2, VCP-14): the defaults' classes are what this function's
+	// table by ID held, and an atlas classes the materials it adds (the demo's road and trail, 7 and 8).
+	const FVoxelMaterialDefinition* Material = Materials.GetMaterial(MaterialID);
+	return Material ? SurfaceClassToSurfaceType(Material->SurfaceClass) : EVCSurfaceType::Default;
+}
+
 EVCSurfaceType UVCMovementComponent::MaterialIDToSurfaceType(uint8 MaterialID)
 {
-	// The registry's materials (EVoxelMaterial, VoxelMaterialRegistry.h) to the movement's surface types (code review CR2,
-	// VCP-14; a surface class on FVoxelMaterialDefinition would make this data).
-	switch (MaterialID)
+	return MaterialIDToSurfaceType(MaterialID, FVoxelMaterialTable::Defaults());
+}
+
+EVCSurfaceType UVCMovementComponent::SurfaceClassToSurfaceType(EVoxelSurfaceClass SurfaceClass)
+{
+	switch (SurfaceClass)
 	{
-	case EVoxelMaterial::Grass:      return EVCSurfaceType::Grass;
-	case EVoxelMaterial::Dirt:       return EVCSurfaceType::Dirt;
-	case EVoxelMaterial::Stone:      return EVCSurfaceType::Stone;
-	case EVoxelMaterial::Sand:       return EVCSurfaceType::Sand;
-	case EVoxelMaterial::Snow:       return EVCSurfaceType::Snow;
-	case EVoxelMaterial::Sandstone:  return EVCSurfaceType::Sand;
-	case EVoxelMaterial::FrozenDirt: return EVCSurfaceType::Ice;
-	case EVoxelMaterial::Coal:       return EVCSurfaceType::Stone;
-	case EVoxelMaterial::Iron:       return EVCSurfaceType::Metal;
-	case EVoxelMaterial::Gold:       return EVCSurfaceType::Metal;
-	case EVoxelMaterial::Copper:     return EVCSurfaceType::Metal;
-	case EVoxelMaterial::Diamond:    return EVCSurfaceType::Stone;
-	case EVoxelMaterial::Wood:       return EVCSurfaceType::Wood;
-	case EVoxelMaterial::Leaves:     return EVCSurfaceType::Grass;
-	default: return EVCSurfaceType::Default;
+	case EVoxelSurfaceClass::Stone: return EVCSurfaceType::Stone;
+	case EVoxelSurfaceClass::Dirt:  return EVCSurfaceType::Dirt;
+	case EVoxelSurfaceClass::Grass: return EVCSurfaceType::Grass;
+	case EVoxelSurfaceClass::Sand:  return EVCSurfaceType::Sand;
+	case EVoxelSurfaceClass::Snow:  return EVCSurfaceType::Snow;
+	case EVoxelSurfaceClass::Ice:   return EVCSurfaceType::Ice;
+	case EVoxelSurfaceClass::Mud:   return EVCSurfaceType::Mud;
+	case EVoxelSurfaceClass::Wood:  return EVCSurfaceType::Wood;
+	case EVoxelSurfaceClass::Metal: return EVCSurfaceType::Metal;
+	case EVoxelSurfaceClass::Unset:
+	default:                        return EVCSurfaceType::Default;
 	}
 }
 
