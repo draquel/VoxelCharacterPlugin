@@ -8,6 +8,7 @@
 #include "Map/VCWorldMapWidget.h"
 #include "VoxelMapSubsystem.h"
 #include "Testing/VoxelTestChunkWorld.h"
+#include "Testing/VoxelTestScopedCVar.h"
 #include "Async/TaskGraphInterfaces.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformProcess.h"
@@ -188,16 +189,18 @@ bool FVCMap_PlaneMapSampler::RunTest(const FString& Parameters)
 			TestTrue(TEXT("The tiles shown are reported"), Visited.Num() > 0);
 
 			// The bands on the workers draw what one thread does (MAP_PYRAMID_PLAN.md P3): the same texels, the same tiles.
-			if (IConsoleVariable* Parallel = IConsoleManager::Get().FindConsoleVariable(TEXT("vc.Map.ParallelFill")))
+			if (IConsoleManager::Get().FindConsoleVariable(TEXT("vc.Map.ParallelFill")))
 			{
-				const int32 Was = Parallel->GetInt();
 				TArray<uint8> Serial;
 				Serial.SetNumZeroed(TexSize * TexSize * 4);
 				TArray<FIntPoint> SerialTiles;
 				New.ViewTiles = &SerialTiles;
-				Parallel->Set(0, ECVF_SetByCode);
-				const int32 SerialDrawn = New.Fill(*Map, Serial.GetData(), TexSize, Center, WorldPerPixel);
-				Parallel->Set(Was, ECVF_SetByCode);
+				int32 SerialDrawn = 0;
+				{
+					// At the variable's own priority, at least code's: under a console set a code one is ignored (G249).
+					const VoxelTesting::FScopedCVar OneThread(TEXT("vc.Map.ParallelFill"), 0);
+					SerialDrawn = New.Fill(*Map, Serial.GetData(), TexSize, Center, WorldPerPixel);
+				}
 				New.ViewTiles = &Visited;
 				TestEqual(TEXT("One thread draws as many texels"), SerialDrawn, Drawn);
 				TestTrue(TEXT("... the same texels"), FMemory::Memcmp(Serial.GetData(), Texels.GetData(), Serial.Num()) == 0);
