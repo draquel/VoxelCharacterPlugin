@@ -1,6 +1,7 @@
 # Sword Moves Plan: the sword attack flow's phases B to F
 
-> **Draft 2026-11-19, waiting for the user's decisions (section 7).** Nothing is built until D165-D171 are agreed.
+> **Agreed 2026-11-19** (the user: "Yes, as recommended": D165-D171 each as recommended, section 7); phases not
+> started. Lane 1 (B, C, D) and lane 2 (F) run in parallel, then E (D171).
 > Phases B-F of `SWORD_ATTACK_FLOW_PLAN.md` (frozen; phase A built 2026-11-12), the pack demo's other moves:
 > B the secondary branch (`draquel/UE5_PluginDev#422`), C the charge (#423), D the run attack (#424), E the air and
 > plunge attacks (#425), F the dodge and the roll (#426). Owner: VoxelCharacterPlugin (the montage component, the melee
@@ -226,7 +227,7 @@ gravity frame (a lunge, a roll and a plunge on a slope away from the pole). Each
   disjoint by move; the set is rebuilt by the script.
 - **NPCs** use none of this (their locomotion graph is the open D93, #412); their attacks stay the ground combo.
 
-## 7. For the user
+## 7. For the user (agreed 2026-11-19: each as recommended)
 
 1. D165: every move as a montage with a request and a shared server check, as phase A's attack (recommended), not the
    demo's anim-graph state machine?

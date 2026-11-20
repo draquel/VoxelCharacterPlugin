@@ -28,8 +28,8 @@ editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the 
    `CHARACTER_SYSTEM.md` "Animation" › The state machine and "Movement") and `SWORD_ATTACK_FLOW_PLAN.md` (the sword's
    combo after the pack's demo, broken off by movement after the follow-through, D102-D107, phase A done 2026-11-12,
    now in `CHARACTER_SYSTEM.md` "GAS" › The sword's attack flow and "Movement" › Montage root motion; phases B-F, the
-   demo's other attacks, are planned in `SWORD_MOVES_PLAN.md`, a draft waiting for D165-D171), all frozen but
-   that draft;
+   demo's other attacks, are planned in `SWORD_MOVES_PLAN.md`, D165-D171 agreed 2026-11-19, not yet built), all frozen but
+   that plan;
    `Documentation/Archive/ImplementationPlan.md`.
 
 Across plugins: `Plugins/CommonGameFramework/Documentation/ARCHITECTURE.md`; VoxelWorlds'
