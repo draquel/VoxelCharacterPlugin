@@ -1072,6 +1072,8 @@ protected:
 	FVector ReadWindAir() const;
 	/** The packed move data that carries the air to the server (G220); the engine's container is replaced in the constructor. */
 	TUniquePtr<FCharacterNetworkMoveDataContainer> WindMoveDataContainer;
+	/** The server's move responses: a correction names no base a client cannot resolve (G221); the engine's container is replaced in the constructor. */
+	TUniquePtr<FCharacterMoveResponseDataContainer> BaseMoveResponseDataContainer;
 
 	/** Push-back band proximity, 0..1 (see GetWorldEdgeProximity). */
 	float WorldEdgeProximity = 0.f;

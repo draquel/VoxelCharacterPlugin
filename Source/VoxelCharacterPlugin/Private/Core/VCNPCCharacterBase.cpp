@@ -4,6 +4,7 @@
 #include "Core/VCCharacterBase.h"
 #include "Movement/VCGravityFrame.h"
 #include "Movement/VCMovementComponent.h"
+#include "Movement/VCReplicatedBase.h"
 #include "AI/VCNPCAIController.h"
 #include "Core/VCCharacterAttributeSet.h"
 #include "Combat/VCCombatAttributeSet.h"
@@ -107,6 +108,13 @@ AVCNPCCharacterBase::AVCNPCCharacterBase(const FObjectInitializer& ObjectInitial
 FVector AVCNPCCharacterBase::GetPawnViewLocation() const
 {
 	return GetActorLocation() + FVCGravityFrame::VectorToWorld(GetCharacterMovement(), FVector(0.f, 0.f, BaseEyeHeight));
+}
+
+void AVCNPCCharacterBase::PreReplication(IRepChangedPropertyTracker& ChangedPropertyTracker)
+{
+	Super::PreReplication(ChangedPropertyTracker);
+	// The engine has copied the base into what simulated proxies receive; on the terrain no client can resolve it.
+	FVCReplicatedBase::ApplyBeforeReplication(*this, GetReplicatedBasedMovement_Mutable());
 }
 
 void AVCNPCCharacterBase::Tick(float DeltaSeconds)

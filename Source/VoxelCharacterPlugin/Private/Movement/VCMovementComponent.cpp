@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Movement/VCMovementComponent.h"
+#include "Movement/VCReplicatedBase.h"
 #include "Movement/VCTerrainQueryHelper.h"
 #include "Movement/VCGravityFrame.h"
 #include "AI/VCNPCCost.h"
@@ -210,6 +211,32 @@ namespace
 		}
 	};
 
+	/**
+	 * The server's move response: the engine's, with a correction's base left out when no client can resolve it (the
+	 * terrain's collision, which each machine cooks for itself; G221). bHasBase stays, so the client takes the base for
+	 * unresolved and stands on its own floor where the correction puts it, as it did when the reference failed to
+	 * resolve; the server no longer logs the reference it could not send. A base the position is relative to is kept.
+	 */
+	struct FVCMoveResponseDataContainer : public FCharacterMoveResponseDataContainer
+	{
+		virtual void ServerFillResponseData(const UCharacterMovementComponent& CharacterMovement, const FClientAdjustment& PendingAdjustment) override
+		{
+			FCharacterMoveResponseDataContainer::ServerFillResponseData(CharacterMovement, PendingAdjustment);
+			if (IsCorrection() && !ClientAdjustment.bBaseRelativePosition && FVCReplicatedBase::IsEnabled())
+			{
+				PRAGMA_DISABLE_DEPRECATION_WARNINGS
+				if (!FVCReplicatedBase::IsResolvableByClients(ClientAdjustment.NewMovementBasePhysicsObjectOwner.Get())
+					|| !FVCReplicatedBase::IsResolvableByClients(static_cast<const UPrimitiveComponent*>(ClientAdjustment.NewBase)))
+				{
+					ClientAdjustment.NewMovementBasePhysicsObjectOwner = nullptr;
+					ClientAdjustment.NewBase = nullptr;
+					ClientAdjustment.NewBaseBoneName = NAME_None;
+				}
+				PRAGMA_ENABLE_DEPRECATION_WARNINGS
+			}
+		}
+	};
+
 	class FNetworkPredictionData_Client_VC : public FNetworkPredictionData_Client_Character
 	{
 	public:
@@ -235,6 +262,9 @@ UVCMovementComponent::UVCMovementComponent()
 	// The move data carries the wind's air to the server (G220).
 	WindMoveDataContainer = MakeUnique<FVCNetworkMoveDataContainer>();
 	SetNetworkMoveDataContainer(*WindMoveDataContainer);
+	// A correction names no base a client cannot resolve (G221).
+	BaseMoveResponseDataContainer = MakeUnique<FVCMoveResponseDataContainer>();
+	SetMoveResponseDataContainer(*BaseMoveResponseDataContainer);
 
 	// Third-person defaults: character faces movement direction
 	bOrientRotationToMovement = true;

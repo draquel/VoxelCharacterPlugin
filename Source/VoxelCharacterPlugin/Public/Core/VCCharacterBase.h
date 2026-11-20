@@ -895,6 +895,8 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	/** The engine's, then a base no client can resolve (the terrain's collision) is not replicated (FVCReplicatedBase, G221). */
+	virtual void PreReplication(IRepChangedPropertyTracker& ChangedPropertyTracker) override;
 	virtual void PossessedBy(AController* NewController) override;
 	virtual void NotifyControllerChanged() override;
 
