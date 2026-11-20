@@ -62,6 +62,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
 	TSubclassOf<UGameplayAbility> BlockAbilityClass;
 
+	/**
+	 * The dodge and the roll (the sword moves plan, D170), granted with the attacks. Defaults to UVCDodgeAbility; None
+	 * disables them.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
+	TSubclassOf<UGameplayAbility> DodgeAbilityClass;
+
 	// --- Death / Respawn ---
 
 	/** GameplayEffect applied on respawn to reset vitals to max. */

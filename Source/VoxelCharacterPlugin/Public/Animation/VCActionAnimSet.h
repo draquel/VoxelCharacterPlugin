@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Animation/AnimMetaData.h"
 #include "Animation/AnimNotifies/AnimNotify.h"
 #include "Engine/DataAsset.h"
 #include "GameplayTagContainer.h"
@@ -47,6 +48,13 @@ enum class EVCAnimAction : uint8
 	 * (EVCReloadFrom). The grab is the montage's UVCAnimNotify_ItemHandOff, the nock its UVCAnimNotify_ActionHit.
 	 */
 	Reload,
+	/**
+	 * A dodge step (the sword moves plan, D170): its variant is the side it steps to relative to the facing, an
+	 * EVCHitDirection (Back: the step back with no movement input). Its root motion carries the capsule (D168).
+	 */
+	Dodge,
+	/** A roll forward, the capsule turned toward the movement input first (D170); its root motion carries the capsule. */
+	Roll,
 };
 
 /** Where a reload takes its arrow from: the variant of EVCAnimAction::Reload (D99). */
@@ -96,6 +104,33 @@ class VOXELCHARACTERPLUGIN_API UVCAnimNotify_ActionRecovery : public UAnimNotify
 
 public:
 	virtual FString GetNotifyName_Implementation() const override;
+};
+
+/**
+ * Marks where a dodge's or a roll's travel is 90 % done (the sword moves plan, D170): the server holds
+ * State.Invulnerable from the move's start to here. Read from the asset (UVCActionAnimSet::GetTravelledTime) as the hit
+ * is; nothing happens when the notify itself fires.
+ */
+UCLASS(meta = (DisplayName = "VC Action Travelled"))
+class VOXELCHARACTERPLUGIN_API UVCAnimNotify_ActionTravelled : public UAnimNotify
+{
+	GENERATED_BODY()
+
+public:
+	virtual FString GetNotifyName_Implementation() const override;
+};
+
+/**
+ * A montage that carries the capsule by its root motion on every move, with movement input or without (the sword moves
+ * plan, D168): the one exception to montage root motion only standing (D106, UVCMovementComponent::
+ * bMontageRootMotionOnlyStanding), for moves authored to travel (the dodge and the roll, the run attack). A flag on the
+ * asset, so every machine that plays the montage decides alike (UVCActionAnimSet::CarriesCapsule). The layers script
+ * adds it.
+ */
+UCLASS(meta = (DisplayName = "VC Carries Capsule"))
+class VOXELCHARACTERPLUGIN_API UVCAnimMetaData_CarriesCapsule : public UAnimMetaData
+{
+	GENERATED_BODY()
 };
 
 /**
@@ -300,6 +335,17 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Block")
 	TObjectPtr<UAnimMontage> GuardBreak;
 
+	/**
+	 * The dodge steps per side, relative to the facing (the sword moves plan, D170): Back is the step with no movement
+	 * input, the four the dodge toward the input while the facing is locked to the view. An empty side plays Front's.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Moves")
+	FVCDirectionalMontages Dodge;
+
+	/** The roll forward, toward the movement input (D170). Empty: the set has no roll (the press steps instead). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Moves")
+	TObjectPtr<UAnimMontage> Roll;
+
 	/** Taking this set's weapon from a sheath and putting it back, per sheath (the equipment sheathing plan, D79). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TArray<FVCSheathMontages> SheathMontages;
@@ -344,6 +390,22 @@ public:
 	 * @return Seconds from the montage's start at play rate 1; 0 for no montage
 	 */
 	static float GetRecoveryTime(const UAnimMontage* Montage);
+
+	/**
+	 * When a dodge's or a roll's travel is 90 % done (D170): the first UVCAnimNotify_ActionTravelled's time, else
+	 * DefaultFraction of its length.
+	 * @param Montage         The move's montage
+	 * @param DefaultFraction The fraction of the montage's length without the marker
+	 * @return Seconds from the montage's start at play rate 1; 0 for no montage
+	 */
+	static float GetTravelledTime(const UAnimMontage* Montage, float DefaultFraction = 0.3f);
+
+	/**
+	 * Whether a montage carries the capsule on the move too (D168): it has root motion and UVCAnimMetaData_CarriesCapsule.
+	 * @param Montage The montage (null gives false)
+	 * @return True when its root motion moves the capsule with movement input as well
+	 */
+	static bool CarriesCapsule(const UAnimMontage* Montage);
 
 	/**
 	 * The side a hit came from, measured about the victim's local up.

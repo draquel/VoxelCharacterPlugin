@@ -636,6 +636,12 @@ bool AVCCharacterBase::IsOutOfWorld(const FVoxelWorldBounds& Bounds, const FVect
 void AVCCharacterBase::FaceRotation(FRotator NewControlRotation, float DeltaTime)
 {
 	const UCharacterMovementComponent* Move = GetCharacterMovement();
+	// A dodge or a roll holds the facing it started with (the sword moves plan, D170): its root motion runs along it, and
+	// the server, which does not turn the body with the view, replays it that way.
+	if (const UVCMovementComponent* VoxelMove = Cast<UVCMovementComponent>(Move); VoxelMove && VoxelMove->IsPlayingCapsuleMontage())
+	{
+		return;
+	}
 	if (!Move || !Move->HasCustomGravity())
 	{
 		Super::FaceRotation(NewControlRotation, DeltaTime);

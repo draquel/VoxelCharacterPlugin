@@ -911,6 +911,10 @@ void AVCCharacterBase::GrantDefaultAbilities(UAbilitySystemComponent* ASC)
 	{
 		ASC->GiveAbility(FGameplayAbilitySpec(PS->BlockAbilityClass, 1, INDEX_NONE, this));
 	}
+	if (PS->DodgeAbilityClass)
+	{
+		ASC->GiveAbility(FGameplayAbilitySpec(PS->DodgeAbilityClass, 1, INDEX_NONE, this));
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -977,6 +981,12 @@ bool AVCCharacterBase::StartMeleeSwing()
 	// time. A press goes by the combo's rule (D104), as the server's acceptance does: nothing in the wind-up, kept from the
 	// strike until the recovery (Tick plays it then), the next attack from the recovery on.
 	int32 Variant = -1;
+	// A press during a dodge or a roll is kept and plays the combo's first attack at the move's recovery (D170).
+	if (ActionMontages && ActionMontages->IsMoveBeforeRecovery())
+	{
+		ActionMontages->BufferAttack();
+		return true;
+	}
 	if (ActionMontages && ActionMontages->GetMontage(EVCAnimAction::Attack, 0))
 	{
 		switch (ActionMontages->ClassifyAttackPress())
@@ -1003,7 +1013,7 @@ bool AVCCharacterBase::StartMeleeSwing()
 	{
 		return ActivateMeleeSwing(Variant);
 	}
-	Server_RequestMeleeSwing(static_cast<int8>(FMath::Clamp(Variant, -1, 127)));
+	Server_RequestMove(FVCMoveRequest(EVCMoveKind::Attack, Variant));
 	return true;
 }
 
@@ -1019,12 +1029,6 @@ bool AVCCharacterBase::ActivateMeleeSwing(int32 ComboIndex)
 		ActionMontages->SetRequestedAttack(ComboIndex);
 	}
 	return ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(CGFGameplayTags::Ability_Attack_Melee));
-}
-
-void AVCCharacterBase::Server_RequestMeleeSwing_Implementation(int8 ComboIndex)
-{
-	// The ability checks the rest (the combo's timing, the attacker's state); an index out of the combo is the server's to pick.
-	ActivateMeleeSwing(ComboIndex);
 }
 
 bool AVCCharacterBase::TryStartRangedAttack()
@@ -2637,6 +2641,10 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	{
 		EIC->BindAction(Config->IA_Crouch, ETriggerEvent::Started, this, &AVCCharacterBase::Input_StartCrouch);
 		EIC->BindAction(Config->IA_Crouch, ETriggerEvent::Completed, this, &AVCCharacterBase::Input_StopCrouch);
+	}
+	if (Config->IA_Dodge)
+	{
+		EIC->BindAction(Config->IA_Dodge, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Dodge);
 	}
 
 	if (Config->IA_Interact)
