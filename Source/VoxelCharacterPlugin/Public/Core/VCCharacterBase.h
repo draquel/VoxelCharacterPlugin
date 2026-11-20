@@ -505,7 +505,8 @@ public:
 
 	/**
 	 * Switch between first and third person on this machine: the camera, the rotation rule, mesh visibility, equipment
-	 * attachment, the interaction range, then OnViewModeChanged. No request goes to the server (nothing there reads it).
+	 * attachment, the interaction range, then OnViewModeChanged. The rotation rule goes to the server too
+	 * (Server_SetFacesView, G256): the body turns with the view there as on the owner; the rest is the owner's alone.
 	 * @param NewMode The perspective to switch to
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Camera")
@@ -1086,6 +1087,26 @@ protected:
 	UFUNCTION(Server, Reliable)
 	void Server_SetWantsToAim(bool bWantsToAim);
 
+	/**
+	 * The rule this machine turns the body by (G256): with the view (first person) or toward where it moves. The owner's
+	 * from its view mode (SetViewMode); the server's from the owner's request (Server_SetFacesView); false elsewhere.
+	 */
+	bool bFacesView = false;
+
+	/**
+	 * Apply the view's rotation rule on this machine: the body's yaw with the controller's, or toward the movement.
+	 * @param bInFacesView True for the first-person rule
+	 */
+	void ApplyViewFacing(bool bInFacesView);
+
+	/**
+	 * The owner's view rule on the server (G256), sent at each view toggle (SetViewMode), so the server turns the body as
+	 * the owner does and whatever reads the facing (the gait's strafe speed, an attack's lunge) agrees.
+	 * @param bInFacesView True while the owner is in first person
+	 */
+	UFUNCTION(Server, Reliable)
+	void Server_SetFacesView(bool bInFacesView);
+
 	/** The server's rule: bIsAiming from the request and the draw; applies it here and replicates it. */
 	void UpdateServerAiming();
 
@@ -1467,10 +1488,17 @@ protected:
 
 	/**
 	 * Raise the guard (D94): with a shield in the off hand (UVCBlockAbility::CanStartBlock), the owner's guard at once and
-	 * the block ability's activation, which the server holds while the secondary action is held.
-	 * @return True when the guard went up (or was up)
+	 * the block ability's activation, which the server holds while the secondary action is held. During an attack's swing
+	 * the owner keeps the press and raises the guard at the attack's recovery (D172).
+	 * @return True when the guard went up (or was up), or the press was kept for the recovery
 	 */
 	bool StartBlock();
+
+	/**
+	 * Whether the owner's guard is up or kept for an attack's recovery (D172): nothing else is pressed behind it (D94).
+	 * @return True while StartBlock's guard is up or kept
+	 */
+	bool IsGuardHeld() const;
 
 	/** Lower the guard: the owner's lowering (when its guard still plays) and the ability's release on the server. */
 	void StopBlock();

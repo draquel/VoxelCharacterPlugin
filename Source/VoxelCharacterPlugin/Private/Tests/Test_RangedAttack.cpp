@@ -6,6 +6,10 @@
 
 #include "Camera/VCAimCameraMode.h"
 #include "Combat/VCArrowMovementComponent.h"
+#include "Animation/VCActionAnimSet.h"
+#include "Animation/VCActionMontageComponent.h"
+#include "Animation/AnimMontage.h"
+#include "Core/VCAnimatedCharacter.h"
 #include "UI/VCReticleWidget.h"
 #include "Combat/VCArrowProjectile.h"
 #include "Combat/VCCombatComponent.h"
@@ -645,6 +649,125 @@ bool FVCBlock_GuardTakesFrontHits::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Lowered: no State.Blocking"), ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Blocking));
 	const float Lowered = HitFrom(Front);
 	TestEqual(*FString::Printf(TEXT("Lowered: a hit from the front lands whole (%.2f)"), Lowered), Lowered, Unguarded, 0.05f);
+	return true;
+}
+
+// The guard during an attack (G252, D172): no guard before the attack's recovery, on the owner (its press kept) and on the
+// server (its activation refused), so a dedicated server, which plays no guard, and the owner play the same attack to its
+// recovery. The kept guard is due at the recovery, dropped by the button's release or a dodge, and drops a kept attack.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCBlock_WaitsForAttackRecovery, "VoxelCharacter.Combat.Block.WaitsForAttackRecovery", VC_RANGED_FLAGS)
+bool FVCBlock_WaitsForAttackRecovery::RunTest(const FString& Parameters)
+{
+	using namespace VCRangedTestHelpers; // in the body, not at file scope: a unity blob shares it with the next file
+	FRangedWorld W;
+	if (!TestNotNull(TEXT("The item database"), W.Database))
+	{
+		return false;
+	}
+	UItemDefinition* ShieldDef = W.Define(TEXT("GuardWaitTestShield"), 1, FGameplayTagContainer(CGFGameplayTags::Item_Category_Weapon));
+	{
+		UItemFragment_Equipment* Equip = NewObject<UItemFragment_Equipment>(ShieldDef);
+		Equip->EquipmentSlotTag = CGFGameplayTags::Equipment_Slot_OffHand;
+		UItemFragment_Shield* Shield = NewObject<UItemFragment_Shield>(ShieldDef);
+		ShieldDef->Fragments = { Equip, Shield };
+	}
+
+	const FTransform Transform(FVector(0, 0, 1000));
+	AVCNPCCharacterBase* Guard = W.World->SpawnActorDeferred<AVCNPCCharacterBase>(AVCNPCCharacterBase::StaticClass(), Transform, nullptr, nullptr,
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (!TestNotNull(TEXT("A guard"), Guard))
+	{
+		return false;
+	}
+	Guard->bAIEnabled = false;
+	Guard->DefaultAbilities.Add(UVCBlockAbility::StaticClass());
+	Guard->FinishSpawning(Transform);
+	if (UCharacterMovementComponent* Move = Guard->GetCharacterMovement())
+	{
+		Move->DisableMovement();
+	}
+	UEquipmentManagerComponent* Equipment = NewObject<UEquipmentManagerComponent>(Guard, TEXT("GuardWaitTestEquipment"));
+	FEquipmentSlotDefinition OffHand;
+	OffHand.SlotTag = CGFGameplayTags::Equipment_Slot_OffHand;
+	Equipment->AvailableSlots.Add(OffHand);
+	Equipment->RegisterComponent();
+	TestTrue(TEXT("The shield equips into the off hand"), Equipment->TryEquipToSlot(W.Database->CreateItemInstance(ShieldDef->GetPrimaryAssetId()),
+		CGFGameplayTags::Equipment_Slot_OffHand) == EEquipmentResult::Success);
+
+	// The held set: one attack of 1 s, its hit at 0.3 s and its recovery at 0.6 s.
+	UAnimMontage* Attack = NewObject<UAnimMontage>(GetTransientPackage());
+	Attack->SetCompositeLength(1.f);
+	const auto AddNotify = [Attack](UAnimNotify* Notify, float Time)
+	{
+		FAnimNotifyEvent Event;
+		Event.Notify = Notify;
+		Event.Link(Attack, Time);
+		Event.TriggerTimeOffset = 0.f;
+		Attack->Notifies.Add(Event);
+	};
+	AddNotify(NewObject<UVCAnimNotify_ActionHit>(Attack), 0.3f);
+	AddNotify(NewObject<UVCAnimNotify_ActionRecovery>(Attack), 0.6f);
+	UVCActionAnimSet* Set = NewObject<UVCActionAnimSet>(GetTransientPackage());
+	const IVCAnimatedCharacter* Animated = Cast<IVCAnimatedCharacter>(Guard);
+	Set->ActionSet = Animated ? Animated->GetAnimActionSet() : VCGameplayTags::Equipment_AnimSet_Unarmed.GetTag();
+	Set->AttackCombo = { Attack };
+	UVCActionMontageComponent* Montages = Guard->ActionMontages;
+	UAbilitySystemComponent* ASC = Guard->GetAbilitySystemComponent();
+	if (!TestNotNull(TEXT("Action montages"), Montages) || !TestNotNull(TEXT("An ability system"), ASC))
+	{
+		return false;
+	}
+	Montages->ActionAnimSets.Add(Set);
+	const auto Advance = [&W](float Seconds)
+	{
+		for (float Elapsed = 0.f; Elapsed < Seconds - UE_KINDA_SMALL_NUMBER; Elapsed += 0.05f)
+		{
+			++GFrameCounter;
+			W.World->Tick(LEVELTICK_All, 0.05f);
+		}
+	};
+	const auto Raise = [&]() { return ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(VCGameplayTags::Ability_Block)); };
+
+	TestTrue(TEXT("At rest the guard may go up"), UVCBlockAbility::CanStartBlock(Guard));
+
+	// An attack: no guard before its recovery; a press is kept, and keeping it drops a kept attack press.
+	float Rate = 0.f;
+	TestEqual(TEXT("The attack"), Montages->ChooseAttack(1.f, Rate), 0);
+	TestTrue(TEXT("In its swing: before the recovery"), Montages->IsAttackBeforeRecovery());
+	TestFalse(TEXT("In its swing: no guard"), UVCBlockAbility::CanStartBlock(Guard));
+	TestFalse(TEXT("In its swing: the server refuses the activation"), Raise());
+	Advance(0.35f);
+	Montages->BufferAttack();
+	Montages->BufferGuard();
+	TestFalse(TEXT("The kept guard drops the kept attack"), Montages->HasBufferedAttack());
+	TestTrue(TEXT("The guard is kept"), Montages->HasBufferedGuard());
+	Advance(0.15f);
+	TestFalse(TEXT("Not due before the recovery"), Montages->TakeDueBufferedGuard());
+	TestTrue(TEXT("Still kept"), Montages->HasBufferedGuard());
+	Advance(0.15f);
+	TestFalse(TEXT("Past the recovery"), Montages->IsAttackBeforeRecovery());
+	TestTrue(TEXT("Due at the recovery"), Montages->TakeDueBufferedGuard());
+	TestFalse(TEXT("Taken once"), Montages->HasBufferedGuard());
+	TestTrue(TEXT("At the recovery the guard may go up"), UVCBlockAbility::CanStartBlock(Guard));
+	TestTrue(TEXT("At the recovery the server takes the activation"), Raise());
+	TestTrue(TEXT("Raised: State.Blocking"), ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Blocking));
+	UVCBlockAbility::ReleaseBlock(ASC);
+
+	// The button up before the recovery: nothing is due.
+	Advance(1.f);
+	TestEqual(TEXT("A second attack"), Montages->ChooseAttack(1.f, Rate), 0);
+	Montages->BufferGuard();
+	Montages->ClearBufferedGuard();
+	Advance(0.7f);
+	TestFalse(TEXT("Released before the recovery: not due"), Montages->TakeDueBufferedGuard());
+
+	// A dodge in the swing drops the kept guard (no guard before the dodge's recovery either, D170).
+	Advance(1.f);
+	TestEqual(TEXT("A third attack"), Montages->ChooseAttack(1.f, Rate), 0);
+	Montages->BufferGuard();
+	Montages->RecordMove(EVCMoveKind::Dodge, 0);
+	TestFalse(TEXT("A dodge drops the kept guard"), Montages->HasBufferedGuard());
+	TestFalse(TEXT("A dodge ends the attack's record"), Montages->IsAttackBeforeRecovery());
 	return true;
 }
 

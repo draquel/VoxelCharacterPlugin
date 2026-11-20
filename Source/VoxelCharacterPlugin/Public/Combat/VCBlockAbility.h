@@ -52,8 +52,9 @@ public:
 	static bool GetHeldShield(const AActor* Avatar, FVCShieldStats& OutStats);
 
 	/**
-	 * Whether an avatar can raise its guard now: a shield in the off hand, the guard not broken, not dead or downed. The
-	 * owner's check before it plays its guard; the server's activation runs the same one.
+	 * Whether an avatar can raise its guard now: a shield in the off hand, the guard not broken, not dead or downed, and
+	 * no dodge or roll (D170) or attack (D172) before its recovery (the server allows a remote owner's request a trip's
+	 * jitter early). The owner's check before it plays its guard; the server's activation runs the same one.
 	 * @param Avatar The character
 	 * @return True when a block may start
 	 */

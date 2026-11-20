@@ -477,4 +477,75 @@ bool FVCAimTurnEaseTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// The first-person rule on the server (G256): the owner's view toggle turns its body with the view and sends the rule to
+// the server, which applies the same flags to the owner's pawn there, so the gait table's rotation mode (the strafe
+// speed) and anything reading the facing agree. A pawn nobody here controls stands in for a remote owner's on the
+// server; the request's handler is reached as the server's RPC dispatch reaches it.
+// ---------------------------------------------------------------------------
+
+namespace VCGaitTests
+{
+	/** The server's handler of the owner's view rule, reached from outside the class (it is the RPC's implementation). */
+	struct FFacesViewAccess : AVCCharacterBase
+	{
+		static void Receive(AVCCharacterBase& Pawn, bool bFacesView)
+		{
+			void (AVCCharacterBase::*Handler)(bool) = &FFacesViewAccess::Server_SetFacesView_Implementation;
+			(Pawn.*Handler)(bFacesView);
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCFacesViewOnServerTest, "VoxelCharacter.Movement.FacesViewOnServer", VC_GAIT_TEST_FLAGS)
+
+bool FVCFacesViewOnServerTest::RunTest(const FString& Parameters)
+{
+	VCTesting::FPlayWorld W(TEXT("VCFacesViewWorld"), /*bDestroyActorsFirst=*/true);
+
+	// The owner: first person turns the body with the view, third person faces where it moves.
+	AVCCharacterBase* Owner = VCGaitTests::SpawnPlayer(W.World, FRotator::ZeroRotator);
+	AAIController* Controller = W.World->SpawnActor<AAIController>();
+	UVCMovementComponent* OwnerMove = Owner ? Cast<UVCMovementComponent>(Owner->GetCharacterMovement()) : nullptr;
+	if (!TestNotNull(TEXT("The owner has the voxel movement"), OwnerMove) || !TestNotNull(TEXT("A controller spawns"), Controller))
+	{
+		return false;
+	}
+	Controller->Possess(Owner);
+	TestTrue(TEXT("The owner is locally controlled"), Owner->IsLocallyControlled());
+	Owner->SetViewMode(EVCViewMode::FirstPerson);
+	TestTrue(TEXT("Owner, first person: the body turns with the view"), Owner->bUseControllerRotationYaw);
+	TestEqual(TEXT("Owner, first person: the gait's strafe mode"), OwnerMove->GetRotationMode(), EVCRotationMode::Strafe);
+	Owner->SetViewMode(EVCViewMode::ThirdPerson);
+	TestFalse(TEXT("Owner, third person: the body does not turn with the view"), Owner->bUseControllerRotationYaw);
+	TestEqual(TEXT("Owner, third person: oriented to the movement"), OwnerMove->GetRotationMode(), EVCRotationMode::OrientToMovement);
+
+	// The server's copy of a remote owner's pawn: the request applies the same rule, and the view mode stays third person
+	// (only the owner hides its body and holds items on the arms, G87).
+	AVCCharacterBase* Remote = VCGaitTests::SpawnPlayer(W.World, FRotator::ZeroRotator);
+	UVCMovementComponent* RemoteMove = Remote ? Cast<UVCMovementComponent>(Remote->GetCharacterMovement()) : nullptr;
+	if (!TestNotNull(TEXT("The remote pawn has the voxel movement"), RemoteMove))
+	{
+		return false;
+	}
+	TestFalse(TEXT("The remote pawn is not locally controlled"), Remote->IsLocallyControlled());
+	TestEqual(TEXT("Before the request: oriented to the movement"), RemoteMove->GetRotationMode(), EVCRotationMode::OrientToMovement);
+	VCGaitTests::FFacesViewAccess::Receive(*Remote, true);
+	TestTrue(TEXT("Server, first person: the body turns with the view"), Remote->bUseControllerRotationYaw);
+	TestEqual(TEXT("Server, first person: the gait's strafe mode, as the owner's"), RemoteMove->GetRotationMode(), EVCRotationMode::Strafe);
+	TestEqual(TEXT("Server: the view mode is the owner's alone"), Remote->GetViewMode(), EVCViewMode::ThirdPerson);
+	// The face-aim flip leaves the first-person rule alone (as on the owner, whose first person returns early).
+	Remote->SetFacesAim(false);
+	TestEqual(TEXT("Server, first person: a face-aim release keeps the strafe mode"), RemoteMove->GetRotationMode(), EVCRotationMode::Strafe);
+	VCGaitTests::FFacesViewAccess::Receive(*Remote, false);
+	TestFalse(TEXT("Server, third person: the body does not turn with the view"), Remote->bUseControllerRotationYaw);
+	TestEqual(TEXT("Server, third person: oriented to the movement"), RemoteMove->GetRotationMode(), EVCRotationMode::OrientToMovement);
+
+	// A pawn controlled here (a listen server's own) keeps its own rule: the request does not reach it.
+	VCGaitTests::FFacesViewAccess::Receive(*Owner, true);
+	TestFalse(TEXT("Locally controlled: the request is ignored"), Owner->bUseControllerRotationYaw);
+	Controller->UnPossess();
+	return true;
+}
+
 #endif // WITH_AUTOMATION_TESTS

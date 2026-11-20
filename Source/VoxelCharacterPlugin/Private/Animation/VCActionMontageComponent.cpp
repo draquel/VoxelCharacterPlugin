@@ -109,12 +109,18 @@ void UVCActionMontageComponent::RecordMove(EVCMoveKind Kind, int32 Index)
 	AttackStartTime = -1.0;
 	AttackRecoveryTime = 0.f;
 	bAttackBuffered = false;
+	bGuardBuffered = false;
 }
 
 bool UVCActionMontageComponent::IsMoveBeforeRecovery(float Tolerance) const
 {
 	const UWorld* World = GetWorld();
 	return World && MoveStartTime >= 0.0 && IsBeforeRecovery(World->GetTimeSeconds() - MoveStartTime, MoveRecoveryTime, Tolerance);
+}
+
+bool UVCActionMontageComponent::IsAttackBeforeRecovery(float Tolerance) const
+{
+	return ComboIndex >= 0 && AttackStartTime >= 0.0 && IsBeforeRecovery(GetSecondsSinceAttack(), AttackRecoveryTime, Tolerance);
 }
 
 bool UVCActionMontageComponent::ShouldBreakRecovery(double SinceStart, float RecoveryTime, float EndTime, bool bWantsToMove)
@@ -463,6 +469,37 @@ bool UVCActionMontageComponent::TakeDueBufferedAttack()
 		return false;
 	}
 	bAttackBuffered = false;
+	return true;
+}
+
+bool UVCActionMontageComponent::StopAttackForGuard()
+{
+	float Position = 0.f;
+	UAnimMontage* Attack = GetPlayingAttackMontage(Position);
+	UAnimInstance* AnimInstance = Attack ? GetBodyAnimInstance() : nullptr;
+	if (!AnimInstance)
+	{
+		return false;
+	}
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	AnimInstance->Montage_Stop(Set ? Set->RecoveryBlendOut : 0.2f, Attack);
+	return true;
+}
+
+void UVCActionMontageComponent::BufferGuard()
+{
+	bGuardBuffered = true;
+	bAttackBuffered = false;
+}
+
+bool UVCActionMontageComponent::TakeDueBufferedGuard()
+{
+	// The guard rises at the attack's recovery (D172); a dodge or a roll drops it (RecordMove), so none is before its own.
+	if (!bGuardBuffered || IsMoveBeforeRecovery() || IsAttackBeforeRecovery())
+	{
+		return false;
+	}
+	bGuardBuffered = false;
 	return true;
 }
 
