@@ -198,7 +198,7 @@ attacker builds FCGFDamageContext
   `UE4_SSH_Attack_04_Seq`, the same motion as the UE5 clip. The sword's Chop plays `SSH_Attack_01`, a forward cut from
   the idle (D108; `_04`, the finisher, spins), and every set's Chop hits at its clip's measured strike (G182: 0.48 s
   for the sword's). The demo's other attacks are `SWORD_MOVES_PLAN.md`'s phases: the secondary branch, the charge and
-  the run attack below (B, C and D), the dodge ("The dodge and the roll"), the air and plunge attacks to come.
+  the run attack and the air and plunge attacks below (B, C, D and E), the dodge ("The dodge and the roll").
 - **The secondary branch** (the sword moves plan's B, D166, 2026-11-19). The combo is a table: each attack of a set's
   `AttackCombo` has a step (`FVCAttackComboStep` in `AttackComboSteps`) naming the attack the primary and the secondary
   attack continue with, and `SecondaryAttackStart` is the one the secondary starts a combo with
@@ -251,6 +251,29 @@ attacker builds FCGFDamageContext
   and one after `_12`'s recovery under the speed play `_01`; a dodge 0.4 s into `_12` rolls out of it; each on every
   machine, at the same place, with no correction. On `PlanetTest` at 30 N 40 E on a slope it carried the body 404 uu
   across local up, slowed by the slope as the sprint was (624 against 700).
+- **The air attack and the plunge** (the plan's E, D169, 2026-11-20). A primary press while falling (a jump, a ledge, a
+  long fall; not swimming, not the QA flight) plays the set's `AirAttack`, the secondary's its `PlungeAttack`: the
+  SwordShield set's `_Air_02` (combo index 8) and `_Plunge_01` (9), each one montage of three sections, the swing
+  (`Begin`), the fall's loop (`UVCActionAnimSet::AirLoopSection`, looping as long as the fall lasts) and the landing
+  (`LandingSection`). One per fall, either one (`CanAirAttackFrom`); a press in the same fall, and one in the swing's
+  wind-up, does nothing. The fall stays the fall: gravity in the gravity frame and no extra speed, and no montage's
+  root motion is taken in a fall ("Movement" › Montage root motion), so the body keeps the fall's own speed across
+  local up. Every machine goes on to the landing section at its own landing (`UVCMovementComponent::OnMovementModeChanged`
+  calls `UVCActionMontageComponent::HandleFallEnded`, a simulated proxy by its replicated mode, not in a replay of moves;
+  into the water the montage stops), and from the landing the attack's times count from it: a press is kept until the
+  landing's recovery (0.73 s into it for the air attack, 0.53 for the plunge), then starts the combo (`_01`, `_08`).
+  The air attack's hit is its swing's (0.37 s, swept as a ground swing's). The plunge's is the slam at the server's own
+  landing: the melee ability waits for its fall to end (`OnFallEnded`) and then hits every hostile damageable within the
+  set's `PlungeRadius` (200 uu) of the feet, across local up and along it (`UVCMeleeAttackAbility::IsInSlam`), at its
+  step's 1.5 times the weapon's damage; into the water, or downed, no slam. The request is the attack's
+  (`EVCMoveKind::Attack`, its index); `AcceptAttack` takes an air index while the server's character falls or landed
+  less than 0.2 s ago (the request's allowance; then it plays at its landing and the plunge slams at once), else
+  refuses it. Measured with `vox.PIE.Net 2 lag=100`: from a jump, a ledge drop (2 m) and a 30 m fall, each on the owner,
+  the server (0.12-0.13 s later) and the other client, which all jump to the landing at their own touchdown and end at
+  the same place with no correction; the loop held through the long fall; a second press in it did nothing; a running
+  jump with the input let go kept its 341 uu/s through the swing. The plunge's slam hit the two training dummies 150 and
+  176 uu from the feet for 27 (the sword's swing 18) and not the third at 260. On `PlanetTest` at 30-31 N 40 E the air
+  attack and the plunge played the same, the slam hitting a dummy 184 uu across local up and missing one 617 uu away.
 
 ### The bow (ranged combat plan, 2026-11-06 to 11-07)
 
@@ -523,7 +546,9 @@ re-mesh).
   server's replay decide alike; a simulated proxy, which runs no moves, takes it from its speed over 50 uu/s and
   follows the server's replicated movement otherwise. Standing, the lunge moves the capsule; moving, the locomotion
   keeps it. A montage flagged to carry the capsule (`UVCAnimMetaData_CarriesCapsule`, the sword moves plan's D168: the
-  dodge, the roll and the sword's run attack, authored to travel) takes its root motion with input too: `ApplyMontageRootMotionMode` asks
+  dodge, the roll and the sword's run attack, authored to travel) takes its root motion with input too. None is taken in
+  a fall (D169: the fall stays the fall; a montage's root motion would replace the fall's velocity across local up), the
+  capsule's carriers included: `ApplyMontageRootMotionMode` asks
   `IsPlayingCapsuleMontage` (an active montage with root motion and the flag, `UVCActionAnimSet::CarriesCapsule`) on
   every machine from its own montages, so the owner's prediction and the server's replay still decide alike; the layers
   script adds the flag. Test `VoxelCharacter.Movement.MontageCarriesCapsule`.
@@ -1124,7 +1149,8 @@ hand it aims ("The bow" › Aiming), held with a shield in the off hand it guard
 mode it places. `PressSecondaryAction` / `ReleaseSecondaryAction` run it for scripts. The secondary attack
 (`IA_SecondaryAttack`, D166) swings the sword's other branch of the combo ("GAS" › The sword's attack flow): with a melee
 weapon whose set has a secondary branch, the branch's attack by the combo's rule, at a target or at the air; nothing
-behind a raised guard, in edit mode or while a weapon comes out. `PressSecondaryAttack` runs it for scripts.
+behind a raised guard, in edit mode or while a weapon comes out. In the air it plays the set's plunge (D169).
+`PressSecondaryAttack` runs it for scripts.
 
 ### The primary action
 
@@ -1144,7 +1170,7 @@ does nothing while the guard is up (D94).
    and the server's sweep at the hit time lands on whatever is in reach then. Bare hands do nothing here. In steps 2 and
    4, with a set that charges, a press from rest begins the charge and the swing comes at the release or by itself
    after the hold (D167); `ReleasePrimaryAction` releases it. Sprinting faster than the set's `RunAttackSpeed`, a press
-   plays the set's run attack instead (D168).
+   plays the set's run attack instead (D168); falling, its air attack (D169).
 5. Dig or place: with edit mode on, or a digging tool in the main hand for a dig (`HasDiggingTool`: `GetMiningSpeed() >
    1`). Unarmed digging and placing need edit mode.
 
@@ -1535,7 +1561,7 @@ and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `C
 `Combat.Block.GuardTakesFrontHits` (D94), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the attack flow's
 `Anim.RecoveryTime`, `Anim.AttackPressRule`, `Anim.AttackCombo` and `Combat.Melee.AcceptAttack` (D102-D107, G179); the sword moves'
 `Anim.Sword.ComboTable`, `Anim.Sword.SecondaryPress` and `Combat.Melee.AcceptSecondary` (D166), `Anim.Sword.ChargeRule` and
-`Combat.Melee.ChargedStrike` (D167), `Anim.Sword.RunAttackRule` and `Combat.Melee.RunAttack` (D168); the sheaths'
+`Combat.Melee.ChargedStrike` (D167), `Anim.Sword.RunAttackRule` and `Combat.Melee.RunAttack` (D168), `Anim.Sword.AirAttackRule` and `Combat.Melee.Plunge` (D169); the sheaths'
 `EquipmentLoop.SheathSlots` (the three sheaths, a shield on the back drawn into the off hand with the sword, D95-D96), `SheathActionSet` (the set follows the drawn weapon, R and X, the snapshot's drawn state),
 `SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip` (the equipment sheathing plan's S2-S4); the state
 machine's `Locomotion.ClipChoice`, `StanceWeight`, `SetChange` (L1), `States`, `Pace`, `Transitions`, `Instance` and

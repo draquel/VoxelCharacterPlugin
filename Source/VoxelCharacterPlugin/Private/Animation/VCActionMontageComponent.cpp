@@ -168,6 +168,101 @@ bool UVCActionMontageComponent::CanRunAttack(float SpeedTolerance) const
 	return CanRunAttackFrom(Set->HasRunAttack(), Movement->IsSprinting(), Speed, Set->RunAttackSpeed - FMath::Max(SpeedTolerance, 0.f));
 }
 
+bool UVCActionMontageComponent::CanAirAttackFrom(bool bSetHasIt, bool bUsedThisFall, bool bFalling, double SinceLanded, float Tolerance)
+{
+	return bSetHasIt && !bUsedThisFall && (bFalling || (SinceLanded >= 0.0 && SinceLanded < Tolerance));
+}
+
+bool UVCActionMontageComponent::IsFalling() const
+{
+	const ACharacter* Character = Cast<ACharacter>(GetOwner());
+	const UCharacterMovementComponent* Movement = Character ? Character->GetCharacterMovement() : nullptr;
+	return Movement && Movement->IsFalling();
+}
+
+bool UVCActionMontageComponent::HasAirAttack(bool bSecondary) const
+{
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	return Set && Set->GetAirAttack(bSecondary) >= 0;
+}
+
+bool UVCActionMontageComponent::CanAirAttack(bool bSecondary, float Tolerance) const
+{
+	const UWorld* World = GetWorld();
+	const double SinceLanded = World && LastLandedTime >= 0.0 ? World->GetTimeSeconds() - LastLandedTime : -1.0;
+	return CanAirAttackFrom(HasAirAttack(bSecondary), bAirAttackThisFall, IsFalling(), SinceLanded, Tolerance);
+}
+
+int32 UVCActionMontageComponent::ChooseAirAttack(bool bSecondary, float AttackSpeed, float& OutPlayRate)
+{
+	OutPlayRate = GetAttackPlayRate(AttackSpeed);
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	const int32 Index = Set ? Set->GetAirAttack(bSecondary) : -1;
+	if (Index < 0)
+	{
+		return -1;
+	}
+	RecordAttack(Index, OutPlayRate);
+	bAirAttackThisFall = true;
+	return Index;
+}
+
+void UVCActionMontageComponent::CountAirAttackFromLanding()
+{
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	const UWorld* World = GetWorld();
+	if (!Set || !World || !Set->IsAirAttack(ComboIndex) || AttackStartTime < 0.0)
+	{
+		return;
+	}
+	// The recorded times are the montage's, from its start: from the landing, its position is the landing section's.
+	const float Rate = AttackEndTime > 0.f && Set->AttackCombo[ComboIndex] ? Set->AttackCombo[ComboIndex]->GetPlayLength() / AttackEndTime : 1.f;
+	AttackStartTime = World->GetTimeSeconds() - Set->GetLandingTime(ComboIndex) / FMath::Max(Rate, 0.01f);
+}
+
+void UVCActionMontageComponent::HandleFallEnded(bool bOnGround)
+{
+	const UWorld* World = GetWorld();
+	LastLandedTime = World ? World->GetTimeSeconds() : 0.0;
+	bAirAttackThisFall = false;
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	if (Set && Set->IsAirAttack(ComboIndex) && AttackStartTime >= 0.0)
+	{
+		if (bOnGround)
+		{
+			CountAirAttackFromLanding();
+		}
+		else
+		{
+			// Into the water: no landing to play, and the combo starts over.
+			ComboIndex = -1;
+			AttackStartTime = -1.0;
+		}
+	}
+	// This machine's own montage, whoever started it (a simulated proxy keeps no attack of its own).
+	if (UAnimInstance* AnimInstance = Set ? GetBodyAnimInstance() : nullptr)
+	{
+		for (const int32 Index : { Set->GetAirAttack(false), Set->GetAirAttack(true) })
+		{
+			UAnimMontage* Montage = Index >= 0 ? Set->AttackCombo[Index].Get() : nullptr;
+			const FAnimMontageInstance* Instance = Montage ? AnimInstance->GetActiveInstanceForMontage(Montage) : nullptr;
+			if (!Instance || !Instance->IsActive() || Instance->IsStopped())
+			{
+				continue;
+			}
+			if (bOnGround && Montage->GetSectionIndex(UVCActionAnimSet::LandingSection) != INDEX_NONE)
+			{
+				AnimInstance->Montage_JumpToSection(UVCActionAnimSet::LandingSection, Montage);
+			}
+			else
+			{
+				AnimInstance->Montage_Stop(Set->RecoveryBlendOut, Montage);
+			}
+		}
+	}
+	OnFallEnded.Broadcast(bOnGround);
+}
+
 void UVCActionMontageComponent::BeginCharge()
 {
 	const UWorld* World = GetWorld();
@@ -306,6 +401,25 @@ bool UVCActionMontageComponent::AcceptAttack(int32 RequestedIndex, float AttackS
 	{
 		OutIndex = ChargeSeconds >= 0.0 && ChargeSeconds >= Set->GetChargeTime() - AttackRequestTolerance ? Set->ChargedAttack : 0;
 		RecordAttack(OutIndex, OutPlayRate);
+		return true;
+	}
+	// An air attack or a plunge (D169): taken as asked while this machine's character falls, or landed within the
+	// request's allowance, and its fall had none; else refused (the owner's montage plays on alone).
+	if (Set->IsAirAttack(RequestedIndex))
+	{
+		if (!CanAirAttack(RequestedIndex == Set->GetAirAttack(true), AttackRequestTolerance))
+		{
+			return false;
+		}
+		OutIndex = RequestedIndex;
+		RecordAttack(OutIndex, OutPlayRate);
+		// Still falling here: this fall has had its air attack. Landed already (within the allowance): the attack is at its
+		// landing, and the next fall is free.
+		bAirAttackThisFall = IsFalling();
+		if (!bAirAttackThisFall)
+		{
+			CountAirAttackFromLanding();
+		}
 		return true;
 	}
 	// The run attack (D168): taken while this machine's character sprints fast enough, the request's allowance taken off
@@ -500,6 +614,13 @@ float UVCActionMontageComponent::PlayActionLocal(EVCAnimAction Action, int32 Var
 	{
 		// The recovery's break (D103) is watched while the attack, the dodge or the roll plays.
 		SetComponentTickEnabled(true);
+	}
+	// An air attack or a plunge played on the ground (taken within the allowance after a landing, or reaching a machine
+	// that already landed) starts at its landing (D169).
+	const UVCActionAnimSet* PlayedSet = Action == EVCAnimAction::Attack && Length > 0.f ? GetCurrentActionAnimSet() : nullptr;
+	if (PlayedSet && PlayedSet->IsAirAttack(Variant) && !IsFalling() && Montage->GetSectionIndex(UVCActionAnimSet::LandingSection) != INDEX_NONE)
+	{
+		AnimInstance->Montage_JumpToSection(UVCActionAnimSet::LandingSection, Montage);
 	}
 	// The charge's variant 1 is its lowering (D167), the End section.
 	if (Action == EVCAnimAction::Charge && Variant == 1 && Length > 0.f && Montage->GetSectionIndex(UVCActionAnimSet::ChargeEndSection) != INDEX_NONE)

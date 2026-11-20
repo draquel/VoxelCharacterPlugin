@@ -984,6 +984,29 @@ bool AVCCharacterBase::StartMeleeSwing(bool bSecondary, bool bFreshPress)
 	// strike until the recovery (Tick plays it then), the next attack from the recovery on.
 	int32 Variant = -1;
 	const UVCActionAnimSet* Set = ActionMontages ? ActionMontages->GetCurrentActionAnimSet() : nullptr;
+	// In the air with a set that has an air attack for the button (D169): the air attack or the plunge, once a fall,
+	// when the attack before has reached its recovery; the fall goes on as it was.
+	if (ActionMontages && ActionMontages->IsFalling() && ActionMontages->HasAirAttack(bSecondary))
+	{
+		const EVCAttackPress Press = ActionMontages->ClassifyAttackPress();
+		if (Press == EVCAttackPress::Ignore || Press == EVCAttackPress::Buffer || !ActionMontages->CanAirAttack(bSecondary))
+		{
+			return true;
+		}
+		ActionMontages->EndCharge();
+		const AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
+		const UVCMeleeAttackAbility* Melee = PS && PS->MeleeAttackAbilityClass
+			? Cast<UVCMeleeAttackAbility>(PS->MeleeAttackAbilityClass->GetDefaultObject()) : nullptr;
+		float PlayRate = 1.f;
+		Variant = ActionMontages->ChooseAirAttack(bSecondary, Melee ? Melee->GetAttackSpeed(this) : 1.f, PlayRate);
+		ActionMontages->PlayActionLocal(EVCAnimAction::Attack, Variant, PlayRate);
+		if (HasAuthority())
+		{
+			return ActivateMeleeSwing(Variant);
+		}
+		Server_RequestMove(FVCMoveRequest(EVCMoveKind::Attack, Variant));
+		return true;
+	}
 	if (bSecondary && (!Set || Set->GetFirstAttack(true) < 0))
 	{
 		// No secondary branch for what is held (D166): the press does nothing.

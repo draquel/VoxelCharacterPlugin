@@ -32,6 +32,9 @@
 // - D, the run attack (D168): a fresh primary press while sprinting faster than the set's speed plays _12 instead of the
 //   combo, never a kept press; the server takes it only while its own character sprints that fast; a press after it
 //   starts the combo again; its montage carries the capsule on the move.
+// - E, the air and plunge attacks (D169): only while falling (or landed within the allowance), one per fall; the
+//   landing section from the landing; the plunge's slam at the server's landing reaches the hostiles within the radius
+//   of the feet and not beyond, at 1.5 times the damage; no montage steers a fall.
 // ---------------------------------------------------------------------------
 
 namespace VCSwordMovesTestHelpers
@@ -121,6 +124,48 @@ namespace VCSwordMovesTestHelpers
 		Run.NextPrimary = 0;
 		Run.NextSecondary = 3;
 		Set->RunAttack = 7;
+		return Set;
+	}
+
+	/**
+	 * A transient air attack montage: the swing (Begin), the fall's loop (Loop, looping) and the landing (Landing), as
+	 * the SwordShield set's _Air_02 and _Plunge_01 are built, its hit and its recovery marked in montage time.
+	 */
+	UAnimMontage* MakeAirMontage(float Begin, float Loop, float Landing, float HitTime, float RecoveryTime)
+	{
+		UAnimMontage* Montage = MakeSwordAttack(Begin + Loop + Landing, HitTime, RecoveryTime);
+		const auto AddSection = [Montage](FName Name, float Time)
+		{
+			FCompositeSection Section;
+			Section.SectionName = Name;
+			Section.Link(Montage, Time);
+			Montage->CompositeSections.Add(Section);
+		};
+		AddSection(TEXT("Default"), 0.f);
+		AddSection(UVCActionAnimSet::AirLoopSection, Begin);
+		AddSection(UVCActionAnimSet::LandingSection, Begin + Loop);
+		return Montage;
+	}
+
+	/**
+	 * The running set with the SwordShield set's air attacks: _Air_02 (combo index 8: the swing 0.5 s hitting at 0.37,
+	 * the loop 0.83, the landing 2.17 recovering 0.73 into it) and _Plunge_01 (index 9: 0.4, 0.83, 2.0; the slam 0.13
+	 * into its landing, recovering 0.53 into it) at 1.5 times the damage, a press after either starting the combo.
+	 */
+	UVCActionAnimSet* MakeAirSet()
+	{
+		UVCActionAnimSet* Set = MakeRunningSet();
+		Set->AttackCombo.Add(MakeAirMontage(0.5f, 0.83f, 2.17f, 0.37f, 0.5f + 0.83f + 0.73f));
+		Set->AttackCombo.Add(MakeAirMontage(0.4f, 0.83f, 2.f, 0.4f + 0.83f + 0.13f, 0.4f + 0.83f + 0.53f));
+		for (const float Multiplier : { 1.f, 1.5f })
+		{
+			FVCAttackComboStep& Step = Set->AttackComboSteps.AddDefaulted_GetRef();
+			Step.NextPrimary = 0;
+			Step.NextSecondary = 3;
+			Step.DamageMultiplier = Multiplier;
+		}
+		Set->AirAttack = 8;
+		Set->PlungeAttack = 9;
 		return Set;
 	}
 
@@ -583,6 +628,196 @@ bool FVCSword_RunAttackServer::RunTest(const FString& Parameters)
 	Set->RunAttackSpeed = 10.f;
 	TestTrue(TEXT("Taken"), Request(7));
 	TestEqual(TEXT("Not sprinting on the server: _01"), Montages->GetLastAttackIndex(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCSword_AirAttackRule, "VoxelCharacter.Anim.Sword.AirAttackRule", VC_SWORD_FLAGS)
+bool FVCSword_AirAttackRule::RunTest(const FString& Parameters)
+{
+	using namespace VCSwordMovesTestHelpers;
+	// The fall and its allowance (D169): falling, or landed within the allowance; one per fall; a set with one.
+	TestTrue(TEXT("Falling: the air attack"), UVCActionMontageComponent::CanAirAttackFrom(true, false, true, -1.0, 0.2f));
+	TestFalse(TEXT("One per fall"), UVCActionMontageComponent::CanAirAttackFrom(true, true, true, -1.0, 0.2f));
+	TestTrue(TEXT("Landed 0.1 s ago, within the server's allowance"), UVCActionMontageComponent::CanAirAttackFrom(true, false, false, 0.1, 0.2f));
+	TestFalse(TEXT("Landed 0.3 s ago: on the ground"), UVCActionMontageComponent::CanAirAttackFrom(true, false, false, 0.3, 0.2f));
+	TestFalse(TEXT("On the ground, the owner (no allowance)"), UVCActionMontageComponent::CanAirAttackFrom(true, false, false, 0.1, 0.f));
+	TestFalse(TEXT("Never landed and not falling"), UVCActionMontageComponent::CanAirAttackFrom(true, false, false, -1.0, 0.2f));
+	TestFalse(TEXT("A set without one"), UVCActionMontageComponent::CanAirAttackFrom(false, false, true, -1.0, 0.2f));
+
+	// The slam's reach from the feet, across local up and along it, on a plane and on a planet's slope.
+	const FVector Feet(0.0, 0.0, 0.0);
+	TestTrue(TEXT("150 uu across: hit"), UVCMeleeAttackAbility::IsInSlam(Feet, FVector::UpVector, FVector(150.0, 0.0, 90.0), 200.f));
+	TestTrue(TEXT("200 uu across: hit"), UVCMeleeAttackAbility::IsInSlam(Feet, FVector::UpVector, FVector(0.0, 200.0, 90.0), 200.f));
+	TestFalse(TEXT("260 uu across: missed"), UVCMeleeAttackAbility::IsInSlam(Feet, FVector::UpVector, FVector(-260.0, 0.0, 90.0), 200.f));
+	TestFalse(TEXT("250 uu above: missed"), UVCMeleeAttackAbility::IsInSlam(Feet, FVector::UpVector, FVector(0.0, 0.0, 250.0), 200.f));
+	const FVector Tilted = FRotator(30.0, 40.0, 0.0).RotateVector(FVector::UpVector);
+	const FVector Across = FVector::CrossProduct(Tilted, FVector::RightVector).GetSafeNormal();
+	TestTrue(TEXT("A planet's up: 150 across it hits"), UVCMeleeAttackAbility::IsInSlam(Feet, Tilted, Across * 150.0 + Tilted * 90.0, 200.f));
+	TestFalse(TEXT("A planet's up: 260 across it misses"), UVCMeleeAttackAbility::IsInSlam(Feet, Tilted, Across * 260.0 + Tilted * 90.0, 200.f));
+
+	// The set: the button's air attack, the landing's start, the table after them.
+	const UVCActionAnimSet* Set = MakeAirSet();
+	TestEqual(TEXT("The primary's air attack"), Set->GetAirAttack(false), 8);
+	TestEqual(TEXT("The secondary's: the plunge"), Set->GetAirAttack(true), 9);
+	TestTrue(TEXT("Both are air attacks"), Set->IsAirAttack(8) && Set->IsAirAttack(9) && !Set->IsAirAttack(0));
+	TestFalse(TEXT("The plunge is no ground secondary"), Set->IsSecondaryAttack(9));
+	TestEqual(TEXT("A press after the plunge: _01"), Set->GetNextAttack(9, false), 0);
+	TestTrue(TEXT("The air attack's landing at 1.33 s"), FMath::IsNearlyEqual(Set->GetLandingTime(8), 1.33f, 1.0e-4f));
+	TestTrue(TEXT("The plunge's slam at 1.5 times"), FMath::IsNearlyEqual(Set->GetAttackDamageMultiplier(9), 1.5f));
+	TestEqual(TEXT("No air attack for a list"), MakeBranchedSet()->GetAirAttack(false), -1);
+
+	// The fall stays the fall: no montage's root motion in it, the capsule's carriers included.
+	TestFalse(TEXT("Falling, standing still: ignored"), UVCMovementComponent::ShouldTakeMontageRootMotion(true, false, false, true));
+	TestFalse(TEXT("Falling, a carrier: ignored"), UVCMovementComponent::ShouldTakeMontageRootMotion(true, true, true, true));
+	TestTrue(TEXT("On the ground, standing: taken"), UVCMovementComponent::ShouldTakeMontageRootMotion(true, false, false, false));
+
+	const UVCActionAnimSet* Sword = LoadObject<UVCActionAnimSet>(nullptr,
+		TEXT("/Game/CharacterAnimation/ActionSets/DA_VCActionSet_SwordShield.DA_VCActionSet_SwordShield"), nullptr, LOAD_NoWarn | LOAD_Quiet);
+	if (Sword)
+	{
+		// The layers script's set: both with their three sections; the air attack hits in its swing, the plunge at its
+		// landing; both recover in their landing.
+		for (const bool bSecondary : { false, true })
+		{
+			const int32 Index = Sword->GetAirAttack(bSecondary);
+			if (!TestTrue(FString::Printf(TEXT("The sword's set has its %s"), bSecondary ? TEXT("plunge") : TEXT("air attack")), Index >= 0))
+			{
+				continue;
+			}
+			const UAnimMontage* Montage = Sword->AttackCombo[Index];
+			const float Landing = Sword->GetLandingTime(Index);
+			TestTrue(TEXT("Its loop"), Montage->GetSectionIndex(UVCActionAnimSet::AirLoopSection) != INDEX_NONE);
+			TestTrue(TEXT("Its landing"), Montage->GetSectionIndex(UVCActionAnimSet::LandingSection) != INDEX_NONE);
+			const float Hit = UVCActionAnimSet::GetHitTime(Montage);
+			TestTrue(TEXT("Its hit"), bSecondary ? Hit > Landing : Hit < Landing);
+			TestTrue(TEXT("Its recovery in its landing"), UVCActionAnimSet::GetRecoveryTime(Montage) > Landing);
+			TestFalse(TEXT("It does not carry the capsule"), UVCActionAnimSet::CarriesCapsule(Montage));
+		}
+		TestTrue(TEXT("The slam's reach 200 uu"), FMath::IsNearlyEqual(Sword->PlungeRadius, 200.f));
+	}
+	else
+	{
+		AddInfo(TEXT("No DA_VCActionSet_SwordShield (the CharacterAnimation pack is absent): the asset check skipped"));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCSword_PlungeServer, "VoxelCharacter.Combat.Melee.Plunge", VC_SWORD_FLAGS)
+bool FVCSword_PlungeServer::RunTest(const FString& Parameters)
+{
+	using namespace VCSwordMovesTestHelpers;
+	VCTesting::FPlayWorld W(TEXT("VCSwordPlungeWorld"), /*bDestroyActorsFirst=*/true);
+	UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (!TestNotNull(TEXT("The engine cube"), Cube))
+	{
+		return false;
+	}
+	AStaticMeshActor* Floor = W.World->SpawnActor<AStaticMeshActor>(FVector(0.0, 0.0, -50.0), FRotator::ZeroRotator);
+	Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
+	Floor->GetStaticMeshComponent()->SetStaticMesh(Cube);
+	Floor->SetActorScale3D(FVector(100.0, 100.0, 1.0));
+	Floor->GetStaticMeshComponent()->SetCollisionProfileName(TEXT("BlockAll"));
+
+	AVCNPCCharacterBase* NPC = SpawnSwordFighter(W.World, MakeAirSet(), true, FVector(0.0, 0.0, 100.0));
+	// Two within the slam's reach of where the fighter lands, one beyond it.
+	AVCNPCCharacterBase* Near = SpawnSwordFighter(W.World, nullptr, false, FVector(150.0, 0.0, 92.0), CGFGameplayTags::Faction_Monster);
+	AVCNPCCharacterBase* Side = SpawnSwordFighter(W.World, nullptr, false, FVector(0.0, 190.0, 92.0), CGFGameplayTags::Faction_Monster);
+	AVCNPCCharacterBase* Far = SpawnSwordFighter(W.World, nullptr, false, FVector(-260.0, 0.0, 92.0), CGFGameplayTags::Faction_Monster);
+	if (!TestNotNull(TEXT("Fighter"), NPC) || !TestNotNull(TEXT("Near"), Near) || !TestNotNull(TEXT("Side"), Side) || !TestNotNull(TEXT("Far"), Far))
+	{
+		return false;
+	}
+	Near->SetActorRotation(FRotator(0.0, 180.0, 0.0));
+	// The attacker swings only when the test asks: its AI would fight the hostiles around it on its own.
+	if (AController* Brain = NPC->GetController())
+	{
+		Brain->UnPossess();
+		Brain->Destroy();
+	}
+	UCharacterMovementComponent* Move = NPC->GetCharacterMovement();
+	UVCActionMontageComponent* Montages = NPC->ActionMontages;
+	UAbilitySystemComponent* ASC = NPC->GetAbilitySystemComponent();
+	if (!TestNotNull(TEXT("ASC"), ASC))
+	{
+		return false;
+	}
+	Move->bRunPhysicsWithNoController = true;
+	Move->SetMovementMode(MOVE_Walking);
+	const auto Advance = [&W](float Seconds)
+	{
+		for (float Elapsed = 0.f; Elapsed < Seconds - UE_KINDA_SMALL_NUMBER; Elapsed += 1.f / 30.f)
+		{
+			TickSwordFrame(W.World, 1.f / 30.f);
+		}
+	};
+	const auto Request = [&](int32 Index)
+	{
+		Montages->SetRequestedAttack(Index);
+		return ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(CGFGameplayTags::Ability_Attack_Melee));
+	};
+	const auto Health = [](const AVCNPCCharacterBase* Who) { return Who->CombatComponent->GetHealth(); };
+	Advance(0.5f);
+	TestTrue(TEXT("Standing on the floor"), Move->IsMovingOnGround());
+
+	// A ground swing at the near dummy, the measure of the weapon's damage.
+	const float Before = Health(Near);
+	TestFalse(TEXT("On the ground: no air attack"), Montages->CanAirAttack(false, UVCActionMontageComponent::AttackRequestTolerance));
+	TestTrue(TEXT("A swing"), Request(0));
+	Advance(0.8f);
+	const float SwingDamage = Before - Health(Near);
+	AddInfo(FString::Printf(TEXT("_01: %.1f damage"), SwingDamage));
+	TestTrue(TEXT("_01 hits the near dummy"), SwingDamage > 0.f);
+	Advance(2.f);
+
+	// Up into the air: the plunge, once a fall; nothing lands before the ground.
+	NPC->SetActorLocation(FVector(0.0, 0.0, 600.0), false, nullptr, ETeleportType::TeleportPhysics);
+	Move->SetMovementMode(MOVE_Falling);
+	Advance(1.f / 30.f);
+	TestTrue(TEXT("Falling"), Montages->IsFalling());
+	TestTrue(TEXT("Falling: an air attack may start"), Montages->CanAirAttack(true));
+	const float NearBefore = Health(Near), SideBefore = Health(Side), FarBefore = Health(Far);
+	TestTrue(TEXT("The plunge taken"), Request(9));
+	TestEqual(TEXT("The plunge"), Montages->GetLastAttackIndex(), 9);
+	TestFalse(TEXT("One air attack per fall"), Montages->CanAirAttack(false, UVCActionMontageComponent::AttackRequestTolerance));
+	TestTrue(TEXT("Nothing hit in the air"), FMath::IsNearlyEqual(Health(Near), NearBefore));
+	for (int32 Frame = 0; Frame < 120 && Montages->IsFalling(); ++Frame)
+	{
+		Advance(1.f / 30.f);
+	}
+	TestFalse(TEXT("Landed"), Montages->IsFalling());
+	const float NearSlam = NearBefore - Health(Near), SideSlam = SideBefore - Health(Side), FarSlam = FarBefore - Health(Far);
+	AddInfo(FString::Printf(TEXT("The slam: near %.1f, side %.1f, far %.1f"), NearSlam, SideSlam, FarSlam));
+	TestTrue(TEXT("The near dummy (150 uu) at 1.5 times the swing"), FMath::IsNearlyEqual(NearSlam, 1.5f * SwingDamage, 0.01f));
+	TestTrue(TEXT("The side dummy (190 uu) at 1.5 times the swing"), FMath::IsNearlyEqual(SideSlam, 1.5f * SwingDamage, 0.01f));
+	TestTrue(TEXT("Not the far one (260 uu)"), FMath::IsNearlyEqual(FarSlam, 0.f));
+
+	// From the landing: nothing in the slam's wind-up, kept before the landing's recovery, the combo after it; the next
+	// fall is free.
+	TestTrue(TEXT("In the slam's wind-up: nothing"), Montages->ClassifyAttackPress() == EVCAttackPress::Ignore);
+	TestTrue(TEXT("Landed just now: within the allowance"), Montages->CanAirAttack(false, UVCActionMontageComponent::AttackRequestTolerance));
+	TestFalse(TEXT("Landed just now: not for the owner"), Montages->CanAirAttack(false));
+	Advance(0.2f);
+	TestTrue(TEXT("After the slam: a press is kept"), Montages->ClassifyAttackPress() == EVCAttackPress::Buffer);
+	Advance(0.4f);
+	TestTrue(TEXT("After the landing's recovery: the combo"), Montages->ClassifyAttackPress() == EVCAttackPress::Continue);
+	TestFalse(TEXT("Past the allowance: no air attack"), Montages->CanAirAttack(false, UVCActionMontageComponent::AttackRequestTolerance));
+
+	// The air attack in another fall: taken, a second refused; its swing in the air, the landing from the landing.
+	Advance(3.f);
+	NPC->SetActorLocation(FVector(0.0, 0.0, 3000.0), false, nullptr, ETeleportType::TeleportPhysics);
+	Move->SetMovementMode(MOVE_Falling);
+	Advance(1.f / 30.f);
+	TestTrue(TEXT("The air attack taken"), Request(8));
+	TestEqual(TEXT("The air attack"), Montages->GetLastAttackIndex(), 8);
+	Advance(0.5f);
+	TestTrue(TEXT("Still falling"), Montages->IsFalling());
+	Request(9);
+	TestEqual(TEXT("A second in the same fall refused"), Montages->GetLastAttackIndex(), 8);
+	for (int32 Frame = 0; Frame < 120 && Montages->IsFalling(); ++Frame)
+	{
+		Advance(1.f / 30.f);
+	}
+	TestTrue(TEXT("In its landing: kept"), Montages->ClassifyAttackPress() == EVCAttackPress::Buffer);
 	return true;
 }
 

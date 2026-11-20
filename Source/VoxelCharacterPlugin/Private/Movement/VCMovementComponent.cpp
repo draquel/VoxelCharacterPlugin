@@ -22,6 +22,7 @@
 #include "Core/VCGameplayTags.h"
 #include "AbilitySystemInterface.h"
 #include "Animation/VCActionAnimSet.h"
+#include "Animation/VCActionMontageComponent.h"
 #include "Animation/AnimMontage.h"
 #include "Combat/VCCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
@@ -685,8 +686,9 @@ void UVCMovementComponent::ApplyMontageRootMotionMode(bool bWantsToMove)
 	{
 		return;
 	}
-	// A dodge or a roll carries the capsule with input too (D168); the rest only standing (D106).
-	const ERootMotionMode::Type Mode = ShouldTakeMontageRootMotion(bMontageRootMotionOnlyStanding, bWantsToMove, IsPlayingCapsuleMontage())
+	// A dodge or a roll carries the capsule with input too (D168); the rest only standing (D106); none in a fall, whose
+	// velocity a montage's root motion would replace across local up (D169: an air attack leaves the fall as it was).
+	const ERootMotionMode::Type Mode = ShouldTakeMontageRootMotion(bMontageRootMotionOnlyStanding, bWantsToMove, IsPlayingCapsuleMontage(), IsFalling())
 		? ERootMotionMode::RootMotionFromMontagesOnly : ERootMotionMode::IgnoreRootMotion;
 	if (AnimInstance->RootMotionMode != Mode)
 	{
@@ -749,6 +751,15 @@ double UVCMovementComponent::GetFlightLevel(const FVector& Location) const
 void UVCMovementComponent::OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode)
 {
 	Super::OnMovementModeChanged(PreviousMovementMode, PreviousCustomMode);
+	// A fall's end (D169), on every machine (a simulated proxy by its replicated mode), not in a replay of moves after a
+	// correction: an air attack or a plunge goes on to its landing, and the server's plunge slams.
+	if (PreviousMovementMode == MOVE_Falling && MovementMode != MOVE_Falling && CharacterOwner != nullptr && !CharacterOwner->bClientUpdating)
+	{
+		if (UVCActionMontageComponent* Montages = CharacterOwner->FindComponentByClass<UVCActionMontageComponent>())
+		{
+			Montages->HandleFallEnded(IsMovingOnGround());
+		}
+	}
 	// MOVE_None is a freeze or a teleport's hold; any mode but flying ends debug flight.
 	if (bDebugFlight && MovementMode != MOVE_Flying && MovementMode != MOVE_None)
 	{

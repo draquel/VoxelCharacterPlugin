@@ -845,11 +845,12 @@ public:
 	 * @param bOnlyStanding    bMontageRootMotionOnlyStanding
 	 * @param bWantsToMove     The move has input (a simulated proxy: it moves)
 	 * @param bCarriesCapsule  The montage playing with root motion carries the capsule (UVCActionAnimSet::CarriesCapsule)
+	 * @param bFalling         The move falls: the fall stays the fall (the sword moves plan, D169), no montage steers it
 	 * @return True to take it
 	 */
-	static bool ShouldTakeMontageRootMotion(bool bOnlyStanding, bool bWantsToMove, bool bCarriesCapsule = false)
+	static bool ShouldTakeMontageRootMotion(bool bOnlyStanding, bool bWantsToMove, bool bCarriesCapsule = false, bool bFalling = false)
 	{
-		return bCarriesCapsule || !bOnlyStanding || !bWantsToMove;
+		return !bFalling && (bCarriesCapsule || !bOnlyStanding || !bWantsToMove);
 	}
 
 	/**

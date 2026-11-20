@@ -13,6 +13,9 @@
 class UAnimInstance;
 class UAnimMontage;
 
+/** A fall ended (the sword moves plan, D169): on the ground (true), or into the water or another mode (false). */
+DECLARE_MULTICAST_DELEGATE_OneParam(FVCOnFallEnded, bool /*bOnGround*/);
+
 /** What a press of the attack does at a moment of the current attack (the sword attack flow plan, D104). */
 UENUM()
 enum class EVCAttackPress : uint8
@@ -275,6 +278,54 @@ public:
 	 */
 	bool CanRunAttack(float SpeedTolerance = 0.f) const;
 
+	/**
+	 * Whether an air attack may start (the sword moves plan, D169): the set has one for the button, none was played in
+	 * this fall, and the character falls, or landed less long ago than the allowance (the server reading an owner's
+	 * request made just before the landing).
+	 * @param bSetHasIt     Whether the held set has an air attack for the button
+	 * @param bUsedThisFall Whether this fall already had one (one per time in the air)
+	 * @param bFalling      Whether the character falls (not swimming, not in the QA flight)
+	 * @param SinceLanded   Seconds since the character last landed, negative for never
+	 * @param Tolerance     The allowance after a landing, seconds
+	 * @return True for the air attack
+	 */
+	static bool CanAirAttackFrom(bool bSetHasIt, bool bUsedThisFall, bool bFalling, double SinceLanded, float Tolerance);
+
+	/**
+	 * Whether this character may start its air attack for a button now (CanAirAttackFrom with its set, its fall and its
+	 * last landing).
+	 * @param bSecondary The secondary attack's button (the plunge), else the primary's
+	 * @param Tolerance  Seconds after a landing it is still taken (AttackRequestTolerance on the server)
+	 * @return True for the air attack
+	 */
+	bool CanAirAttack(bool bSecondary, float Tolerance = 0.f) const;
+
+	/** Whether the character falls (a jump, a ledge, a long fall; not swimming, not the QA flight). */
+	bool IsFalling() const;
+
+	/** Whether the held set has an air attack for a button. */
+	bool HasAirAttack(bool bSecondary) const;
+
+	/**
+	 * The owner: picks the air attack for a button and keeps it as the current attack, the fall's one used (D169).
+	 * @param bSecondary  The secondary attack's button (the plunge), else the primary's
+	 * @param AttackSpeed Attacks per second (the weapon's)
+	 * @param OutPlayRate The play rate
+	 * @return Its combo index, -1 when the set has none
+	 */
+	int32 ChooseAirAttack(bool bSecondary, float AttackSpeed, float& OutPlayRate);
+
+	/**
+	 * Every machine: the character's fall ended (its movement component calls it). A playing air attack or plunge goes
+	 * on to its landing section on the ground (it stops in the water); the current attack's times count from the
+	 * landing; the fall's air attack is free again; OnFallEnded is broadcast (the server's plunge lands its slam).
+	 * @param bOnGround Whether the fall ended on the ground
+	 */
+	void HandleFallEnded(bool bOnGround);
+
+	/** A fall ended (D169): the server's plunge waits for it. */
+	FVCOnFallEnded OnFallEnded;
+
 	/** Keeps the start of a charge on this machine (the owner at its press, the server at its request). */
 	void BeginCharge();
 
@@ -321,7 +372,8 @@ public:
 	 * button (D166: an index the secondary plays asks for the secondary's). The charged strike (D167) is taken when this
 	 * machine's charge has run its charge time less AttackRequestTolerance, else the first attack is played. Any attack
 	 * taken ends the charge. The run attack (D168) is taken while this machine's character sprints faster than the set's
-	 * speed less RunAttackSpeedTolerance, else the server picks the primary's. The attack is kept as current.
+	 * speed less RunAttackSpeedTolerance, else the server picks the primary's. An air attack or a plunge (D169) is taken
+	 * as asked while CanAirAttack allows it with AttackRequestTolerance, else refused. The attack is kept as current.
 	 * @param RequestedIndex The owner's combo index, -1 for none (an NPC)
 	 * @param AttackSpeed    Attacks per second (the weapon's)
 	 * @param OutIndex       The combo index to play
@@ -512,6 +564,9 @@ private:
 	/** The dodge or roll montage of the current set playing on the body (not on its way out) and its position, or null. */
 	UAnimMontage* GetPlayingMoveMontage(float& OutPosition) const;
 
+	/** The current attack, an air attack, counted from a landing now: its times run from its landing section (D169). */
+	void CountAirAttackFromLanding();
+
 	/** The current attack (D104): its combo index, its start (world seconds) and its times at its play rate. */
 	int32 ComboIndex = -1;
 	double AttackStartTime = -1.0;
@@ -530,6 +585,10 @@ private:
 
 	/** The combo index the owner asked for, until the melee ability takes it (server). */
 	int32 RequestedAttackIndex = -1;
+
+	/** Whether this fall had its air attack (D169), and when the character last landed (world seconds, negative for never). */
+	bool bAirAttackThisFall = false;
+	double LastLandedTime = -1.0;
 
 	/** The current dodge or roll (D170): its start (world seconds, negative for none) and its recovery, seconds. */
 	double MoveStartTime = -1.0;

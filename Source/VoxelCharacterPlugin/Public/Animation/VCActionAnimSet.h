@@ -284,6 +284,53 @@ public:
 	/** Whether the set has a run attack. */
 	bool HasRunAttack() const { return AttackCombo.IsValidIndex(RunAttack); }
 
+	/**
+	 * The air attack (the sword moves plan, D169), an index into AttackCombo: a primary press while falling plays it.
+	 * Its montage has three sections: the swing (the first, its hit swept as a ground swing's), LoopSection (looping
+	 * while the fall lasts) and LandingSection (played on touching the ground, on every machine). -1: none.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Air")
+	int32 AirAttack = -1;
+
+	/**
+	 * The plunge (D169), an index into AttackCombo: the secondary attack's press while falling plays it; the same three
+	 * sections, and its hit is the slam at the landing: every hostile within PlungeRadius of the feet, at its step's
+	 * DamageMultiplier. -1: none.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Air")
+	int32 PlungeAttack = -1;
+
+	/** The plunge's slam: how far from the feet it reaches (uu), across local up and along it. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Air", meta = (ClampMin = "0"))
+	float PlungeRadius = 200.f;
+
+	/** An air attack's or a plunge's looping section, held while the fall lasts. */
+	static const FName AirLoopSection;
+
+	/** An air attack's or a plunge's landing section, played on touching the ground. */
+	static const FName LandingSection;
+
+	/**
+	 * The air attack for a button (D169).
+	 * @param bSecondary The secondary attack's button (the plunge), else the primary's
+	 * @return An index into AttackCombo, or -1 when the set has none for the button
+	 */
+	int32 GetAirAttack(bool bSecondary) const
+	{
+		const int32 Index = bSecondary ? PlungeAttack : AirAttack;
+		return AttackCombo.IsValidIndex(Index) ? Index : -1;
+	}
+
+	/** Whether an attack is the air attack or the plunge. */
+	bool IsAirAttack(int32 Index) const { return Index >= 0 && (Index == GetAirAttack(false) || Index == GetAirAttack(true)); }
+
+	/**
+	 * Seconds from an air attack's start to its landing section (at play rate 1): the swing and one pass of the loop.
+	 * @param Index An index into AttackCombo
+	 * @return The landing section's start, or the montage's length when it has none; 0 without a montage
+	 */
+	float GetLandingTime(int32 Index) const;
+
 	/** The charge montage's held pose, looping. */
 	static const FName ChargeLoopSection;
 
