@@ -463,6 +463,19 @@ re-mesh).
   were Movable a client dropped every correction on terrain and a dedicated server corrected every move (G215, fixed
   in VoxelWorlds 2026-11-14). Test `VoxelEngine.Replication.TerrainBase` in the game module: a dedicated server and a
   client on `VoxelDemo`, the client walks, the server moves and teleports its pawn and the client follows.
+  **No reference to the terrain goes over the network** (G221, 2026-11-19). The engine still names the component a
+  character stands on in two places: the base it replicates to simulated proxies (`ACharacter::ReplicatedBasedMovement`,
+  how a client draws another player or an NPC) and the server's correction of a player's move. A chunk's component has
+  no network id, so the server logged `FNetGUIDCache::SupportsObject: VoxelCollisionComponent ... NOT Supported` for
+  each, and a client told the server had a base it could not find skipped simulating that character between updates
+  (`SimulateMovement` returns early on an unresolved base). `FVCReplicatedBase` (`Movement/VCReplicatedBase.h`) keeps
+  both to what a client can resolve (the net driver's own test: a name stable for networking, or a replicated object):
+  `AVCCharacterBase::PreReplication` and `AVCNPCCharacterBase::PreReplication` clear such a base after the engine's,
+  with the server's word that it has one, so a client simulates the character on its own floor; `UVCMovementComponent`'s
+  move response leaves the component out of a correction but keeps `bHasBase`, so the client takes the base for
+  unresolved and stands on its own floor where the correction puts it, as before. A base a position is relative to
+  (a movable one that replicates) is kept. `vc.Net.ClearUnresolvableBase 0` is the engine's, the comparison.
+  Test `VoxelCharacter.Net.ReplicatedBase`.
 - **Block steps.** In a cubic world (`UVoxelChunkManager::IsBlockSurface`) `RefreshBlockStepHeight` sets `MaxStepHeight`
   to one block (`GetBlockStepHeight`: voxel size + `BlockStepMargin`, 80 at 75 uu), so one block is walked up and two are
   a wall (D29; `bStepUpOneBlock`). Smooth worlds keep 50. Surface navigation uses the same rule.
@@ -1384,7 +1397,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 
 | Data | Authority | Replication |
 |---|---|---|
-| Movement | Server (character movement) | Built-in prediction; sprint and swim-rise as saved-move flags; planet gravity recomputed on both sides; the server simulates a move no longer than the client did (the project's `p.NetServerMaxMoveDeltaTimeScalar=1`: at the engine's 1.75 a frame over 0.125 s walked the server's pawn further and was corrected, G240); `vc.Net.TraceMoves` logs each move's inputs on both machines beside the corrections |
+| Movement | Server (character movement) | Built-in prediction; sprint and swim-rise as saved-move flags; planet gravity recomputed on both sides; the server simulates a move no longer than the client did (the project's `p.NetServerMaxMoveDeltaTimeScalar=1`: at the engine's 1.75 a frame over 0.125 s walked the server's pawn further and was corrected, G240); `vc.Net.TraceMoves` logs each move's inputs on both machines beside the corrections; no base a client cannot resolve (the terrain's collision) is replicated or named in a correction (G221, `vc.Net.ClearUnresolvableBase`) |
 | Voxel edits, block breaks | Server (`Server_RequestVoxelModification`, `Server_BeginBlockBreak`) | Edits are not replicated (VoxelWorlds); the client predicts cracks only |
 | Inventory, equipment | Server (the gameplay plugins' components on the pawn) | Their own replication |
 | Attributes, effects, abilities | Server (ASC on the player state; an NPC's on the NPC) | GAS replication; prediction keys for activation |
@@ -1405,7 +1418,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 ## Console variables
 
 `vc.*` groups: `vc.AI.*` (NPC AI), `vc.Buoyancy.Bodies` (dead bodies float), `vc.Anim.*` (the IK, pace and motion-matching switches, the trajectory tuning, the debug draw), `vc.Dig.*` (the cubic break times' scale, the highlight), `vc.Minimap.*` (the
-minimap's refill stats), `vc.Move.*` (the player's movement table: the preset, one value, the print), `vc.Net.TraceMoves` (every networked move's inputs on the client and the server, beside the corrections), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
+minimap's refill stats), `vc.Move.*` (the player's movement table: the preset, one value, the print), `vc.Net.TraceMoves` (every networked move's inputs on the client and the server, beside the corrections), `vc.Net.ClearUnresolvableBase` (G221: 0 replicates the terrain's collision as the base, the engine's), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
 and `ToggleVoxelDebug` are on the controller and the character. Every name, default and meaning:
 `Documentation/EDITOR_CONSOLE_GUIDE.md` §4 at the project root. The `vox.*` QA commands that drive this plugin's pawn
 (`vox.TP`, `vox.AutoRun`, `vox.Fly`, `vox.Mine`, `vox.Chop`, `vox.EditMode`, `vox.Shoot`, ...) live in the game module.

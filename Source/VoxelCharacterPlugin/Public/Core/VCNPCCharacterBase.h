@@ -223,6 +223,9 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
 
+	/** The engine's, then a base no client can resolve (the terrain's collision) is not replicated (FVCReplicatedBase, G221). */
+	virtual void PreReplication(IRepChangedPropertyTracker& ChangedPropertyTracker) override;
+
 	/**
 	 * The eyes: BaseEyeHeight along local up (spherical Phase 4, WM-SY12): sight traces and the melee sweep start at the
 	 * head on a planet too. Without custom gravity this is the engine's location.

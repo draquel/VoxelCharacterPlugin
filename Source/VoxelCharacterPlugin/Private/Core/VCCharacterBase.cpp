@@ -31,6 +31,7 @@
 #include "Movement/VCMovementComponent.h"
 #include "Movement/VCTerrainQueryHelper.h"
 #include "Movement/VCGravityFrame.h"
+#include "Movement/VCReplicatedBase.h"
 #include "Camera/VCUnderwaterPostProcess.h"
 #include "Effects/VCWaterEffectsComponent.h"
 #include "Input/VCInputConfig.h"
@@ -693,6 +694,13 @@ void AVCCharacterBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
 	DOREPLIFETIME(AVCCharacterBase, bIsAiming);
 	DOREPLIFETIME(AVCCharacterBase, bArrowNocked);
 	DOREPLIFETIME(AVCCharacterBase, ArrowMesh);
+}
+
+void AVCCharacterBase::PreReplication(IRepChangedPropertyTracker& ChangedPropertyTracker)
+{
+	Super::PreReplication(ChangedPropertyTracker);
+	// The engine has copied the base into what simulated proxies receive; on the terrain no client can resolve it.
+	FVCReplicatedBase::ApplyBeforeReplication(*this, GetReplicatedBasedMovement_Mutable());
 }
 
 // ---------------------------------------------------------------------------
