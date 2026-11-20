@@ -166,8 +166,39 @@ attacker builds FCGFDamageContext
   `AnimBP_EssentialSwordShield_UE5` is a live retarget of the UE4 ABP (a Retarget Pose From Mesh node), so its third attack is
   `UE4_SSH_Attack_04_Seq`, the same motion as the UE5 clip. The sword's Chop plays `SSH_Attack_01`, a forward cut from
   the idle (D108; `_04`, the finisher, spins), and every set's Chop hits at its clip's measured strike (G182: 0.48 s
-  for the sword's). The demo's other attacks
-  (the secondary branch, the charge, the run, air and plunge attacks, the dodge) are the plan's later phases.
+  for the sword's). The demo's other attacks are `SWORD_MOVES_PLAN.md`'s phases: the secondary branch and the charge
+  below (B and C), the run, air and plunge attacks and the dodge to come.
+- **The secondary branch** (the sword moves plan's B, D166, 2026-11-19). The combo is a table: each attack of a set's
+  `AttackCombo` has a step (`FVCAttackComboStep` in `AttackComboSteps`) naming the attack the primary and the secondary
+  attack continue with, and `SecondaryAttackStart` is the one the secondary starts a combo with
+  (`UVCActionAnimSet::GetFirstAttack`, `GetNextAttack`); a set without a table walks its list and has no secondary. The
+  SwordShield set's: `_01`, `_02`, `_04` on the primary; on the secondary (the middle mouse button, `IA_SecondaryAttack`,
+  "Input") `_08` from rest, `_09` after `_01` or `_08`, `_10` after `_02` or `_09`; a primary press after `_08` or `_09`
+  goes on with `_02` or `_04`, and `_04` and `_10` end the combo (either button starts it again). Their markers are
+  measured as the others': `_08` hit 0.47 s, recovery 0.77, lunge 232 uu; `_09` 0.41, 0.65, 123 uu; `_10` 0.41, 0.88,
+  101 uu. A secondary press goes by the primary's press classes, and a kept press remembers its button. The request is
+  still the combo index (`Server_RequestMeleeSwing`): `AcceptAttack` reads the button from it (an index the secondary
+  plays, `IsSecondaryAttack`) and takes a button's first, or that button's next within the window, else picks its own
+  for that button. RMB stays the guard at any time. Measured on `CharacterTest` with a dedicated server, two clients and
+  100 ms of lag (`vox.PIE.Net 2 lag=100`, `vox.AttackTrace 5 0 0.5 s1.1 2.2`): `_01`, the secondary and the primary
+  play `_01`, `_09`, `_04` on the owner, the server (0.12-0.13 s later) and the other client, which end at the same
+  place with no correction; `_08` from rest lunges 232 uu the same everywhere.
+- **The charge** (the plan's C, D167, 2026-11-19). A primary press from rest (`UVCActionMontageComponent::CanChargeFrom`:
+  a new combo, not sprinting, not in the air; a set with a `Charge` montage and a `ChargedAttack`) plays the charge at
+  once: `AM_SwordShield_Charge`, the windup (its first section, 0.5 s), the held pose (`Loop`, looping) and the lowering
+  (`End`). A release before the charge time (the windup and `ChargeHoldTime`, 1.0 s: 1.5 s from the press) plays the
+  first attack from that pose; held to it, the charged strike `_15` (combo index 6: hit 0.80 s, recovery 1.27, lunge
+  137 uu) fires by itself at twice the weapon's damage (its step's `DamageMultiplier`, which the melee ability applies),
+  and a press in its recovery goes on with `_02`. The owner tells the server when the charge begins
+  (`AVCCharacterBase::Server_SetCharge`, `EVCChargeChange::Begin`: the server checks the same rule, starts its own clock
+  and shows everyone else the windup) and sends the charged strike as its combo index; `AcceptAttack` takes it once the
+  server's clock has run the charge time less 0.2 s, else plays `_01`. The guard raised over a charge stops it (`Stop`),
+  a sprint or a jump begun during it lowers it (`Lower`, the `End` section), the secondary attack replaces it and a
+  flinch interrupts it on every machine. Within a combo a press keeps phase A's timing. `vc.Anim.AttackCharge 0` gives
+  back the first attack at the press (the A/B). Measured as the branch was: a tap plays `_01` at the release, a release
+  1.2 s into the charge plays `_01`, a hold plays `_15` 1.51 s after the press on the owner and the server takes it (its
+  clock started 0.12 s after the owner's), then a press plays `_02`; each on the three machines, ending at the same
+  place, with no correction.
 
 ### The bow (ranged combat plan, 2026-11-06 to 11-07)
 
@@ -1029,11 +1060,14 @@ against the same swim in a lake.
 Enhanced Input only. `UVCInputConfig` holds the actions (`IA_Move`, `IA_Look`, `IA_Jump`, `IA_Interact`,
 `IA_PrimaryAction`, `IA_SecondaryAction`, `IA_ToggleView`, `IA_OpenInventory`, `IA_OpenMap`, `IA_HotbarSlot`,
 `IA_ScrollHotbar`, `IA_Drop`, `IA_Use` (F), `IA_Sheathe` (R), `IA_CycleWeapon` (X), `IA_ToggleEditMode` (B), `IA_Craft` (C), `IA_Sprint` (Shift), `IA_Crouch`
-(Ctrl), `IA_Pause` (P)) and two mapping contexts: `IMC_Gameplay` at priority 0, always on, and `IMC_UI` at 1 while an
+(Ctrl), `IA_Pause` (P), `IA_SecondaryAttack` (the middle mouse button, the gamepad's right shoulder)) and two mapping contexts: `IMC_Gameplay` at priority 0, always on, and `IMC_UI` at 1 while an
 inventory or menu is open (cursor shown). The asset is the controller's `InputConfig`; the character binds the actions,
 the controller adds the contexts. The secondary action is bound on its release too (C3): held with a ranged weapon in
 hand it aims ("The bow" › Aiming), held with a shield in the off hand it guards ("GAS" › Damage pipeline, Block), in edit
-mode it places. `PressSecondaryAction` / `ReleaseSecondaryAction` run it for scripts.
+mode it places. `PressSecondaryAction` / `ReleaseSecondaryAction` run it for scripts. The secondary attack
+(`IA_SecondaryAttack`, D166) swings the sword's other branch of the combo ("GAS" › The sword's attack flow): with a melee
+weapon whose set has a secondary branch, the branch's attack by the combo's rule, at a target or at the air; nothing
+behind a raised guard, in edit mode or while a weapon comes out. `PressSecondaryAttack` runs it for scripts.
 
 ### The primary action
 
@@ -1050,7 +1084,9 @@ does nothing while the guard is up (D94).
    mode, a trunk block of a standing voxel tree (`TryChopVoxelTree`).
 4. Outside edit mode with no digging tool, a melee weapon in the main hand (`UVCMeleeAttackAbility::HoldsMeleeWeapon`: a
    Weapon fragment and no Ranged Weapon fragment) swings at the air (`StartMeleeSwing`, G174): the same swing as step 2,
-   and the server's sweep at the hit time lands on whatever is in reach then. Bare hands do nothing here.
+   and the server's sweep at the hit time lands on whatever is in reach then. Bare hands do nothing here. In steps 2 and
+   4, with a set that charges, a press from rest begins the charge and the swing comes at the release or by itself
+   after the hold (D167); `ReleasePrimaryAction` releases it.
 5. Dig or place: with edit mode on, or a digging tool in the main hand for a dig (`HasDiggingTool`: `GetMiningSpeed() >
    1`). Unarmed digging and placing need edit mode.
 
@@ -1432,7 +1468,9 @@ Island, Map, NearClip, Plane, Planet, Progression, Respawn, Save, Spawn, Terrain
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
 and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83), the swing at the air's `Combat.Melee.HoldsMeleeWeapon` (G174), the guard's `Combat.Block.Rules` and
 `Combat.Block.GuardTakesFrontHits` (D94), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the attack flow's
-`Anim.RecoveryTime`, `Anim.AttackPressRule`, `Anim.AttackCombo` and `Combat.Melee.AcceptAttack` (D102-D107, G179); the sheaths'
+`Anim.RecoveryTime`, `Anim.AttackPressRule`, `Anim.AttackCombo` and `Combat.Melee.AcceptAttack` (D102-D107, G179); the sword moves'
+`Anim.Sword.ComboTable`, `Anim.Sword.SecondaryPress` and `Combat.Melee.AcceptSecondary` (D166), `Anim.Sword.ChargeRule` and
+`Combat.Melee.ChargedStrike` (D167); the sheaths'
 `EquipmentLoop.SheathSlots` (the three sheaths, a shield on the back drawn into the off hand with the sword, D95-D96), `SheathActionSet` (the set follows the drawn weapon, R and X, the snapshot's drawn state),
 `SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip` (the equipment sheathing plan's S2-S4); the state
 machine's `Locomotion.ClipChoice`, `StanceWeight`, `SetChange` (L1), `States`, `Pace`, `Transitions`, `Instance` and

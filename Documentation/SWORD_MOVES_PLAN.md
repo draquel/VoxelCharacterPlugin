@@ -1,7 +1,7 @@
 # Sword Moves Plan: the sword attack flow's phases B to F
 
-> **Agreed 2026-11-19** (the user: "Yes, as recommended": D165-D171 each as recommended, section 7); phases not
-> started. Lane 1 (B, C, D) and lane 2 (F) run in parallel, then E (D171).
+> **Agreed 2026-11-19** (the user: "Yes, as recommended": D165-D171 each as recommended, section 7). **B and C built
+> 2026-11-19** (section 8); D, E and F to come. Lane 1 (B, C, D) and lane 2 (F) run in parallel, then E (D171).
 > Phases B-F of `SWORD_ATTACK_FLOW_PLAN.md` (frozen; phase A built 2026-11-12), the pack demo's other moves:
 > B the secondary branch (`draquel/UE5_PluginDev#422`), C the charge (#423), D the run attack (#424), E the air and
 > plunge attacks (#425), F the dodge and the roll (#426). Owner: VoxelCharacterPlugin (the montage component, the melee
@@ -241,3 +241,52 @@ gravity frame (a lunge, a roll and a plunge on a slope away from the pole). Each
 6. D170: the dodge and roll on Left Alt, a roll toward the input or a back step without, 15 and 20 stamina, immunity
    for the travel (recommended); any of these changed?
 7. D171: lane 1 (B, C, D) and lane 2 (F) in parallel, then E (recommended), or one phase at a time?
+
+## 8. Results
+
+**B, the secondary branch** (#422; built 2026-11-19 on `claude/sword-moves-b-c` in VoxelCharacterPlugin and the parent).
+As D166: `IA_SecondaryAttack` on the middle mouse button and the gamepad's right shoulder (`add_input_action.py`),
+`AVCCharacterBase::PressSecondaryAttack`; the combo a table of steps on the set (`FVCAttackComboStep`:
+`AttackComboSteps`, `SecondaryAttackStart`), the other sets keeping their list (no table, no secondary). The layers
+script measured the branch's markers as section 3 has them (`_08` 0.467 / 0.767 s, `_09` 0.408 / 0.646, `_10` 0.408 /
+0.884). Built otherwise than drafted: **no move kind on the request** (lane 2 owns it, D171): the secondary rides on the
+combo index, the server reading the button from it (each attack of the table is one button's, `IsSecondaryAttack`) and
+picking its own for that button when it refuses the owner's. Tests `VoxelCharacter.Anim.Sword.ComboTable` (the 16 orders
+of four presses), `.SecondaryPress`, `VoxelCharacter.Combat.Melee.AcceptSecondary`. PIE on `CharacterTest` with a
+dedicated server, two clients and 100 ms of lag: from rest the secondary plays `_08`; `_01`, the secondary, the primary
+play `_01`, `_09`, `_04`, the server 0.12-0.13 s after the owner, all three machines ending at the same place, no
+correction; the guard rises on RMB at rest, during `_08` and during a charge. On `PlanetTest` at 30 N 40 E, on a slope:
+`_08` moved the capsule 232.3 uu across local up (the clip's 232) and 18.5 uu up the slope, the walk 305.7 (83 + 123 +
+101). Found: **G252** (the guard raised during any attack's lunge makes the server correct the owner, 37 corrections over
+phase A's `_01`, 18 over `_08`; on `dev`, not caused here).
+
+**C, the charge** (#423; built 2026-11-19, the same branches). As D167, one montage `AM_SwordShield_Charge` (the windup,
+`Loop` looping, `End`), `_15` at combo index 6 with twice the damage in its step (`DamageMultiplier`, applied by the melee
+ability) and `_02` after it; the owner's `Server_SetCharge` (`EVCChargeChange`: begin, lower, stop) and the charged
+strike as its combo index, which `AcceptAttack` takes once the server's own clock has run the charge time less 0.2 s.
+`vc.Anim.AttackCharge` (1; 0 the first attack at the press) is the A/B. Built otherwise than drafted: **a release any
+time before the charged strike plays `_01`** (section 5's test, a release at 1.2 s plays `_01`; D167's text and the demo
+have `_01` only within the loop's first 0.5 s and no transition after it): the lowering (`End`) is the cancel, played
+when a sprint or a jump begins during the charge; the guard over a charge stops it, the secondary attack replaces it, a
+flinch interrupts it. The charge time is the windup's section and the hold, 1.5 s from the press (section 2's "about
+1.45 s" is the demo's blend). The dedicated server plays the charge (its clips carry root motion, travelling none) and
+now stops what it plays on a stop's multicast (it ignored stops before; its held loop went on). `vox.PIE.Net` gained
+`lag=<ms>` (the session's network emulation: `NetEmulation.PktLag` typed during an in-process session did not reach its
+drivers, the server taking a request in the frame after the owner's) and `vox.AttackTrace` the secondary (`s`), a held
+primary (`h`), the guard (`g`) and a jump (`j`). Tests `VoxelCharacter.Anim.Sword.ChargeRule`,
+`VoxelCharacter.Combat.Melee.ChargedStrike` (a strike sent early is `_01`, one at the charge time less the allowance is
+`_15` at twice `_01`'s damage, `_02` after it). PIE as B's: a tap plays `_01` at the release; a release 1.2 s into the
+charge plays `_01`; a hold plays `_15` 1.51 s after the press, the server taking it (its clock began 0.12 s after the
+owner's) and a press in its recovery `_02`; the guard and the secondary over a charge, and a jump lowering it (the
+montage at its `End`, 2.0 s); each on the three machines, the same place, no correction. On the planet the charged
+`_15` moved 137.0 uu across local up (the clip's 137).
+
+**Gate** (both phases, the branch's tip): `build.ps1` no warning against the baseline (`build_warnings.py`), and B
+alone built with its tests passing before its commit; the headless suite 1068 of 1068, no new warning kind against a `dev` suite run of the same day (the three new test
+worlds' `CleanupWorld` line, which every test world logs); `build.ps1 -Shipping` links (a test file added); the editor
+gate 36 of 36 (the replication tests with a dedicated server among them), its 210 parity lines identical, the Nanite
+layouts 0 differ; `check_docs.py` finds no unknown name in the changed documents.
+
+**Not done:** D (the run attack) waits for lane 2's root-motion flag (D168); E after both lanes. When lane 2 merges
+first, the SwordShield set and the input assets (`IMC_Gameplay`, `VCInputConfig`) are rebuilt on top of `dev` by the
+scripts (`setup_character_layers.py`, `add_input_action.py`), not merged.
