@@ -59,8 +59,10 @@ bool AVCCharacterBase::TryStartDodge()
 		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s: no %s now"), *GetName(), Request.Kind == EVCMoveKind::Roll ? TEXT("roll") : TEXT("dodge"));
 		return false;
 	}
-	// No guard during the move: the raised one comes down (the server's ability cancels its block).
+	// No guard during the move: the raised one comes down (the server's ability cancels its block). A charge ends with
+	// the move (D167): its montage gives way to the move's.
 	StopBlock();
+	ActionMontages->EndCharge();
 	if (HasAuthority())
 	{
 		// A listen server's or a standalone player: the ability turns, plays and holds the immunity on this machine.
@@ -102,8 +104,21 @@ bool AVCCharacterBase::ActivateMove(const FVCMoveRequest& Request)
 	{
 	case EVCMoveKind::Attack:
 		return ActivateMeleeSwing(Request.Index);
+	case EVCMoveKind::Charge:
+		// The charge's begin, lowering or stop (D167): the server's clock and what everyone else sees.
+		if (Request.Index < 0 || Request.Index > static_cast<int32>(EVCChargeChange::Stop))
+		{
+			return false;
+		}
+		ApplyChargeChange(static_cast<EVCChargeChange>(Request.Index));
+		return true;
 	case EVCMoveKind::Dodge:
 	case EVCMoveKind::Roll:
+		// A dodge or a roll ends a charge (D167): the server's clock with it.
+		if (ActionMontages)
+		{
+			ActionMontages->EndCharge();
+		}
 		break;
 	default:
 		return false;

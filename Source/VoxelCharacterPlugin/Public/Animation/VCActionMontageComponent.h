@@ -27,6 +27,16 @@ enum class EVCAttackPress : uint8
 	Continue,
 };
 
+/** What the release of a charge does at a moment of it (the sword moves plan, D167). */
+UENUM()
+enum class EVCChargeRelease : uint8
+{
+	/** Before the charged strike: the first attack of the combo, from the windup's pose. */
+	FirstAttack,
+	/** Held long enough: the charged strike (it fires by itself, the release comes after it). */
+	Charged,
+};
+
 /**
  * What a move request asks the server to play (the sword moves plan, D165): every move is an action montage the owner
  * plays at its input and the server plays from the request, as the sword's attack. Phase F adds the dodge and the roll;
@@ -41,6 +51,11 @@ enum class EVCMoveKind : uint8
 	Dodge,
 	/** A roll toward a direction (D170): the capsule turns to Direction first; the index is unused. */
 	Roll,
+	/**
+	 * A change of the owner's charge (D167): the index is an EVCChargeChange (it begins, it is lowered, it is stopped).
+	 * The charged strike itself is an Attack, its combo index the set's ChargedAttack.
+	 */
+	Charge,
 };
 
 /**
@@ -56,7 +71,7 @@ struct VOXELCHARACTERPLUGIN_API FVCMoveRequest
 	UPROPERTY()
 	EVCMoveKind Kind = EVCMoveKind::Attack;
 
-	/** The combo index for an attack (-1 for none: the server picks), the side for a dodge. */
+	/** The combo index for an attack (-1 for none: the server picks), the side for a dodge, the change for a charge. */
 	UPROPERTY()
 	int8 Index = -1;
 
@@ -211,19 +226,74 @@ public:
 	EVCAttackPress ClassifyAttackPress() const;
 
 	/**
-	 * Picks the attack to play now and keeps it as this machine's current attack: the next of the combo when a press now
-	 * continues it, else the first.
+	 * Whether a primary press may start a charge (D167), the rule the owner and the server share: from rest only.
+	 * @param bSetCharges The held set has a charge (UVCActionAnimSet::HasCharge) and vc.Anim.AttackCharge is on
+	 * @param Press       What the press does by the combo's rule (ClassifyAttackPress): a charge needs a new combo
+	 * @param bSprinting  The character sprints
+	 * @param bFalling    The character is in the air
+	 * @return True to charge
+	 */
+	static bool CanChargeFrom(bool bSetCharges, EVCAttackPress Press, bool bSprinting, bool bFalling);
+
+	/**
+	 * What the release of a charge does (D167).
+	 * @param HeldSeconds Seconds since the charge began
+	 * @param ChargeTime  Seconds from the press to the charged strike (UVCActionAnimSet::GetChargeTime)
+	 * @return Charged once ChargeTime has passed, else FirstAttack
+	 */
+	static EVCChargeRelease ClassifyChargeRelease(double HeldSeconds, float ChargeTime);
+
+	/**
+	 * Whether this character may start a charge now (CanChargeFrom with its set, its press, its gait and its movement mode;
+	 * never during a dodge or a roll before its recovery, D170).
+	 * @return True to charge
+	 */
+	bool CanStartCharge() const;
+
+	/** Keeps the start of a charge on this machine (the owner at its press, the server at its request). */
+	void BeginCharge();
+
+	/** Forgets the charge on this machine (released, given up or interrupted). */
+	void EndCharge() { ChargeStartTime = -1.0; }
+
+	/** Whether a charge is kept on this machine. */
+	bool IsCharging() const { return ChargeStartTime >= 0.0; }
+
+	/** Seconds since the kept charge began, negative for none. */
+	double GetChargeSeconds() const;
+
+	/** Seconds from the press to the charged strike for the held set, 0 when it has no charge. */
+	float GetChargeTime() const;
+
+	/** Whether the charge montage plays on this machine and is not on its way out (an interrupted charge has stopped it). */
+	bool IsChargePlaying() const;
+
+	/**
+	 * The owner: picks the charged strike and keeps it as the current attack, the charge forgotten (D167).
+	 * @param AttackSpeed Attacks per second (the weapon's)
+	 * @param OutPlayRate The play rate
+	 * @return The charged strike's combo index, -1 when the set has none
+	 */
+	int32 ChooseChargedAttack(float AttackSpeed, float& OutPlayRate);
+
+	/**
+	 * Picks the attack to play now and keeps it as this machine's current attack: the next of the combo for the button
+	 * when a press now continues it, else the button's first (the sword moves plan, D166: the combo's table).
 	 * @param AttackSpeed  Attacks per second (the weapon's)
 	 * @param OutPlayRate  The play rate (GetAttackPlayRate)
-	 * @return The combo index (0 with no combo)
+	 * @param bSecondary   The secondary attack's button (IA_SecondaryAttack), else the primary's
+	 * @return The combo index (0 with no combo); -1 for the secondary when the set has none (nothing is kept)
 	 */
-	int32 ChooseAttack(float AttackSpeed, float& OutPlayRate);
+	int32 ChooseAttack(float AttackSpeed, float& OutPlayRate, bool bSecondary = false);
 
 	/**
 	 * Server: whether an attack may start now and which (D104, G179). An attack the owner picked on this very machine at
 	 * this moment (a listen server's or a standalone player's) is taken as it is. Otherwise the attack before must have
-	 * reached its recovery (less AttackRequestTolerance); the owner's index is taken when it is the first or the next of
-	 * the combo within the window (plus the tolerance), else the server picks its own. The attack is kept as current.
+	 * reached its recovery (less AttackRequestTolerance); the owner's index is taken when it is a button's first or that
+	 * button's next of the combo within the window (plus the tolerance), else the server picks its own for the same
+	 * button (D166: an index the secondary plays asks for the secondary's). The charged strike (D167) is taken when this
+	 * machine's charge has run its charge time less AttackRequestTolerance, else the first attack is played. Any attack
+	 * taken ends the charge. The attack is kept as current.
 	 * @param RequestedIndex The owner's combo index, -1 for none (an NPC)
 	 * @param AttackSpeed    Attacks per second (the weapon's)
 	 * @param OutIndex       The combo index to play
@@ -241,8 +311,11 @@ public:
 	/** Server: the owner's requested combo index, cleared; -1 for none. */
 	int32 TakeRequestedAttack() { const int32 Index = RequestedAttackIndex; RequestedAttackIndex = -1; return Index; }
 
-	/** The owner: keep a press made between the strike and the recovery until the recovery (D104). */
-	void BufferAttack();
+	/**
+	 * The owner: keep a press made between the strike and the recovery until the recovery (D104).
+	 * @param bSecondary The press was the secondary attack's (D166)
+	 */
+	void BufferAttack(bool bSecondary = false);
 
 	/**
 	 * The owner: whether a kept press is due (the current attack reached its recovery, or the current dodge or roll its
@@ -252,6 +325,9 @@ public:
 
 	/** Whether a press is kept for the recovery. */
 	bool HasBufferedAttack() const { return bAttackBuffered; }
+
+	/** Whether the kept press (or the last one taken) was the secondary attack's. */
+	bool IsBufferedAttackSecondary() const { return bBufferedSecondary; }
 
 	/** The combo index of the current or last attack, -1 before any. */
 	int32 GetLastAttackIndex() const { return ComboIndex; }
@@ -417,8 +493,12 @@ private:
 	float AttackComboWindow = 0.f;
 	int32 AttackComboCount = 0;
 
-	/** A press kept for the current attack's recovery (the owner's). */
+	/** When the kept charge began (world seconds), negative for none (D167). */
+	double ChargeStartTime = -1.0;
+
+	/** A press kept for the current attack's recovery (the owner's), and whether it was the secondary attack's. */
 	bool bAttackBuffered = false;
+	bool bBufferedSecondary = false;
 
 	/** The combo index the owner asked for, until the melee ability takes it (server). */
 	int32 RequestedAttackIndex = -1;

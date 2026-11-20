@@ -1,7 +1,7 @@
 # Sword Moves Plan: the sword attack flow's phases B to F
 
-> **Agreed 2026-11-19** (the user: "Yes, as recommended": D165-D171 each as recommended, section 7). **F built
-> 2026-11-20** (section 8). Lane 1 (B, C, D) and lane 2 (F) run in parallel, then E (D171).
+> **Agreed 2026-11-19** (the user: "Yes, as recommended": D165-D171 each as recommended, section 7). **B and C built
+> 2026-11-19, F 2026-11-20** (section 8); D and E to come. Lane 1 (B, C, D) and lane 2 (F) run in parallel, then E (D171).
 > Phases B-F of `SWORD_ATTACK_FLOW_PLAN.md` (frozen; phase A built 2026-11-12), the pack demo's other moves:
 > B the secondary branch (`draquel/UE5_PluginDev#422`), C the charge (#423), D the run attack (#424), E the air and
 > plunge attacks (#425), F the dodge and the roll (#426). Owner: VoxelCharacterPlugin (the montage component, the melee
@@ -122,8 +122,10 @@ shield) or always attacks (without one); it keeps two buttons, but a player cann
 
 **D167, the charge (C).** Recommended: **the first attack of a combo starts at the release, as the demo's.** A press
 from rest (not sprinting, not in the air) plays `Attack_Charge_Begin` at once (the windup reads as the response); a
-release in the windup or in the loop's first 0.5 s plays `_01` from that pose; still held 1.0 s into the loop, the
-charged attack `_15` fires by itself at twice the weapon's damage. A press within a combo keeps phase A's timing (the
+release any time before the charged strike plays `_01` from that pose (corrected 2026-11-19 when C was built: this
+read "in the windup or in the loop's first 0.5 s", the demo's rule, which leaves the rest of the loop without a
+transition; section 5's agreed test has a release at 1.2 s play `_01`; `Attack_Charge_End` is only the cancel); still
+held 1.0 s into the loop, the charged attack `_15` fires by itself at twice the weapon's damage. A press within a combo keeps phase A's timing (the
 charge is from rest only). The cost: a tapped first attack starts when the button comes up, a tap's length later
 (about 0.1 s), from the windup pose. The owner tells the server when the charge begins (others see the windup and the
 server starts its clock) and sends the charged strike; the server takes it when its own clock has run the charge
@@ -243,6 +245,64 @@ gravity frame (a lunge, a roll and a plunge on a slope away from the pole). Each
 7. D171: lane 1 (B, C, D) and lane 2 (F) in parallel, then E (recommended), or one phase at a time?
 
 ## 8. Results
+
+**B, the secondary branch** (#422; built 2026-11-19 on `claude/sword-moves-b-c` in VoxelCharacterPlugin and the parent).
+As D166: `IA_SecondaryAttack` on the middle mouse button and the gamepad's right shoulder (`add_input_action.py`),
+`AVCCharacterBase::PressSecondaryAttack`; the combo a table of steps on the set (`FVCAttackComboStep`:
+`AttackComboSteps`, `SecondaryAttackStart`), the other sets keeping their list (no table, no secondary). The layers
+script measured the branch's markers as section 3 has them (`_08` 0.467 / 0.767 s, `_09` 0.408 / 0.646, `_10` 0.408 /
+0.884). Built otherwise than drafted: **the secondary is no field of the request**: it rides on the
+attack's combo index (first on phase A's `Server_RequestMeleeSwing`, since F's merge on D165's
+`Server_RequestMove` with `EVCMoveKind::Attack`), the server reading the button from it (each attack of the table is one button's, `IsSecondaryAttack`) and
+picking its own for that button when it refuses the owner's. Tests `VoxelCharacter.Anim.Sword.ComboTable` (the 16 orders
+of four presses), `.SecondaryPress`, `VoxelCharacter.Combat.Melee.AcceptSecondary`. PIE on `CharacterTest` with a
+dedicated server, two clients and 100 ms of lag: from rest the secondary plays `_08`; `_01`, the secondary, the primary
+play `_01`, `_09`, `_04`, the server 0.12-0.13 s after the owner, all three machines ending at the same place, no
+correction; the guard rises on RMB at rest, during `_08` and during a charge. On `PlanetTest` at 30 N 40 E, on a slope:
+`_08` moved the capsule 232.3 uu across local up (the clip's 232) and 18.5 uu up the slope, the walk 305.7 (83 + 123 +
+101). Found: **G252** (the guard raised during any attack's lunge makes the server correct the owner, 37 corrections over
+phase A's `_01`, 18 over `_08`; on `dev`, not caused here).
+
+**C, the charge** (#423; built 2026-11-19, the same branches). As D167, one montage `AM_SwordShield_Charge` (the windup,
+`Loop` looping, `End`), `_15` at combo index 6 with twice the damage in its step (`DamageMultiplier`, applied by the melee
+ability) and `_02` after it; the owner's charge changes as move requests (D165: `EVCMoveKind::Charge`, its index an
+`EVCChargeChange`: begin, lower, stop; built first as a request of its own, `Server_SetCharge`, moved onto F's request at
+the merge) and the charged strike as an attack request with its combo index, which `AcceptAttack` takes once the server's own clock has run the charge time less 0.2 s.
+`vc.Anim.AttackCharge` (1; 0 the first attack at the press) is the A/B. Built otherwise than drafted: **a release any
+time before the charged strike plays `_01`** (section 5's test, a release at 1.2 s plays `_01`; D167's text had the
+demo's `_01` only within the loop's first 0.5 s and no transition after it; agreed with the coordinating session on
+2026-11-19 and D167 corrected to match): the lowering (`End`) is the cancel, played
+when a sprint or a jump begins during the charge; the guard over a charge stops it, the secondary attack replaces it, a
+flinch interrupts it. The charge time is the windup's section and the hold, 1.5 s from the press (section 2's "about
+1.45 s" is the demo's blend). The dedicated server plays the charge (its clips carry root motion, travelling none) and
+now stops what it plays on a stop's multicast (it ignored stops before; its held loop went on). `vox.PIE.Net` gained
+`lag=<ms>` (the session's network emulation: `NetEmulation.PktLag` typed during an in-process session did not reach its
+drivers, the server taking a request in the frame after the owner's) and `vox.AttackTrace` the secondary (`s`), a held
+primary (`h`), the guard (`g`) and a jump (`j`). Tests `VoxelCharacter.Anim.Sword.ChargeRule`,
+`VoxelCharacter.Combat.Melee.ChargedStrike` (a strike sent early is `_01`, one at the charge time less the allowance is
+`_15` at twice `_01`'s damage, `_02` after it). PIE as B's: a tap plays `_01` at the release; a release 1.2 s into the
+charge plays `_01`; a hold plays `_15` 1.51 s after the press, the server taking it (its clock began 0.12 s after the
+owner's) and a press in its recovery `_02`; the guard and the secondary over a charge, and a jump lowering it (the
+montage at its `End`, 2.0 s); each on the three machines, the same place, no correction. On the planet the charged
+`_15` moved 137.0 uu across local up (the clip's 137).
+
+**On F** (2026-11-20, after lane 2 merged first): both branches rebased onto `dev` with F, the attack's and the charge's
+requests on F's `Server_RequestMove` (`EVCMoveKind::Charge` added), a press during a dodge or a roll kept as F keeps it
+(never a charge: a kept press does not start one, and the charge rule refuses during a move), a dodge or a roll ending a
+charge on both machines; `IMC_Gameplay` and `VCInputConfig` taken from `dev` and `IA_SecondaryAttack` added again by
+`add_input_action.py`, the SwordShield set rebuilt by the merged layers script (its seven attacks, the charge, F's dodges
+and roll). PIE as before with `vox.PIE.Net 2 lag=100`: the secondary chain (`_01`, `_09`, `_04`), a release 1.2 s into
+the charge (`_01`), the full hold (`_15`, then `_02`), a step back out of a charge (the release after it plays nothing)
+and out of `_08`; each on the three machines, ending at the same place, no correction.
+
+**Gate** (B and C on F, the rebased tip): `build.ps1` no warning against the baseline (`build_warnings.py`); the headless
+suite 1074 of 1074 (F's 1069 and B's and C's five), no new warning kind against the run before the rebase (only F's new
+test worlds' `CleanupWorld` line); the editor gate 36 of 36 (the replication tests with a dedicated server among them),
+its 210 parity lines identical, the Nanite layouts 0 differ. Before the rebase the same gates had passed on `dev`
+86c3483 (1068 of 1068, the editor gate 36 of 36) with `build.ps1 -Shipping` linking (the test file added); B alone built
+with its tests passing before its commit.
+
+**Not done:** D (the run attack), now that F's capsule flag (D168) and move request are in `dev`; E after it.
 
 **F, the dodge and the roll** (#426; built 2026-11-20 on `claude/sword-moves-f` in VoxelCharacterPlugin and the
 parent). **The measurement first (D170's network):** the moves were built in phase A's form with D165's request and

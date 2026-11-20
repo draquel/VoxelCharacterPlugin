@@ -354,6 +354,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
 	void ReleaseSecondaryAction();
 
+	/**
+	 * Press the secondary attack, as IA_SecondaryAttack's press does (the sword moves plan, D166): with a melee weapon whose
+	 * set has a secondary branch, the branch's attack by the combo's rule; nothing otherwise, and nothing behind a raised
+	 * guard. For scripts and QA, as PressPrimaryAction.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
+	void PressSecondaryAttack();
+
 	/** Whether this machine's player holds its guard up (the owner's input state; the server's is State.Blocking). */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
 	bool IsBlocking() const { return bBlocking; }
@@ -1388,10 +1396,42 @@ protected:
 	 * Swing: by the combo's rule (the sword attack flow plan, D104) the owner's montage at once, or the press kept until
 	 * the current attack's recovery, or nothing in its wind-up; then the melee ability's activation with the owner's combo
 	 * index, which sweeps on the server at the hit time. TryStartMeleeAttack's swing at a target and the primary action's
-	 * swing at the air with a melee weapon in hand (G174).
-	 * @return True if the press was taken (a swing requested, or kept)
+	 * swing at the air with a melee weapon in hand (G174), and the secondary attack's (D166). A primary press from rest
+	 * with a set that charges starts the charge instead (the sword moves plan, D167): the first attack comes at the release.
+	 * @param bSecondary   The secondary attack's press: the combo's secondary branch
+	 * @param bAllowCharge Whether a primary press may start a charge (false for the release's first attack)
+	 * @return True if the press was taken (a swing requested, a charge begun, or kept); false for the secondary without a branch
 	 */
-	bool StartMeleeSwing();
+	bool StartMeleeSwing(bool bSecondary = false, bool bAllowCharge = true);
+
+	/** The owner: the charged strike, held long enough (D167): its montage at once, the request to the server. */
+	void StartChargedSwing();
+
+	/**
+	 * The owner: the charge given up (D167): with its lowering, or at once (a guard raised over it); the server hears of it.
+	 * @param bLower Play the charge's lowering (its End section), else stop it
+	 */
+	void CancelCharge(bool bLower);
+
+	/**
+	 * The owner's charge while the primary is held (D167): ended when something stopped its montage, lowered when a sprint
+	 * or a jump begins, the strike when due.
+	 */
+	void UpdateCharge();
+
+	/**
+	 * The owner tells the server its charge changed (D167): a move request of kind Charge (D165), or on a machine that is
+	 * owner and server ApplyChargeChange directly.
+	 * @param Change Begin, Lower or Stop
+	 */
+	void SendChargeChange(EVCChargeChange Change);
+
+	/**
+	 * Authority: the owner's charge changed (D167): the server starts its own clock at a begin (when its rule allows the
+	 * charge) and shows the windup to everyone else, or ends its clock and shows the lowering or the stop.
+	 * @param Change Begin, Lower or Stop
+	 */
+	void ApplyChargeChange(EVCChargeChange Change);
 
 	/**
 	 * Authority: the melee ability's activation for a swing, with the owner's combo index for the ability to take (G179).
@@ -1470,6 +1510,8 @@ protected:
 	void Input_SecondaryAction(const FInputActionValue& Value);
 	/** The secondary action is released (or cancelled): the aim ends (C3). */
 	void Input_StopSecondaryAction(const FInputActionValue& Value);
+	/** The secondary attack's press (D166: the middle mouse button). */
+	void Input_SecondaryAttack(const FInputActionValue& Value);
 	void Input_OpenInventory(const FInputActionValue& Value);
 	void Input_OpenMap(const FInputActionValue& Value);
 	void Input_Pause(const FInputActionValue& Value);

@@ -55,6 +55,11 @@ enum class EVCAnimAction : uint8
 	Dodge,
 	/** A roll forward, the capsule turned toward the movement input first (D170); its root motion carries the capsule. */
 	Roll,
+	/**
+	 * Holding the sword back to charge a strike (the sword moves plan, D167): the windup, then the held pose looping
+	 * until the release or the charged strike. Variant 1 plays its lowering (the charge given up without a strike).
+	 */
+	Charge,
 };
 
 /** Where a reload takes its arrow from: the variant of EVCAnimAction::Reload (D99). */
@@ -192,6 +197,28 @@ struct VOXELCHARACTERPLUGIN_API FVCDirectionalMontages
 };
 
 /**
+ * One attack of a combo's table (the sword moves plan, D166): the attack a press of each attack button continues with
+ * from this one, by the combo's press rule (D104). A set without a table walks its combo as a list.
+ */
+USTRUCT(BlueprintType)
+struct VOXELCHARACTERPLUGIN_API FVCAttackComboStep
+{
+	GENERATED_BODY()
+
+	/** The attack the primary continues with, an index into AttackCombo; -1: the next in the list. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	int32 NextPrimary = -1;
+
+	/** The attack the secondary attack continues with, an index into AttackCombo; -1: SecondaryAttackStart. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	int32 NextSecondary = -1;
+
+	/** This attack's damage, times the weapon's. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation", meta = (ClampMin = "0"))
+	float DamageMultiplier = 1.f;
+};
+
+/**
  * The montages of one action set (Equipment.AnimSet.*): what a character plays to attack, dig, chop, place, use, react
  * to a hit, die and get up while it holds that kind of item. The layer that changes its stance comes with the item
  * (the Equipment fragment's AnimLayerClass); this asset is the montage half. An empty montage means the action plays
@@ -213,6 +240,49 @@ public:
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	TArray<TObjectPtr<UAnimMontage>> AttackCombo;
+
+	/**
+	 * The combo's table (D166), one step per attack of AttackCombo: the attack each button continues with. Empty, or
+	 * shorter than the combo: the primary walks the list and the secondary starts at SecondaryAttackStart.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TArray<FVCAttackComboStep> AttackComboSteps;
+
+	/** The attack a press of the secondary attack (IA_SecondaryAttack) starts a combo with; -1: the set has none. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	int32 SecondaryAttackStart = -1;
+
+	/**
+	 * The charge (D167): the windup (its first section), the held pose (ChargeLoopSection, looping) and the lowering
+	 * (ChargeEndSection). A primary press from rest plays it; the release plays the first attack, and a hold of
+	 * ChargeHoldTime into the loop plays ChargedAttack by itself. Empty: the set has no charge.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Charge")
+	TObjectPtr<UAnimMontage> Charge;
+
+	/** The charged strike, an index into AttackCombo (its step names its damage multiplier and what follows it); -1: none. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Charge")
+	int32 ChargedAttack = -1;
+
+	/** Seconds held in the charge's loop before the charged strike fires by itself. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Charge", meta = (ClampMin = "0"))
+	float ChargeHoldTime = 1.f;
+
+	/** The charge montage's held pose, looping. */
+	static const FName ChargeLoopSection;
+
+	/** The charge montage's lowering, played when the charge is given up. */
+	static const FName ChargeEndSection;
+
+	/** Whether the set can charge: a charge montage and a charged strike in the combo. */
+	bool HasCharge() const { return Charge != nullptr && AttackCombo.IsValidIndex(ChargedAttack); }
+
+	/**
+	 * Seconds from the press to the charged strike (D167): the windup's length (the charge montage's first section) and
+	 * ChargeHoldTime.
+	 * @return The time, 0 without a charge
+	 */
+	float GetChargeTime() const;
 
 	/** Seconds after an attack's montage ends within which the next attack still continues the combo (D104). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation", meta = (ClampMin = "0"))
@@ -374,6 +444,36 @@ public:
 	 * @return The montage, or null when the set has none for the action
 	 */
 	UAnimMontage* GetMontage(EVCAnimAction Action, int32 Variant = 0) const;
+
+	/**
+	 * The attack a press of a button starts a combo with (D166).
+	 * @param bSecondary The secondary attack's button, else the primary's
+	 * @return An index into AttackCombo: 0 for the primary, SecondaryAttackStart for the secondary; -1 when the set has none
+	 */
+	int32 GetFirstAttack(bool bSecondary) const;
+
+	/**
+	 * The attack a press of a button continues the combo with from an attack (D166): its step's, else the next in the
+	 * list for the primary and the secondary's first for the secondary.
+	 * @param Current    The attack played, an index into AttackCombo
+	 * @param bSecondary The secondary attack's button, else the primary's
+	 * @return An index into AttackCombo, or -1 when the set has no attack for that button
+	 */
+	int32 GetNextAttack(int32 Current, bool bSecondary) const;
+
+	/**
+	 * Whether an attack is one the secondary attack plays: its first, or a step's next on the secondary.
+	 * @param Index An index into AttackCombo
+	 * @return True for a secondary attack
+	 */
+	bool IsSecondaryAttack(int32 Index) const;
+
+	/**
+	 * An attack's damage multiplier (its step's DamageMultiplier).
+	 * @param Index An index into AttackCombo
+	 * @return The multiplier, 1 without a step
+	 */
+	float GetAttackDamageMultiplier(int32 Index) const;
 
 	/**
 	 * When an action lands in its montage: the first UVCAnimNotify_ActionHit's time.

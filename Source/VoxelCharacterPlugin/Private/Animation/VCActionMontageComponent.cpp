@@ -7,6 +7,7 @@
 #include "Combat/VCCombatComponent.h"
 #include "Interfaces/CGFDamageableInterface.h"
 #include "Movement/VCGravityFrame.h"
+#include "Movement/VCMovementComponent.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
@@ -24,6 +25,11 @@ namespace
 	TAutoConsoleVariable<int32> CVarAnimAttackBreak(
 		TEXT("vc.Anim.AttackBreak"), 1,
 		TEXT("Movement breaks an attack off once its follow-through ends (the sword attack flow plan, D103): 1 on, 0 off (the recovery always plays out; A/B)."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarAnimAttackCharge(
+		TEXT("vc.Anim.AttackCharge"), 1,
+		TEXT("A primary press from rest charges the sword (the sword moves plan, D167): 1 on (the first attack at the release, the charged strike after a hold), 0 off (the first attack at the press, as before; A/B)."),
 		ECVF_Default);
 }
 
@@ -121,6 +127,66 @@ float UVCActionMontageComponent::GetAttackPlayRate(float AttackSpeed)
 	return FMath::Clamp(AttackSpeed, 0.5f, 2.f);
 }
 
+bool UVCActionMontageComponent::CanChargeFrom(bool bSetCharges, EVCAttackPress Press, bool bSprinting, bool bFalling)
+{
+	return bSetCharges && Press == EVCAttackPress::NewCombo && !bSprinting && !bFalling;
+}
+
+EVCChargeRelease UVCActionMontageComponent::ClassifyChargeRelease(double HeldSeconds, float ChargeTime)
+{
+	return HeldSeconds >= ChargeTime ? EVCChargeRelease::Charged : EVCChargeRelease::FirstAttack;
+}
+
+bool UVCActionMontageComponent::CanStartCharge() const
+{
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	const bool bSetCharges = Set && Set->HasCharge() && CVarAnimAttackCharge.GetValueOnGameThread() != 0;
+	const ACharacter* Character = Cast<ACharacter>(GetOwner());
+	const UCharacterMovementComponent* Movement = Character ? Character->GetCharacterMovement() : nullptr;
+	const UVCMovementComponent* VCMovement = Cast<UVCMovementComponent>(Movement);
+	return !IsMoveBeforeRecovery()
+		&& CanChargeFrom(bSetCharges, ClassifyAttackPress(), VCMovement && VCMovement->IsSprinting(), Movement && Movement->IsFalling());
+}
+
+void UVCActionMontageComponent::BeginCharge()
+{
+	const UWorld* World = GetWorld();
+	ChargeStartTime = World ? World->GetTimeSeconds() : 0.0;
+}
+
+double UVCActionMontageComponent::GetChargeSeconds() const
+{
+	const UWorld* World = GetWorld();
+	return World && ChargeStartTime >= 0.0 ? World->GetTimeSeconds() - ChargeStartTime : -1.0;
+}
+
+float UVCActionMontageComponent::GetChargeTime() const
+{
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	return Set ? Set->GetChargeTime() : 0.f;
+}
+
+bool UVCActionMontageComponent::IsChargePlaying() const
+{
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	const UAnimInstance* AnimInstance = Set && Set->Charge ? GetBodyAnimInstance() : nullptr;
+	const FAnimMontageInstance* Instance = AnimInstance ? AnimInstance->GetActiveInstanceForMontage(Set->Charge) : nullptr;
+	return Instance && Instance->IsActive() && !Instance->IsStopped();
+}
+
+int32 UVCActionMontageComponent::ChooseChargedAttack(float AttackSpeed, float& OutPlayRate)
+{
+	OutPlayRate = GetAttackPlayRate(AttackSpeed);
+	EndCharge();
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	if (!Set || !Set->HasCharge())
+	{
+		return -1;
+	}
+	RecordAttack(Set->ChargedAttack, OutPlayRate);
+	return Set->ChargedAttack;
+}
+
 double UVCActionMontageComponent::GetSecondsSinceAttack() const
 {
 	const UWorld* World = GetWorld();
@@ -150,20 +216,25 @@ void UVCActionMontageComponent::RecordAttack(int32 Index, float PlayRate)
 	MoveStartTime = -1.0;
 }
 
-int32 UVCActionMontageComponent::ChooseAttack(float AttackSpeed, float& OutPlayRate)
+int32 UVCActionMontageComponent::ChooseAttack(float AttackSpeed, float& OutPlayRate, bool bSecondary)
 {
 	OutPlayRate = GetAttackPlayRate(AttackSpeed);
 	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
 	const int32 Count = Set ? Set->AttackCombo.Num() : 0;
 	if (Count == 0)
 	{
-		return 0;
+		return bSecondary ? -1 : 0;
 	}
-	// The next of the combo when a press now continues it (one kept for the recovery does by then), else the first.
+	// The button's next of the combo when a press now continues it (one kept for the recovery does by then), else the
+	// button's first (D166).
 	const EVCAttackPress Press = ClassifyAttackPress();
 	const bool bContinues = ComboIndex >= 0 && AttackComboCount == Count
 		&& (Press == EVCAttackPress::Continue || Press == EVCAttackPress::Buffer);
-	const int32 Index = bContinues ? (ComboIndex + 1) % Count : 0;
+	const int32 Index = bContinues ? Set->GetNextAttack(ComboIndex, bSecondary) : Set->GetFirstAttack(bSecondary);
+	if (Index < 0)
+	{
+		return -1;
+	}
 	RecordAttack(Index, OutPlayRate);
 	return Index;
 }
@@ -201,18 +272,37 @@ bool UVCActionMontageComponent::AcceptAttack(int32 RequestedIndex, float AttackS
 		RecordAttack(0, OutPlayRate);
 		return true;
 	}
+	// The charged strike (D167): taken once this machine's charge has run its time less the request's allowance, else
+	// the release's first attack. Any attack ends the charge.
+	const double ChargeSeconds = GetChargeSeconds();
+	EndCharge();
+	if (Set->HasCharge() && RequestedIndex == Set->ChargedAttack)
+	{
+		OutIndex = ChargeSeconds >= 0.0 && ChargeSeconds >= Set->GetChargeTime() - AttackRequestTolerance ? Set->ChargedAttack : 0;
+		RecordAttack(OutIndex, OutPlayRate);
+		return true;
+	}
 	const bool bInWindow = ComboIndex >= 0 && AttackComboCount == Count && Since >= 0.0
 		&& Since <= AttackEndTime + AttackComboWindow + AttackRequestTolerance;
-	const int32 Next = bInWindow ? (ComboIndex + 1) % Count : 0;
-	// The owner's index when the server's rule allows it (the first, or the next within the window), else the server's.
-	OutIndex = (RequestedIndex == 0 || RequestedIndex == Next) ? RequestedIndex : Next;
+	// The button the owner pressed, read from its index (D166: each attack of the table is one button's).
+	const bool bSecondary = Set->IsSecondaryAttack(RequestedIndex);
+	const int32 Next = bInWindow ? Set->GetNextAttack(ComboIndex, bSecondary) : Set->GetFirstAttack(bSecondary);
+	const bool bFirst = RequestedIndex >= 0 && (RequestedIndex == Set->GetFirstAttack(false) || RequestedIndex == Set->GetFirstAttack(true));
+	// The owner's index when the server's rule allows it (a button's first, or its next within the window), else the
+	// server's for that button.
+	OutIndex = (bFirst || RequestedIndex == Next) ? RequestedIndex : Next;
+	if (!Set->AttackCombo.IsValidIndex(OutIndex))
+	{
+		OutIndex = 0;
+	}
 	RecordAttack(OutIndex, OutPlayRate);
 	return true;
 }
 
-void UVCActionMontageComponent::BufferAttack()
+void UVCActionMontageComponent::BufferAttack(bool bSecondary)
 {
 	bAttackBuffered = true;
+	bBufferedSecondary = bSecondary;
 	SetComponentTickEnabled(true);
 }
 
@@ -376,6 +466,11 @@ float UVCActionMontageComponent::PlayActionLocal(EVCAnimAction Action, int32 Var
 		// The recovery's break (D103) is watched while the attack, the dodge or the roll plays.
 		SetComponentTickEnabled(true);
 	}
+	// The charge's variant 1 is its lowering (D167), the End section.
+	if (Action == EVCAnimAction::Charge && Variant == 1 && Length > 0.f && Montage->GetSectionIndex(UVCActionAnimSet::ChargeEndSection) != INDEX_NONE)
+	{
+		AnimInstance->Montage_JumpToSection(UVCActionAnimSet::ChargeEndSection, Montage);
+	}
 	// Raised by the aim already: the draw pulls the string from there (its first section is the raise).
 	const UVCAnimInstance* Body = Cast<UVCAnimInstance>(AnimInstance);
 	if (Action == EVCAnimAction::Draw && Length > 0.f && Body && Body->AimRaiseWeight > 0.5f && Montage->CompositeSections.Num() >= 3)
@@ -516,6 +611,8 @@ int32 UVCActionMontageComponent::GetHitDirection(const FCGFDamageContext& Contex
 
 void UVCActionMontageComponent::HandleDamaged(const FCGFDamageContext& Context)
 {
+	// A hit interrupts a charge (D167): the flinch stops its montage on every machine, and the server's clock ends with it.
+	EndCharge();
 	// A killing or knocking-out hit already played its death (OnDied comes first); the dead do not flinch.
 	const UVCCombatComponent* Combat = GetOwner() ? GetOwner()->FindComponentByClass<UVCCombatComponent>() : nullptr;
 	if (!Combat || ICGFDamageableInterface::Execute_IsDead(Combat) || Combat->IsDowned())
@@ -589,8 +686,11 @@ void UVCActionMontageComponent::Multicast_PlaySheathAction_Implementation(EVCAni
 
 void UVCActionMontageComponent::Multicast_StopAction_Implementation(EVCAnimAction Action, bool bOwnerStoppedIt)
 {
+	// A dedicated server stops what it plays: a montage with root motion (Multicast_PlayAction), the charge's among them,
+	// whose held loop would otherwise go on there (the sword moves plan, D167).
 	if (GetNetMode() == NM_DedicatedServer)
 	{
+		StopActionLocal(Action);
 		return;
 	}
 	const APawn* Pawn = Cast<APawn>(GetOwner());

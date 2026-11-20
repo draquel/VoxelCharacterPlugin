@@ -451,6 +451,26 @@ bool UVCAnimAuthoringLibrary::AppendMontageSegment(UAnimMontage* Montage, UAnimS
 	return true;
 }
 
+bool UVCAnimAuthoringLibrary::LinkMontageSections(UAnimMontage* Montage, FName SectionName, FName NextSection)
+{
+	const int32 Index = Montage ? Montage->GetSectionIndex(SectionName) : INDEX_NONE;
+	if (Index == INDEX_NONE || (!NextSection.IsNone() && Montage->GetSectionIndex(NextSection) == INDEX_NONE))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("LinkMontageSections: %s has no section %s or %s"), *GetNameSafe(Montage),
+			*SectionName.ToString(), *NextSection.ToString());
+		return false;
+	}
+	if (Montage->CompositeSections[Index].NextSectionName == NextSection)
+	{
+		return true;
+	}
+	Montage->Modify();
+	Montage->CompositeSections[Index].NextSectionName = NextSection;
+	Montage->PostEditChange();
+	Montage->MarkPackageDirty();
+	return true;
+}
+
 TArray<FString> UVCAnimAuthoringLibrary::ListGraphs(UBlueprint* Blueprint)
 {
 	TArray<FString> Names;

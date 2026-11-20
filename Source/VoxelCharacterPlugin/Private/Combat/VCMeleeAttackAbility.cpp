@@ -166,7 +166,7 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 		return;
 	}
 
-	const FAttackParameters Attack = ResolveAttackParameters(Avatar);
+	FAttackParameters Attack = ResolveAttackParameters(Avatar);
 	const double Now = World->GetTimeSeconds();
 	UVCActionMontageComponent* Montages = Avatar->FindComponentByClass<UVCActionMontageComponent>();
 	const UAnimMontage* AttackMontage = Montages ? Montages->GetMontage(EVCAnimAction::Attack, 0) : nullptr;
@@ -186,6 +186,11 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 			return;
 		}
 		LastAttackTimeSeconds = Now;
+		// The attack's own share of the weapon's damage (its combo step's: the charged strike's twice, D167).
+		if (const UVCActionAnimSet* Set = Montages->GetCurrentActionAnimSet())
+		{
+			Attack.Damage *= Set->GetAttackDamageMultiplier(Variant);
+		}
 		if (const UAnimMontage* Montage = Montages->GetMontage(EVCAnimAction::Attack, Variant))
 		{
 			const APawn* Pawn = Cast<APawn>(Avatar);
