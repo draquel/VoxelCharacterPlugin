@@ -118,19 +118,21 @@ public:
 	EVCAttackPress ClassifyAttackPress() const;
 
 	/**
-	 * Picks the attack to play now and keeps it as this machine's current attack: the next of the combo when a press now
-	 * continues it, else the first.
+	 * Picks the attack to play now and keeps it as this machine's current attack: the next of the combo for the button
+	 * when a press now continues it, else the button's first (the sword moves plan, D166: the combo's table).
 	 * @param AttackSpeed  Attacks per second (the weapon's)
 	 * @param OutPlayRate  The play rate (GetAttackPlayRate)
-	 * @return The combo index (0 with no combo)
+	 * @param bSecondary   The secondary attack's button (IA_SecondaryAttack), else the primary's
+	 * @return The combo index (0 with no combo); -1 for the secondary when the set has none (nothing is kept)
 	 */
-	int32 ChooseAttack(float AttackSpeed, float& OutPlayRate);
+	int32 ChooseAttack(float AttackSpeed, float& OutPlayRate, bool bSecondary = false);
 
 	/**
 	 * Server: whether an attack may start now and which (D104, G179). An attack the owner picked on this very machine at
 	 * this moment (a listen server's or a standalone player's) is taken as it is. Otherwise the attack before must have
-	 * reached its recovery (less AttackRequestTolerance); the owner's index is taken when it is the first or the next of
-	 * the combo within the window (plus the tolerance), else the server picks its own. The attack is kept as current.
+	 * reached its recovery (less AttackRequestTolerance); the owner's index is taken when it is a button's first or that
+	 * button's next of the combo within the window (plus the tolerance), else the server picks its own for the same
+	 * button (D166: an index the secondary plays asks for the secondary's). The attack is kept as current.
 	 * @param RequestedIndex The owner's combo index, -1 for none (an NPC)
 	 * @param AttackSpeed    Attacks per second (the weapon's)
 	 * @param OutIndex       The combo index to play
@@ -148,14 +150,20 @@ public:
 	/** Server: the owner's requested combo index, cleared; -1 for none. */
 	int32 TakeRequestedAttack() { const int32 Index = RequestedAttackIndex; RequestedAttackIndex = -1; return Index; }
 
-	/** The owner: keep a press made between the strike and the recovery until the recovery (D104). */
-	void BufferAttack();
+	/**
+	 * The owner: keep a press made between the strike and the recovery until the recovery (D104).
+	 * @param bSecondary The press was the secondary attack's (D166)
+	 */
+	void BufferAttack(bool bSecondary = false);
 
 	/** The owner: whether a kept press is due (the current attack reached its recovery); it is consumed. */
 	bool TakeDueBufferedAttack();
 
 	/** Whether a press is kept for the recovery. */
 	bool HasBufferedAttack() const { return bAttackBuffered; }
+
+	/** Whether the kept press (or the last one taken) was the secondary attack's. */
+	bool IsBufferedAttackSecondary() const { return bBufferedSecondary; }
 
 	/** The combo index of the current or last attack, -1 before any. */
 	int32 GetLastAttackIndex() const { return ComboIndex; }
@@ -318,8 +326,9 @@ private:
 	float AttackComboWindow = 0.f;
 	int32 AttackComboCount = 0;
 
-	/** A press kept for the current attack's recovery (the owner's). */
+	/** A press kept for the current attack's recovery (the owner's), and whether it was the secondary attack's. */
 	bool bAttackBuffered = false;
+	bool bBufferedSecondary = false;
 
 	/** The combo index the owner asked for, until the melee ability takes it (server). */
 	int32 RequestedAttackIndex = -1;

@@ -47,6 +47,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_SecondaryAction;
 
+	/**
+	 * Digital — middle mouse button / gamepad right shoulder — the sword's secondary attack, the combo's other branch
+	 * (the sword moves plan, D166); RMB stays the guard.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_SecondaryAttack;
+
 	/** Digital — V key — switch FP / TP. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_ToggleView;

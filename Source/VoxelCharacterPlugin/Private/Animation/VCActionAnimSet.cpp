@@ -58,6 +58,60 @@ UAnimMontage* UVCActionAnimSet::GetMontage(EVCAnimAction Action, int32 Variant) 
 	return nullptr;
 }
 
+int32 UVCActionAnimSet::GetFirstAttack(bool bSecondary) const
+{
+	if (!bSecondary)
+	{
+		return AttackCombo.Num() > 0 ? 0 : -1;
+	}
+	return AttackCombo.IsValidIndex(SecondaryAttackStart) ? SecondaryAttackStart : -1;
+}
+
+int32 UVCActionAnimSet::GetNextAttack(int32 Current, bool bSecondary) const
+{
+	const int32 Count = AttackCombo.Num();
+	if (Count == 0)
+	{
+		return -1;
+	}
+	if (AttackComboSteps.IsValidIndex(Current))
+	{
+		const FVCAttackComboStep& Step = AttackComboSteps[Current];
+		const int32 Next = bSecondary ? Step.NextSecondary : Step.NextPrimary;
+		if (AttackCombo.IsValidIndex(Next))
+		{
+			return Next;
+		}
+	}
+	// No step, or none for this button: the list's next for the primary, the secondary's first.
+	return bSecondary ? GetFirstAttack(true) : (Current >= 0 ? (Current + 1) % Count : 0);
+}
+
+bool UVCActionAnimSet::IsSecondaryAttack(int32 Index) const
+{
+	if (!AttackCombo.IsValidIndex(Index) || GetFirstAttack(true) < 0)
+	{
+		return false;
+	}
+	if (Index == SecondaryAttackStart)
+	{
+		return true;
+	}
+	for (int32 Step = 0; Step < AttackCombo.Num(); ++Step)
+	{
+		if (GetNextAttack(Step, true) == Index)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+float UVCActionAnimSet::GetAttackDamageMultiplier(int32 Index) const
+{
+	return AttackComboSteps.IsValidIndex(Index) ? FMath::Max(0.f, AttackComboSteps[Index].DamageMultiplier) : 1.f;
+}
+
 UAnimMontage* UVCActionAnimSet::GetSheathMontage(EVCAnimAction Action, const FGameplayTag& Sheath) const
 {
 	const FVCSheathMontages* Entry = SheathMontages.FindByPredicate([&Sheath](const FVCSheathMontages& M) { return M.Sheath == Sheath; });

@@ -567,7 +567,7 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 	// A press kept during an attack's swing plays the next attack at its recovery (D104).
 	if (ActionMontages && IsLocallyControlled() && ActionMontages->TakeDueBufferedAttack())
 	{
-		StartMeleeSwing();
+		StartMeleeSwing(ActionMontages->IsBufferedAttackSecondary());
 	}
 	UpdateDrawnGrip();
 	UpdateSheathHandOff();
@@ -961,7 +961,7 @@ bool AVCCharacterBase::TryStartMeleeAttack()
 	return StartMeleeSwing();
 }
 
-bool AVCCharacterBase::StartMeleeSwing()
+bool AVCCharacterBase::StartMeleeSwing(bool bSecondary)
 {
 	if (!CombatComponent || IsIncapacitated())
 	{
@@ -977,6 +977,12 @@ bool AVCCharacterBase::StartMeleeSwing()
 	// time. A press goes by the combo's rule (D104), as the server's acceptance does: nothing in the wind-up, kept from the
 	// strike until the recovery (Tick plays it then), the next attack from the recovery on.
 	int32 Variant = -1;
+	const UVCActionAnimSet* Set = ActionMontages ? ActionMontages->GetCurrentActionAnimSet() : nullptr;
+	if (bSecondary && (!Set || Set->GetFirstAttack(true) < 0))
+	{
+		// No secondary branch for what is held (D166): the press does nothing.
+		return false;
+	}
 	if (ActionMontages && ActionMontages->GetMontage(EVCAnimAction::Attack, 0))
 	{
 		switch (ActionMontages->ClassifyAttackPress())
@@ -984,7 +990,7 @@ bool AVCCharacterBase::StartMeleeSwing()
 		case EVCAttackPress::Ignore:
 			return true;
 		case EVCAttackPress::Buffer:
-			ActionMontages->BufferAttack();
+			ActionMontages->BufferAttack(bSecondary);
 			return true;
 		default:
 			break;
@@ -993,7 +999,11 @@ bool AVCCharacterBase::StartMeleeSwing()
 		const UVCMeleeAttackAbility* Melee = PS && PS->MeleeAttackAbilityClass
 			? Cast<UVCMeleeAttackAbility>(PS->MeleeAttackAbilityClass->GetDefaultObject()) : nullptr;
 		float PlayRate = 1.f;
-		Variant = ActionMontages->ChooseAttack(Melee ? Melee->GetAttackSpeed(this) : 1.f, PlayRate);
+		Variant = ActionMontages->ChooseAttack(Melee ? Melee->GetAttackSpeed(this) : 1.f, PlayRate, bSecondary);
+		if (Variant < 0)
+		{
+			return false;
+		}
 		ActionMontages->PlayActionLocal(EVCAnimAction::Attack, Variant, PlayRate);
 	}
 
@@ -2654,6 +2664,10 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 		EIC->BindAction(Config->IA_PrimaryAction, ETriggerEvent::Completed, this, &AVCCharacterBase::Input_StopPrimaryAction);
 		EIC->BindAction(Config->IA_PrimaryAction, ETriggerEvent::Canceled, this, &AVCCharacterBase::Input_StopPrimaryAction);
 	}
+	if (Config->IA_SecondaryAttack)
+	{
+		EIC->BindAction(Config->IA_SecondaryAttack, ETriggerEvent::Started, this, &AVCCharacterBase::Input_SecondaryAttack);
+	}
 	if (Config->IA_SecondaryAction)
 	{
 		EIC->BindAction(Config->IA_SecondaryAction, ETriggerEvent::Started, this, &AVCCharacterBase::Input_SecondaryAction);
@@ -2953,6 +2967,29 @@ void AVCCharacterBase::PressSecondaryAction()
 void AVCCharacterBase::Input_StopSecondaryAction(const FInputActionValue& Value)
 {
 	ReleaseSecondaryAction();
+}
+
+void AVCCharacterBase::Input_SecondaryAttack(const FInputActionValue& Value)
+{
+	PressSecondaryAttack();
+}
+
+void AVCCharacterBase::PressSecondaryAttack()
+{
+	// As the primary's swing (PressPrimaryAction): nothing behind a raised guard (D94: RMB keeps it), while a weapon comes
+	// out or goes back, or in edit mode; a melee weapon with a secondary branch swings it (D166), at a target or the air.
+	if (IsIncapacitated() || bBlocking || bEditModeEnabled)
+	{
+		return;
+	}
+	if (ActionMontages && ActionMontages->IsSheathActionPlaying())
+	{
+		return;
+	}
+	if (UVCMeleeAttackAbility::HoldsMeleeWeapon(this))
+	{
+		StartMeleeSwing(/*bSecondary*/ true);
+	}
 }
 
 void AVCCharacterBase::ReleaseSecondaryAction()

@@ -111,20 +111,25 @@ void UVCActionMontageComponent::RecordAttack(int32 Index, float PlayRate)
 	bAttackBuffered = false;
 }
 
-int32 UVCActionMontageComponent::ChooseAttack(float AttackSpeed, float& OutPlayRate)
+int32 UVCActionMontageComponent::ChooseAttack(float AttackSpeed, float& OutPlayRate, bool bSecondary)
 {
 	OutPlayRate = GetAttackPlayRate(AttackSpeed);
 	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
 	const int32 Count = Set ? Set->AttackCombo.Num() : 0;
 	if (Count == 0)
 	{
-		return 0;
+		return bSecondary ? -1 : 0;
 	}
-	// The next of the combo when a press now continues it (one kept for the recovery does by then), else the first.
+	// The button's next of the combo when a press now continues it (one kept for the recovery does by then), else the
+	// button's first (D166).
 	const EVCAttackPress Press = ClassifyAttackPress();
 	const bool bContinues = ComboIndex >= 0 && AttackComboCount == Count
 		&& (Press == EVCAttackPress::Continue || Press == EVCAttackPress::Buffer);
-	const int32 Index = bContinues ? (ComboIndex + 1) % Count : 0;
+	const int32 Index = bContinues ? Set->GetNextAttack(ComboIndex, bSecondary) : Set->GetFirstAttack(bSecondary);
+	if (Index < 0)
+	{
+		return -1;
+	}
 	RecordAttack(Index, OutPlayRate);
 	return Index;
 }
@@ -159,16 +164,25 @@ bool UVCActionMontageComponent::AcceptAttack(int32 RequestedIndex, float AttackS
 	}
 	const bool bInWindow = ComboIndex >= 0 && AttackComboCount == Count && Since >= 0.0
 		&& Since <= AttackEndTime + AttackComboWindow + AttackRequestTolerance;
-	const int32 Next = bInWindow ? (ComboIndex + 1) % Count : 0;
-	// The owner's index when the server's rule allows it (the first, or the next within the window), else the server's.
-	OutIndex = (RequestedIndex == 0 || RequestedIndex == Next) ? RequestedIndex : Next;
+	// The button the owner pressed, read from its index (D166: each attack of the table is one button's).
+	const bool bSecondary = Set->IsSecondaryAttack(RequestedIndex);
+	const int32 Next = bInWindow ? Set->GetNextAttack(ComboIndex, bSecondary) : Set->GetFirstAttack(bSecondary);
+	const bool bFirst = RequestedIndex >= 0 && (RequestedIndex == Set->GetFirstAttack(false) || RequestedIndex == Set->GetFirstAttack(true));
+	// The owner's index when the server's rule allows it (a button's first, or its next within the window), else the
+	// server's for that button.
+	OutIndex = (bFirst || RequestedIndex == Next) ? RequestedIndex : Next;
+	if (!Set->AttackCombo.IsValidIndex(OutIndex))
+	{
+		OutIndex = 0;
+	}
 	RecordAttack(OutIndex, OutPlayRate);
 	return true;
 }
 
-void UVCActionMontageComponent::BufferAttack()
+void UVCActionMontageComponent::BufferAttack(bool bSecondary)
 {
 	bAttackBuffered = true;
+	bBufferedSecondary = bSecondary;
 	SetComponentTickEnabled(true);
 }
 
