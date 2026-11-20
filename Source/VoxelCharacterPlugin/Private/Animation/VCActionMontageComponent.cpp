@@ -47,6 +47,11 @@ void UVCActionMontageComponent::TickComponent(float DeltaTime, ELevelTick TickTy
 
 	float Position = 0.f;
 	UAnimMontage* Montage = GetPlayingAttackMontage(Position);
+	// A dodge or a roll breaks its recovery off on the move as an attack does (D170 after D103).
+	if (!Montage)
+	{
+		Montage = GetPlayingMoveMontage(Position);
+	}
 	if (!Montage)
 	{
 		// Nothing to break; a kept press still waits for its recovery (the owner's character takes it).
@@ -80,6 +85,38 @@ EVCAttackPress UVCActionMontageComponent::ClassifyAttackPress(double SinceStart,
 	return SinceStart < RecoveryTime ? EVCAttackPress::Buffer : EVCAttackPress::Continue;
 }
 
+float UVCActionMontageComponent::GetRequestTolerance(const AActor* Character)
+{
+	const APawn* Pawn = Cast<APawn>(Character);
+	return Pawn && Pawn->HasAuthority() && Pawn->IsPlayerControlled() && !Pawn->IsLocallyControlled() ? AttackRequestTolerance : 0.f;
+}
+
+bool UVCActionMontageComponent::IsBeforeRecovery(double SinceStart, float RecoveryTime, float Tolerance)
+{
+	return SinceStart >= 0.0 && SinceStart < RecoveryTime - FMath::Max(Tolerance, 0.f);
+}
+
+void UVCActionMontageComponent::RecordMove(EVCMoveKind Kind, int32 Index)
+{
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	const EVCAnimAction Action = Kind == EVCMoveKind::Roll ? EVCAnimAction::Roll : EVCAnimAction::Dodge;
+	const UAnimMontage* Montage = Set ? Set->GetMontage(Action, Index) : nullptr;
+	const UWorld* World = GetWorld();
+	MoveStartTime = World ? World->GetTimeSeconds() : 0.0;
+	MoveRecoveryTime = UVCActionAnimSet::GetRecoveryTime(Montage);
+	// The move cancels the attack (the server ends the melee ability, so its hit does not land) and the combo starts over.
+	ComboIndex = -1;
+	AttackStartTime = -1.0;
+	AttackRecoveryTime = 0.f;
+	bAttackBuffered = false;
+}
+
+bool UVCActionMontageComponent::IsMoveBeforeRecovery(float Tolerance) const
+{
+	const UWorld* World = GetWorld();
+	return World && MoveStartTime >= 0.0 && IsBeforeRecovery(World->GetTimeSeconds() - MoveStartTime, MoveRecoveryTime, Tolerance);
+}
+
 bool UVCActionMontageComponent::ShouldBreakRecovery(double SinceStart, float RecoveryTime, float EndTime, bool bWantsToMove)
 {
 	return bWantsToMove && SinceStart >= RecoveryTime && SinceStart < EndTime;
@@ -107,7 +144,8 @@ bool UVCActionMontageComponent::CanStartCharge() const
 	const ACharacter* Character = Cast<ACharacter>(GetOwner());
 	const UCharacterMovementComponent* Movement = Character ? Character->GetCharacterMovement() : nullptr;
 	const UVCMovementComponent* VCMovement = Cast<UVCMovementComponent>(Movement);
-	return CanChargeFrom(bSetCharges, ClassifyAttackPress(), VCMovement && VCMovement->IsSprinting(), Movement && Movement->IsFalling());
+	return !IsMoveBeforeRecovery()
+		&& CanChargeFrom(bSetCharges, ClassifyAttackPress(), VCMovement && VCMovement->IsSprinting(), Movement && Movement->IsFalling());
 }
 
 void UVCActionMontageComponent::BeginCharge()
@@ -174,6 +212,8 @@ void UVCActionMontageComponent::RecordAttack(int32 Index, float PlayRate)
 	AttackComboWindow = Set ? Set->ComboWindow : 0.f;
 	AttackComboCount = Set ? Set->AttackCombo.Num() : 0;
 	bAttackBuffered = false;
+	// An attack after a dodge or a roll ends the move's record.
+	MoveStartTime = -1.0;
 }
 
 int32 UVCActionMontageComponent::ChooseAttack(float AttackSpeed, float& OutPlayRate, bool bSecondary)
@@ -208,6 +248,11 @@ bool UVCActionMontageComponent::AcceptAttack(int32 RequestedIndex, float AttackS
 	const UWorld* World = GetWorld();
 	const double Now = World ? World->GetTimeSeconds() : 0.0;
 
+	// No attack before a dodge's or a roll's recovery (D170), less the request's allowance.
+	if (IsMoveBeforeRecovery(AttackRequestTolerance))
+	{
+		return false;
+	}
 	// The owner picked it on this machine this very moment (a listen server's or a standalone player): it is the attack
 	// already kept, not a second pick (G179).
 	if (RequestedIndex >= 0 && RequestedIndex == ComboIndex && AttackStartTime == Now)
@@ -263,7 +308,8 @@ void UVCActionMontageComponent::BufferAttack(bool bSecondary)
 
 bool UVCActionMontageComponent::TakeDueBufferedAttack()
 {
-	if (!bAttackBuffered || GetSecondsSinceAttack() < AttackRecoveryTime)
+	// A press kept during a dodge or a roll waits for its recovery (D170), one during an attack for the attack's.
+	if (!bAttackBuffered || IsMoveBeforeRecovery() || (AttackStartTime >= 0.0 && GetSecondsSinceAttack() < AttackRecoveryTime))
 	{
 		return false;
 	}
@@ -299,6 +345,27 @@ UAnimMontage* UVCActionMontageComponent::GetPlayingAttackMontage(float& OutPosit
 	for (const TObjectPtr<UAnimMontage>& Montage : Set->AttackCombo)
 	{
 		// Playing and not already on its way out (a break or the next attack blending over it).
+		const FAnimMontageInstance* Instance = Montage ? AnimInstance->GetActiveInstanceForMontage(Montage) : nullptr;
+		if (Instance && Instance->IsActive() && !Instance->IsStopped())
+		{
+			OutPosition = Instance->GetPosition();
+			return Montage;
+		}
+	}
+	return nullptr;
+}
+
+UAnimMontage* UVCActionMontageComponent::GetPlayingMoveMontage(float& OutPosition) const
+{
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	const UAnimInstance* AnimInstance = Set ? GetBodyAnimInstance() : nullptr;
+	if (!AnimInstance)
+	{
+		return nullptr;
+	}
+	UAnimMontage* Moves[] = { Set->Roll.Get(), Set->Dodge.Front.Get(), Set->Dodge.Back.Get(), Set->Dodge.Left.Get(), Set->Dodge.Right.Get() };
+	for (UAnimMontage* Montage : Moves)
+	{
 		const FAnimMontageInstance* Instance = Montage ? AnimInstance->GetActiveInstanceForMontage(Montage) : nullptr;
 		if (Instance && Instance->IsActive() && !Instance->IsStopped())
 		{
@@ -394,9 +461,9 @@ float UVCActionMontageComponent::PlayActionLocal(EVCAnimAction Action, int32 Var
 		return 0.f;
 	}
 	const float Length = AnimInstance->Montage_Play(Montage, FMath::Max(PlayRate, 0.01f));
-	if (Action == EVCAnimAction::Attack && Length > 0.f)
+	if ((Action == EVCAnimAction::Attack || Action == EVCAnimAction::Dodge || Action == EVCAnimAction::Roll) && Length > 0.f)
 	{
-		// The recovery's break (D103) is watched while the attack plays.
+		// The recovery's break (D103) is watched while the attack, the dodge or the roll plays.
 		SetComponentTickEnabled(true);
 	}
 	// The charge's variant 1 is its lowering (D167), the End section.

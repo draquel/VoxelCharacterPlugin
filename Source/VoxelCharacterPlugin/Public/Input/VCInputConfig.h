@@ -102,6 +102,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_Sprint;
 
+	/**
+	 * The dodge and the roll (the sword moves plan, D170): a roll toward the movement input, a step back without it.
+	 * LeftAlt and Gamepad_FaceButton_Right in IMC_Gameplay.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_Dodge;
+
 	/** Hold to crouch (slow walk); dives while swimming. LeftCtrl in IMC_Gameplay. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_Crouch;

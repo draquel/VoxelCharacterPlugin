@@ -1,7 +1,7 @@
 # Sword Moves Plan: the sword attack flow's phases B to F
 
 > **Agreed 2026-11-19** (the user: "Yes, as recommended": D165-D171 each as recommended, section 7). **B and C built
-> 2026-11-19** (section 8); D, E and F to come. Lane 1 (B, C, D) and lane 2 (F) run in parallel, then E (D171).
+> 2026-11-19, F 2026-11-20** (section 8); D and E to come. Lane 1 (B, C, D) and lane 2 (F) run in parallel, then E (D171).
 > Phases B-F of `SWORD_ATTACK_FLOW_PLAN.md` (frozen; phase A built 2026-11-12), the pack demo's other moves:
 > B the secondary branch (`draquel/UE5_PluginDev#422`), C the charge (#423), D the run attack (#424), E the air and
 > plunge attacks (#425), F the dodge and the roll (#426). Owner: VoxelCharacterPlugin (the montage component, the melee
@@ -251,8 +251,9 @@ As D166: `IA_SecondaryAttack` on the middle mouse button and the gamepad's right
 `AVCCharacterBase::PressSecondaryAttack`; the combo a table of steps on the set (`FVCAttackComboStep`:
 `AttackComboSteps`, `SecondaryAttackStart`), the other sets keeping their list (no table, no secondary). The layers
 script measured the branch's markers as section 3 has them (`_08` 0.467 / 0.767 s, `_09` 0.408 / 0.646, `_10` 0.408 /
-0.884). Built otherwise than drafted: **no move kind on the request** (lane 2 owns it, D171): the secondary rides on the
-combo index, the server reading the button from it (each attack of the table is one button's, `IsSecondaryAttack`) and
+0.884). Built otherwise than drafted: **the secondary is no field of the request**: it rides on the
+attack's combo index (first on phase A's `Server_RequestMeleeSwing`, since F's merge on D165's
+`Server_RequestMove` with `EVCMoveKind::Attack`), the server reading the button from it (each attack of the table is one button's, `IsSecondaryAttack`) and
 picking its own for that button when it refuses the owner's. Tests `VoxelCharacter.Anim.Sword.ComboTable` (the 16 orders
 of four presses), `.SecondaryPress`, `VoxelCharacter.Combat.Melee.AcceptSecondary`. PIE on `CharacterTest` with a
 dedicated server, two clients and 100 ms of lag: from rest the secondary plays `_08`; `_01`, the secondary, the primary
@@ -264,8 +265,9 @@ phase A's `_01`, 18 over `_08`; on `dev`, not caused here).
 
 **C, the charge** (#423; built 2026-11-19, the same branches). As D167, one montage `AM_SwordShield_Charge` (the windup,
 `Loop` looping, `End`), `_15` at combo index 6 with twice the damage in its step (`DamageMultiplier`, applied by the melee
-ability) and `_02` after it; the owner's `Server_SetCharge` (`EVCChargeChange`: begin, lower, stop) and the charged
-strike as its combo index, which `AcceptAttack` takes once the server's own clock has run the charge time less 0.2 s.
+ability) and `_02` after it; the owner's charge changes as move requests (D165: `EVCMoveKind::Charge`, its index an
+`EVCChargeChange`: begin, lower, stop; built first as a request of its own, `Server_SetCharge`, moved onto F's request at
+the merge) and the charged strike as an attack request with its combo index, which `AcceptAttack` takes once the server's own clock has run the charge time less 0.2 s.
 `vc.Anim.AttackCharge` (1; 0 the first attack at the press) is the A/B. Built otherwise than drafted: **a release any
 time before the charged strike plays `_01`** (section 5's test, a release at 1.2 s plays `_01`; D167's text had the
 demo's `_01` only within the loop's first 0.5 s and no transition after it; agreed with the coordinating session on
@@ -284,12 +286,75 @@ owner's) and a press in its recovery `_02`; the guard and the secondary over a c
 montage at its `End`, 2.0 s); each on the three machines, the same place, no correction. On the planet the charged
 `_15` moved 137.0 uu across local up (the clip's 137).
 
-**Gate** (both phases, the branch's tip): `build.ps1` no warning against the baseline (`build_warnings.py`), and B
-alone built with its tests passing before its commit; the headless suite 1068 of 1068, no new warning kind against a `dev` suite run of the same day (the three new test
-worlds' `CleanupWorld` line, which every test world logs); `build.ps1 -Shipping` links (a test file added); the editor
-gate 36 of 36 (the replication tests with a dedicated server among them), its 210 parity lines identical, the Nanite
-layouts 0 differ; `check_docs.py` finds no unknown name in the changed documents.
+**On F** (2026-11-20, after lane 2 merged first): both branches rebased onto `dev` with F, the attack's and the charge's
+requests on F's `Server_RequestMove` (`EVCMoveKind::Charge` added), a press during a dodge or a roll kept as F keeps it
+(never a charge: a kept press does not start one, and the charge rule refuses during a move), a dodge or a roll ending a
+charge on both machines; `IMC_Gameplay` and `VCInputConfig` taken from `dev` and `IA_SecondaryAttack` added again by
+`add_input_action.py`, the SwordShield set rebuilt by the merged layers script (its seven attacks, the charge, F's dodges
+and roll). PIE as before with `vox.PIE.Net 2 lag=100`: the secondary chain (`_01`, `_09`, `_04`), a release 1.2 s into
+the charge (`_01`), the full hold (`_15`, then `_02`), a step back out of a charge (the release after it plays nothing)
+and out of `_08`; each on the three machines, ending at the same place, no correction.
 
-**Not done:** D (the run attack) waits for lane 2's root-motion flag (D168); E after both lanes. When lane 2 merges
-first, the SwordShield set and the input assets (`IMC_Gameplay`, `VCInputConfig`) are rebuilt on top of `dev` by the
-scripts (`setup_character_layers.py`, `add_input_action.py`), not merged.
+**Gate** (B and C on F, the rebased tip): `build.ps1` no warning against the baseline (`build_warnings.py`); the headless
+suite 1074 of 1074 (F's 1069 and B's and C's five), no new warning kind against the run before the rebase (only F's new
+test worlds' `CleanupWorld` line); the editor gate 36 of 36 (the replication tests with a dedicated server among them),
+its 210 parity lines identical, the Nanite layouts 0 differ. Before the rebase the same gates had passed on `dev`
+86c3483 (1068 of 1068, the editor gate 36 of 36) with `build.ps1 -Shipping` linking (the test file added); B alone built
+with its tests passing before its commit.
+
+**Not done:** D (the run attack), now that F's capsule flag (D168) and move request are in `dev`; E after it.
+
+**F, the dodge and the roll** (#426; built 2026-11-20 on `claude/sword-moves-f` in VoxelCharacterPlugin and the
+parent). **The measurement first (D170's network):** the moves were built in phase A's form with D165's request and
+D168's flag, then measured on `CharacterTest` with a dedicated server, two clients and 100 ms of lag on every machine
+(`NetEmulation.PktLag 100` set in the editor before `vox.PIE.Net 2`: the emulation is kept for the drivers made later;
+typed during a session it reaches only the drivers of the world it runs in), `p.NetShowCorrections 1` and
+`vox.AttackTrace` (which gained the dodge's press, a walk to a side, the play world and the immunity). The server starts
+each move 0.12-0.14 s after the owner and the other client 0.25 s after it; steps back standing (205 uu), rolls from a
+walk forward, back, left and right (446 uu, the input held into the roll), a step out of a swing and an attack pressed in
+a step all end at the same place on the three machines (within 1.2 uu) with **no correction** in about twenty runs:
+the server's montage moves by the owner's moves, as the lunge's did. So the predicted root motion source was not built.
+The owner sends its pending moves before the request (`vc.Net.MoveFlush`, as GAS does at an activation): without it
+one roll in nine drew a burst of 12 corrections of up to 5.7 uu. **First person** was the one case that corrected (up
+to 378 uu, a step to the side): the server's capsule faces where the body walked, the owner's the view, so the request
+carries the facing the move starts with (`FVCMoveRequest::Direction`, a roll's input and a step's facing) and the capsule
+keeps it through the move (`FaceRotation`); then steps from rest in first person end within 1 uu with no correction. The
+cause also corrects a first-person strafe and an attack's lunge, which this phase leaves as **G256**.
+
+**The move** as D170: `IA_Dodge` on Left Alt and `Gamepad_FaceButton_Right` (`add_input_action.py`); with movement
+input a roll toward it (`Roll_F`, the capsule turned to the input first), with none a step back, with the facing locked
+to the view a step to the input's side of it (`Dodge_01` FL, BR, L, R); 15 stamina a step and 20 a roll, refused short of
+it, the regeneration waiting as after the sprint; the server's `State.Invulnerable` from the start to the montage's
+travelled marker; from an attack any time (the swing's hit does not land); a press in the move plays `_01` at its
+recovery; no jump and no guard before it. D165: `Server_RequestMeleeSwing` became `Server_RequestMove(FVCMoveRequest)`
+(`EVCMoveKind` Attack, Dodge, Roll; an index; a facing), the attack's index riding as before. D168:
+`UVCAnimMetaData_CarriesCapsule` on a montage, read by `ApplyMontageRootMotionMode` on every machine. The layers script
+measured the clips as section 3 has them (travel 205-208 uu by 0.27-0.33 s a step, 446 uu by 0.44 s the roll; recovery
+0.63, 0.67, 0.77 and 0.70 s forward, back, left, right, 0.68 s the roll). Built otherwise than drafted: **the step back
+is `BR`, not `BL`** (`BL`'s fastest hand frame falls late, 0.43 s, and the attack's rule finds no settle after it; the
+two are the same step on the other foot); **a step or a roll past its recovery breaks to the locomotion on the move**,
+phase A's rule for an attack (D103); and **the press needs the ground** (no dodge in the air or swimming), which D170 does
+not say.
+
+**Checked in PIE** (`Saved/QA/sword_moves_f/`): each side of the step and the roll; six steps spend the stamina to
+10 and the seventh is refused ("short of stamina"); `vox.Damage` inside the server's window is `Rejected_Invulnerable`
+and 0.9 s later lands; a step 0.19 s into a swing cancels it (the server logs no swing); a press 0.3 s into a step plays
+`_01` at its recovery (0.67 s) on every machine; mid-step the owner can neither jump nor raise the shield, after it both.
+On `PlanetTest` at 35 N 30 E, on a slope: the step back moved 204.9 uu along the surface (the plane's 204.9), a roll from
+a walk carried the body along the surface upright (`planet_roll_mid.png`). Found: **G255** (the QA teleport's settle
+hold strands a pawn on a map without a voxel world under `vox.PIE.Net`), **G256**.
+
+**Gate.** `build.ps1` with no warning against dev's (`build_warnings.py`) and the non-unity build of the two modules changed
+(VoxelCharacterPlugin, VoxelEngine) clean; the headless suite 1069 of 1069, the six new tests among them
+(`logwarnings.py`: no new kind, only the new test worlds' names in the EndPlay line every `FPlayWorld` test logs); the
+editor gate 36 of 36 (the replication tests with a dedicated server among them), the 210 parity lines identical, the
+Nanite layouts unchanged.
+
+**For the merge with lane 1** (B and C, VoxelCharacterPlugin#128, the parent's #560): the request is this branch's
+(`Server_RequestMove`), so B's secondary index rides on `EVCMoveKind::Attack`; `EVCAnimAction` gains `Dodge` and `Roll`
+here and `Charge` there; both add an input action to `IMC_Gameplay` and `VCInputConfig` (take one side's assets and
+rerun `add_input_action.py` for the other's action: idempotent); both extend `vox.AttackTrace` (here `d`, `u`, a walk
+direction, `pie=`, `stam=`, `inv=`; there `s`, `h`, `g`, `j`). The SwordShield set (shared content) was given its dodge
+and roll in memory only for this branch's checks: after both merge, rerun `Scripts/setup_character_layers.py` on top of
+`dev` and save the set.
+

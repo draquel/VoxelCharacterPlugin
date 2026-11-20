@@ -286,7 +286,7 @@ struct VOXELCHARACTERPLUGIN_API FVCPlayerSaveState
 	FSoftObjectPath ChosenAppearance;
 };
 
-/** A change of the owner's charge the server hears of (AVCCharacterBase::Server_SetCharge; the sword moves plan, D167). */
+/** A change of the owner's charge the server hears of (a move request of kind EVCMoveKind::Charge; the sword moves plan, D167). */
 UENUM()
 enum class EVCChargeChange : uint8
 {

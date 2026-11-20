@@ -21,6 +21,8 @@
 #include "AbilitySystemComponent.h"
 #include "Core/VCGameplayTags.h"
 #include "AbilitySystemInterface.h"
+#include "Animation/VCActionAnimSet.h"
+#include "Animation/AnimMontage.h"
 #include "Combat/VCCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
 #if WITH_WORLD_WEATHER
@@ -635,6 +637,46 @@ FVector UVCMovementComponent::ClampClientWindAir(const FVector& ClientAir, const
 	return Dir * FMath::Clamp(Along, -Slack, MaxAlong) + Across.GetClampedToMaxSize(Slack);
 }
 
+bool UVCMovementComponent::IsPlayingCapsuleMontage() const
+{
+	const USkeletalMeshComponent* Body = CharacterOwner ? CharacterOwner->GetMesh() : nullptr;
+	const UAnimInstance* AnimInstance = Body ? Body->GetAnimInstance() : nullptr;
+	if (!AnimInstance)
+	{
+		return false;
+	}
+	for (const FAnimMontageInstance* Instance : AnimInstance->MontageInstances)
+	{
+		// Blending out still moves the body by its weight: it carries until it is gone, on every machine alike.
+		if (Instance && Instance->IsActive() && UVCActionAnimSet::CarriesCapsule(Instance->Montage))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UVCMovementComponent::SpendStamina(float Amount)
+{
+	const IAbilitySystemInterface* WithASC = Cast<IAbilitySystemInterface>(GetOwner());
+	UAbilitySystemComponent* ASC = WithASC ? WithASC->GetAbilitySystemComponent() : nullptr;
+	const FGameplayAttribute StaminaAttribute = UVCCharacterAttributeSet::GetStaminaAttribute();
+	if (!ASC || !ASC->HasAttributeSetForAttribute(StaminaAttribute))
+	{
+		return true;
+	}
+	const float Current = ASC->GetNumericAttribute(StaminaAttribute) + PendingStaminaDelta;
+	if (Current < Amount)
+	{
+		return false;
+	}
+	// At once, the pending sprint and regeneration folded in, so the next check on either machine sees it.
+	PendingStaminaDelta = 0.f;
+	ASC->ApplyModToAttribute(StaminaAttribute, EGameplayModOp::Override, FMath::Max(Current - FMath::Max(Amount, 0.f), 0.f));
+	TimeSinceSprint = 0.f;
+	return true;
+}
+
 void UVCMovementComponent::ApplyMontageRootMotionMode(bool bWantsToMove)
 {
 	USkeletalMeshComponent* Body = CharacterOwner ? CharacterOwner->GetMesh() : nullptr;
@@ -643,7 +685,8 @@ void UVCMovementComponent::ApplyMontageRootMotionMode(bool bWantsToMove)
 	{
 		return;
 	}
-	const ERootMotionMode::Type Mode = ShouldTakeMontageRootMotion(bMontageRootMotionOnlyStanding, bWantsToMove)
+	// A dodge or a roll carries the capsule with input too (D168); the rest only standing (D106).
+	const ERootMotionMode::Type Mode = ShouldTakeMontageRootMotion(bMontageRootMotionOnlyStanding, bWantsToMove, IsPlayingCapsuleMontage())
 		? ERootMotionMode::RootMotionFromMontagesOnly : ERootMotionMode::IgnoreRootMotion;
 	if (AnimInstance->RootMotionMode != Mode)
 	{

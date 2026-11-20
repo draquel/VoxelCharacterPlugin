@@ -26,6 +26,7 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Core | `UVCAnimInstance`, `IVCAnimatedCharacter` | The anim instance of the player and the NPCs, every value in the gravity frame (Animation, below); the interface it reads a character's view mode, action set and combat state through |
 | Core | `UVCAnimLayerInstance` | The parent of a stance layer that aims or plays montages of its own (the bow's): the body's montages in the layer's slots, the body's aim and upper-body montage weight copied each update |
 | Animation | `UVCActionMontageComponent`, `UVCActionAnimSet`, `UVCAnimNotify_ActionHit` | The action montages of both character classes: the owner's at input, everyone else's by multicast, hit reacts, deaths and get-ups from the combat events; a set's montages per action; the moment an action lands |
+| Animation | `UVCAnimNotify_ActionTravelled`, `UVCAnimMetaData_CarriesCapsule` | Where a dodge's or a roll's travel is 90 % done (the server's immunity ends there); the flag on a montage whose root motion carries the capsule with movement input too (D168) |
 | Animation | `UVCCharacterAppearance`, `UVCAppearanceComponent` | A body as data (a mesh, or a MetaHuman's Blueprint whose parts dress it) and the component that dresses both character classes in one (Appearance, below) |
 | Animation | `UVCLocomotionAnimInstance`, `UVCLocomotionClipSet` | The player's locomotion as a state machine of our own over the Essential Animation packs (`vc.Anim.Locomotion 2`, the default; the locomotion state machine plan): the anim instance that resolves the held set's clips and computes the rules, and a set's full-body clips (Animation, below) |
 | Animation | `UVCLocomotionAnimSet` | An animal's locomotion for the creature template AnimBP: its blend space by speed, the run's own speed, its idle variant (NPCs, below) |
@@ -44,6 +45,7 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Effects | `UVCWaterSurfaceBridge` | A world subsystem that gives the voxel world's water to the framework: it answers CommonGameFramework's `ICGFWaterSurfaceInterface` from `SampleWaterSurface` and registers with `UCGFWaterSubsystem`, so a dropped item rests at the surface (Water, below); it passes a change of the voxel world's lakes and river reaches (`UVoxelChunkManager::OnWaterBodiesChanged`) on as `UCGFWaterSubsystem::NotifyWaterChanged` with the bounds of the change, so what rests there settles again |
 | Effects | `FVCRagdollBuoyancy`, `FVCRagdollBuoyancyState` | The floating rule for a dead body: a ragdoll in water rises to the surface and rests awash there, on each machine (Water, below) |
 | Combat | `UVCCombatComponent`, `UVCCombatAttributeSet`, `UVCDamageEffect`, `UVCDamageExecution`, `UVCMeleeAttackAbility`, `UVCCombatStatics`, `UVCEquipmentStatEffect`, `IVCDamageReceiver` | Faction, damage intake, death and downed state; AttackPower and Defense; the damage pipeline; equipment stats |
+| Combat | `UVCDodgeAbility` | The dodge and the roll (the sword moves plan's F, D170): the server's check and the owner's, the stamina, the capsule's facing, the immunity for most of the travel ("GAS" › The dodge and the roll, below) |
 | Combat | `UVCRangedAttackAbility`, `AVCArrowProjectile`, `UVCArrowMovementComponent` | The bow: the draw timed and the shot taken on the server; the replicated arrow, its hits and sticking; its flight under local gravity (The bow, below) |
 | Editing | `UVCBlockInteractionComponent` | Cubic worlds: the block outline, the placement ghost and timed breaking |
 | Gathering | `UVCGatherTable` | Voxel material to item, scatter harvest entries, tool yield |
@@ -61,6 +63,7 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 |---|---|
 | `Core/VCCharacterBase.cpp` | Construction, lifecycle, possession and ASC binding, view mode, equipment attachment, input binding and callbacks, the primary-action chain, the debug overlay |
 | `Core/VCCharacterBase_Spawn.cpp` | The terrain wait (`FreezeForTerrainWait`, `InitiateChunkBasedWait`, `PlaceOnTerrainAndResume`), world safety (`TickWorldSafety`, `IsOutOfWorld`, `FellOutOfWorld`, `RecoverFromMissingTerrain`, `GetLastSafeLocation`), `FaceRotation` |
+| `Core/VCCharacterBase_Moves.cpp` | The moves the owner plays at its input and the server plays from one request (the sword moves plan, D165): `Server_RequestMove`, `ActivateMove`; the dodge and the roll (`TryStartDodge`, `IsFacingLockedToView`, `CanJumpInternal`) |
 | `Core/VCCharacterBase_Surface.cpp` | Placing, the chop aim and chopping (scatter and voxel trees), radial ragdolls, mining speed, rest, sleep and crafting requests |
 | `Core/VCPlayerController.cpp` | Input contexts, rotation, persistent widgets, panels, toasts, objective text, the world map and pause menu |
 | `Core/VCPlayerController_Items.cpp` | The click-to-move state machine, held visuals, the item cursor |
@@ -141,6 +144,34 @@ attacker builds FCGFDamageContext
   sees `GuardBreak` (`Guard_Break`). Pure damage and a hit with no source are not blocked; a body without stamina (an NPC)
   never breaks. While the guard is up the primary action does nothing and stamina does not regenerate. Not done: the
   guard does not slow the walk, NPCs do not block, and the shield's swap has no montage.
+- **The dodge and the roll** (the sword moves plan's F, D165, D168, D170, 2026-11-20; `SWORD_MOVES_PLAN.md`). The
+  dodge key (`IA_Dodge`, "Input" › The dodge) calls `TryStartDodge`: with movement input a roll toward it (the capsule
+  turned to the input first, then the pack's `Roll_F`), with none a step back (`Dodge_01_BR`), and while the facing is
+  locked to the view (a bow drawn, the first-person view: `IsFacingLockedToView`) or the set has no roll a step toward
+  the input's side of the facing (`Dodge_01` FL, BR, L, R): `UVCDodgeAbility::ChooseMove`. The set holds them
+  (`UVCActionAnimSet::Dodge` per side, `Roll`); only the SwordShield set has them, so with another the press does nothing.
+  The owner checks `UVCDodgeAbility::CanStartMove` (alive and up, on the ground, the set's montage, no dodge or roll
+  before its recovery, the stamina), sends its pending moves first (`vc.Net.MoveFlush`), plays the montage, records the
+  move (`UVCActionMontageComponent::RecordMove`) and sends `Server_RequestMove` with the move's kind (`EVCMoveKind`,
+  D165: the attack goes through the same request) and the facing it starts with. `UVCDodgeAbility` (Ability.Dodge,
+  ServerOnly, granted through `AVCPlayerState::DodgeAbilityClass`) checks the same predicate with the request's
+  allowance (0.2 s), spends 15 stamina for a step and 20 for a roll at once (`UVCMovementComponent::SpendStamina`; the
+  regeneration then waits `StaminaRegenDelay`, as after the sprint), cancels a swing in progress (its hit does not land)
+  and a raised guard, turns its capsule to the owner's facing, plays the montage for everyone else and holds
+  `State.Invulnerable` from the start to the montage's `UVCAnimNotify_ActionTravelled`, where 90 % of the travel is done
+  (the layers script measures it: 0.27-0.33 s a step, 0.44 s the roll). Until the move's recovery (measured by the
+  attack's rule: 0.63-0.77 s a step, 0.68 s the roll) the character neither jumps (`CanJumpInternal`), guards
+  (`CanStartBlock`) nor attacks: a press of the attack is kept and plays the combo's first at the recovery (the move
+  forgets the combo; the server refuses an attack before the recovery less the allowance); past it the move breaks to
+  the locomotion on the move, as an attack's recovery (D103). The root motion carries the capsule with input too (D168,
+  "Movement" › Montage root motion), and the capsule keeps its facing through the move (`FaceRotation` skips meanwhile).
+  Measured on `CharacterTest` with a dedicated server, two clients and 100 ms of lag on every machine (`vox.PIE.Net 2`,
+  `vox.AttackTrace`): the server starts each move 0.12-0.14 s after the owner and the other client 0.25 s after it; steps
+  standing, rolls from a walk to all four sides, a dodge out of a swing and an attack pressed in a step all end at the
+  same place on the three machines (within 1.2 uu) with no correction, so the predicted root motion source D170 held in
+  reserve was not needed. In first person the server's capsule faced where the body walked, not the view, and a step to
+  the side was corrected by up to 378 uu until the request carried the facing (G256: the strafe and the attack's lunge
+  still are). Tests `VoxelCharacter.Combat.Dodge.*`, `VoxelCharacter.Movement.MontageCarriesCapsule`.
 - **The sword's attack flow** (the sword attack flow plan, D102-D107, G178-G180, 2026-11-12;
   `SWORD_ATTACK_FLOW_PLAN.md`, frozen). The SwordShield set's combo is the pack demo's, `SSH_Attack_01`, `_02`, `_04`
   (each begins in the last one's follow-through pose), then `_01` again. Every attack montage carries two markers the
@@ -150,7 +181,7 @@ attacker builds FCGFDamageContext
   before the strike does nothing, one from the strike to the recovery is kept and plays the next attack at the
   recovery, one from the recovery to `ComboWindow` (0.2 s) past the end plays it at once, later starts a new combo
   (`UVCActionMontageComponent::ClassifyAttackPress`). The owner picks the combo index and sends it
-  (`Server_RequestMeleeSwing`); the ability takes it when the server's own rule allows it (`AcceptAttack`: the attack
+  (`Server_RequestMove` with the kind `Attack`, the sword moves plan's D165); the ability takes it when the server's own rule allows it (`AcceptAttack`: the attack
   before at its recovery less 0.2 s, the index the first or the next), else picks its own, and a machine that is
   owner and server picks once (G179: the combo had skipped every second attack there). The clips play at the
   weapon's `AttackSpeed` as a rate (0.5 to 2: the Longsword's 1.1; D107), so the combo's cadence is the recovery time
@@ -177,7 +208,8 @@ attacker builds FCGFDamageContext
   goes on with `_02` or `_04`, and `_04` and `_10` end the combo (either button starts it again). Their markers are
   measured as the others': `_08` hit 0.47 s, recovery 0.77, lunge 232 uu; `_09` 0.41, 0.65, 123 uu; `_10` 0.41, 0.88,
   101 uu. A secondary press goes by the primary's press classes, and a kept press remembers its button. The request is
-  still the combo index (`Server_RequestMeleeSwing`): `AcceptAttack` reads the button from it (an index the secondary
+  the attack's move request (`Server_RequestMove`, `EVCMoveKind::Attack`, D165) with the combo index: `AcceptAttack`
+  reads the button from it (an index the secondary
   plays, `IsSecondaryAttack`) and takes a button's first, or that button's next within the window, else picks its own
   for that button. RMB stays the guard at any time. Measured on `CharacterTest` with a dedicated server, two clients and
   100 ms of lag (`vox.PIE.Net 2 lag=100`, `vox.AttackTrace 5 0 0.5 s1.1 2.2`): `_01`, the secondary and the primary
@@ -190,10 +222,12 @@ attacker builds FCGFDamageContext
   first attack from that pose; held to it, the charged strike `_15` (combo index 6: hit 0.80 s, recovery 1.27, lunge
   137 uu) fires by itself at twice the weapon's damage (its step's `DamageMultiplier`, which the melee ability applies),
   and a press in its recovery goes on with `_02`. The owner tells the server when the charge begins
-  (`AVCCharacterBase::Server_SetCharge`, `EVCChargeChange::Begin`: the server checks the same rule, starts its own clock
-  and shows everyone else the windup) and sends the charged strike as its combo index; `AcceptAttack` takes it once the
+  (a move request of kind `EVCMoveKind::Charge`, its index `EVCChargeChange::Begin`: the server checks the same rule,
+  starts its own clock and shows everyone else the windup) and sends the charged strike as an attack request with its
+  combo index; `AcceptAttack` takes it once the
   server's clock has run the charge time less 0.2 s, else plays `_01`. The guard raised over a charge stops it (`Stop`),
-  a sprint or a jump begun during it lowers it (`Lower`, the `End` section), the secondary attack replaces it and a
+  a sprint or a jump begun during it lowers it (`Lower`, the `End` section), the secondary attack and a dodge or a roll
+  replace it (the move's request ends the server's clock), a press during a dodge never starts one, and a
   flinch interrupts it on every machine. Within a combo a press keeps phase A's timing. `vc.Anim.AttackCharge 0` gives
   back the first attack at the press (the A/B). Measured as the branch was: a tap plays `_01` at the release, a release
   1.2 s into the charge plays `_01`, a hold plays `_15` 1.51 s after the press on the owner and the server takes it (its
@@ -470,7 +504,12 @@ re-mesh).
   input (`ApplyMontageRootMotionMode`: from montages without input, ignored with it), so the owner's prediction and the
   server's replay decide alike; a simulated proxy, which runs no moves, takes it from its speed over 50 uu/s and
   follows the server's replicated movement otherwise. Standing, the lunge moves the capsule; moving, the locomotion
-  keeps it. A dedicated server plays the montages that have root motion for this ("Animation" › Action montages).
+  keeps it. A montage flagged to carry the capsule (`UVCAnimMetaData_CarriesCapsule`, the sword moves plan's D168: the
+  dodge and the roll, authored to travel) takes its root motion with input too: `ApplyMontageRootMotionMode` asks
+  `IsPlayingCapsuleMontage` (an active montage with root motion and the flag, `UVCActionAnimSet::CarriesCapsule`) on
+  every machine from its own montages, so the owner's prediction and the server's replay still decide alike; the layers
+  script adds the flag. Test `VoxelCharacter.Movement.MontageCarriesCapsule`.
+  A dedicated server plays the montages that have root motion for this ("Animation" › Action montages).
   The anim instance does not read that motion as locomotion (G181, 2026-11-12): while a montage's root motion moves the
   capsule (the engine's `IsPlayingNetworkedRootMotionMontage`; on a simulated proxy the server's replicated
   `RepRootMotion`) `FVCAnimInput::bMontageRootMotion` reads the velocity as zero, so the locomotion stays Idle and the
@@ -1098,6 +1137,13 @@ Edit mode (`bEditModeEnabled`, off by default) is local input state: B, `SetEdit
 (looked up by name, no dependency): 1 lets the demo's `AVoxelDemoActor` brush follow the same key, 2 in a cubic world
 keeps only its keys. The server validates every request whatever the flag says.
 
+### The dodge
+
+`IA_Dodge` (Left Alt; the gamepad's `Gamepad_FaceButton_Right`), the sword moves plan's D170 (the pack's demo has it on
+Left Ctrl, our crouch), calls `TryStartDodge` on its press: a roll toward the movement input, a step back without it, a
+step to the input's side while the facing is locked to the view ("GAS" › The dodge and the roll). `TryStartDodge` is
+BlueprintCallable for scripts, as `PressPrimaryAction`.
+
 ## Voxel editing
 
 Every edit action takes its voxels from `AVCCharacterBase::FindEditTarget` (the crosshair trace, then
@@ -1454,7 +1500,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 ## Console variables
 
 `vc.*` groups: `vc.AI.*` (NPC AI), `vc.Buoyancy.Bodies` (dead bodies float), `vc.Anim.*` (the IK, pace and motion-matching switches, the trajectory tuning, the debug draw), `vc.Dig.*` (the cubic break times' scale, the highlight), `vc.Minimap.*` (the
-minimap's refill stats), `vc.Move.*` (the player's movement table: the preset, one value, the print), `vc.Net.TraceMoves` (every networked move's inputs on the client and the server, beside the corrections), `vc.Net.ClearUnresolvableBase` (G221: 0 replicates the terrain's collision as the base, the engine's), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
+minimap's refill stats), `vc.Move.*` (the player's movement table: the preset, one value, the print), `vc.Net.TraceMoves` (every networked move's inputs on the client and the server, beside the corrections), `vc.Net.MoveFlush` (the owner's pending moves sent before a dodge's request, D170), `vc.Net.ClearUnresolvableBase` (G221: 0 replicates the terrain's collision as the base, the engine's), `vc.UI.*` (NPC health bars). The Exec functions `GiveItem`, `SpawnWorldItem`
 and `ToggleVoxelDebug` are on the controller and the character. Every name, default and meaning:
 `Documentation/EDITOR_CONSOLE_GUIDE.md` §4 at the project root. The `vox.*` QA commands that drive this plugin's pawn
 (`vox.TP`, `vox.AutoRun`, `vox.Fly`, `vox.Mine`, `vox.Chop`, `vox.EditMode`, `vox.Shoot`, ...) live in the game module.
@@ -1478,3 +1524,5 @@ machine's `Locomotion.ClipChoice`, `StanceWeight`, `SetChange` (L1), `States`, `
 (the plan's C0; `Scripts/setup_character_test.py` builds it: a flat floor with a measured lane, block steps and a ramp,
 a shooting range and a kit that hands out every held item): the game module's `vox.Lane` runs the lane hands-free with
 the foot slide per leg, `vox.Stop` measures a stop, `vox.FootSlide` the planted feet's drift; the QA rows are area F13.
+The dodge and the roll (the sword moves plan's F): `Combat.Dodge.ChooseMove`, `.Cost`, `.Immunity`, `.CancelsSwing`,
+`.AttackAfter` and `Movement.MontageCarriesCapsule`.

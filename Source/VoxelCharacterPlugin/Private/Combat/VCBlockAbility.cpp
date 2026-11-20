@@ -73,6 +73,12 @@ bool UVCBlockAbility::CanStartBlock(const AActor* Avatar)
 	{
 		return false;
 	}
+	// No guard before a dodge's or a roll's recovery (the sword moves plan, D170).
+	const UVCActionMontageComponent* Montages = Avatar ? Avatar->FindComponentByClass<UVCActionMontageComponent>() : nullptr;
+	if (Montages && Montages->IsMoveBeforeRecovery(UVCActionMontageComponent::GetRequestTolerance(Avatar)))
+	{
+		return false;
+	}
 	const UAbilitySystemComponent* ASC = UAbilitySystemGlobals::GetAbilitySystemComponentFromActor(Avatar, false);
 	return ASC && !ASC->HasMatchingGameplayTag(CGFGameplayTags::State_GuardBroken) && !ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Dead)
 		&& !ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Downed);

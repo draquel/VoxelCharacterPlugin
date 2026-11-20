@@ -1,6 +1,6 @@
 # VoxelCharacterPlugin — Claude Code Instructions
 
-> State as of 2026-11-19 (the sword moves plan's B and C: the secondary branch and the charge). Terms: `Documentation/GLOSSARY.md`.
+> State as of 2026-11-20 (the sword moves plan's B, C and F: the secondary branch, the charge, the dodge and the roll). Terms: `Documentation/GLOSSARY.md`.
 
 The player and NPC layer: character, controller, player state, game mode, movement, camera, input, combat on GAS, NPC
 AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; a runtime module, `VoxelCharacterPlugin`, a second
@@ -29,7 +29,7 @@ editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the 
    combo after the pack's demo, broken off by movement after the follow-through, D102-D107, phase A done 2026-11-12,
    now in `CHARACTER_SYSTEM.md` "GAS" › The sword's attack flow and "Movement" › Montage root motion; phases B-F, the
    demo's other attacks, are planned in `SWORD_MOVES_PLAN.md`, D165-D171 agreed 2026-11-19, B and C built 2026-11-19,
-   D-F to come), all frozen but that plan;
+   F 2026-11-20, D and E to come), all frozen but that plan;
    `Documentation/Archive/ImplementationPlan.md`.
 
 Across plugins: `Plugins/CommonGameFramework/Documentation/ARCHITECTURE.md`; VoxelWorlds'

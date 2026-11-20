@@ -16,6 +16,11 @@ FString UVCAnimNotify_ActionRecovery::GetNotifyName_Implementation() const
 	return TEXT("ActionRecovery");
 }
 
+FString UVCAnimNotify_ActionTravelled::GetNotifyName_Implementation() const
+{
+	return TEXT("ActionTravelled");
+}
+
 FString UVCAnimNotify_ItemHandOff::GetNotifyName_Implementation() const
 {
 	return TEXT("ItemHandOff");
@@ -56,6 +61,8 @@ UAnimMontage* UVCActionAnimSet::GetMontage(EVCAnimAction Action, int32 Variant) 
 	case EVCAnimAction::Charge:   return Charge;
 	case EVCAnimAction::Reload:
 		return Variant == static_cast<int32>(EVCReloadFrom::Bag) && ReloadFromBag ? ReloadFromBag.Get() : ReloadFromQuiver.Get();
+	case EVCAnimAction::Dodge:    return Dodge.Get(static_cast<EVCHitDirection>(FMath::Clamp(Variant, 0, 3)));
+	case EVCAnimAction::Roll:     return Roll;
 	case EVCAnimAction::Unsheathe:
 	case EVCAnimAction::Sheathe:  return GetSheathMontage(Action, FGameplayTag());
 	}
@@ -199,6 +206,32 @@ float UVCActionAnimSet::GetRecoveryTime(const UAnimMontage* Montage)
 		}
 	}
 	return Earliest < TNumericLimits<float>::Max() ? FMath::Max(0.f, Earliest) : Montage->GetPlayLength();
+}
+
+float UVCActionAnimSet::GetTravelledTime(const UAnimMontage* Montage, float DefaultFraction)
+{
+	if (!Montage)
+	{
+		return 0.f;
+	}
+	float Earliest = TNumericLimits<float>::Max();
+	for (const FAnimNotifyEvent& Event : Montage->Notifies)
+	{
+		if (Cast<UVCAnimNotify_ActionTravelled>(Event.Notify))
+		{
+			Earliest = FMath::Min(Earliest, Event.GetTriggerTime());
+		}
+	}
+	if (Earliest < TNumericLimits<float>::Max())
+	{
+		return FMath::Max(0.f, Earliest);
+	}
+	return Montage->GetPlayLength() * FMath::Clamp(DefaultFraction, 0.f, 1.f);
+}
+
+bool UVCActionAnimSet::CarriesCapsule(const UAnimMontage* Montage)
+{
+	return Montage && Montage->HasRootMotion() && Montage->FindMetaDataByClass<UVCAnimMetaData_CarriesCapsule>() != nullptr;
 }
 
 EVCHitDirection UVCActionAnimSet::DirectionOfHit(const FVector& VictimForward, const FVector& Up, const FVector& ToSource)

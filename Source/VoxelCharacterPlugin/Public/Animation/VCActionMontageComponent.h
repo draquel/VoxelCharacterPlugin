@@ -7,6 +7,7 @@
 #include "GameplayTagContainer.h"
 #include "Animation/VCActionAnimSet.h"
 #include "Types/CGFCombatTypes.h"
+#include "Engine/NetSerialization.h"
 #include "VCActionMontageComponent.generated.h"
 
 class UAnimInstance;
@@ -37,6 +38,57 @@ enum class EVCChargeRelease : uint8
 };
 
 /**
+ * What a move request asks the server to play (the sword moves plan, D165): every move is an action montage the owner
+ * plays at its input and the server plays from the request, as the sword's attack. Phase F adds the dodge and the roll;
+ * the later phases add their moves here.
+ */
+UENUM()
+enum class EVCMoveKind : uint8
+{
+	/** An attack of the combo: the index is the owner's combo index (the sword attack flow plan, D104). */
+	Attack,
+	/** A dodge step (D170): the index is the side, an EVCHitDirection relative to the facing. */
+	Dodge,
+	/** A roll toward a direction (D170): the capsule turns to Direction first; the index is unused. */
+	Roll,
+	/**
+	 * A change of the owner's charge (D167): the index is an EVCChargeChange (it begins, it is lowered, it is stopped).
+	 * The charged strike itself is an Attack, its combo index the set's ChargedAttack.
+	 */
+	Charge,
+};
+
+/**
+ * One move the owner asks for (D165): its kind, an index whose meaning the kind gives, and for a move whose root motion
+ * runs along the facing (the dodge and the roll) the facing it starts with, which the server turns its capsule to. The
+ * server checks it with the predicate the owner checked (D-CR16) and plays its own.
+ */
+USTRUCT()
+struct VOXELCHARACTERPLUGIN_API FVCMoveRequest
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	EVCMoveKind Kind = EVCMoveKind::Attack;
+
+	/** The combo index for an attack (-1 for none: the server picks), the side for a dodge, the change for a charge. */
+	UPROPERTY()
+	int8 Index = -1;
+
+	/**
+	 * The facing the move starts with, in world space (horizontal in the owner's gravity frame): a roll's is the input's
+	 * direction (the capsule turns to it), a dodge's the owner's facing (the server's capsule need not face the same way:
+	 * in first person the owner's follows the view, the server's where the body moves). Zero: the server keeps its own.
+	 */
+	UPROPERTY()
+	FVector_NetQuantizeNormal Direction = FVector::ZeroVector;
+
+	FVCMoveRequest() = default;
+	FVCMoveRequest(EVCMoveKind InKind, int32 InIndex, const FVector& InDirection = FVector::ZeroVector)
+		: Kind(InKind), Index(static_cast<int8>(FMath::Clamp(InIndex, -1, 127))), Direction(InDirection) {}
+};
+
+/**
  * Plays a character's action montages (character animation P3): attacks, digging, chopping, placing, using, hit reacts,
  * deaths and getting up, from the UVCActionAnimSet of what the character holds (IVCAnimatedCharacter::GetAnimActionSet).
  *
@@ -54,6 +106,10 @@ enum class EVCChargeRelease : uint8
  * picks the index and the server accepts it when the same rule allows it. While an attack's recovery plays, the
  * component ticks and breaks it off with a blend-out when the character wants to move.
  *
+ * The dodge and the roll (the sword moves plan, D170) are kept the same way: the owner at its input and the server at
+ * the move ability's activation record the move (RecordMove); until its recovery the character neither jumps, guards nor
+ * attacks (a press of the attack is kept and plays at the recovery), and the move clears the combo.
+ *
  * On AVCCharacterBase and AVCNPCCharacterBase. It replicates only for its multicast.
  */
 UCLASS(ClassGroup = (VoxelCharacter), meta = (BlueprintSpawnableComponent))
@@ -70,6 +126,14 @@ public:
 
 	/** The server's allowance for a request's trip when it checks an owner's attack against its own clock (seconds). */
 	static constexpr float AttackRequestTolerance = 0.2f;
+
+	/**
+	 * The allowance the server gives a check of a remote owner's request against its own clock (D104, D170): its
+	 * AttackRequestTolerance for a player-controlled character this machine does not control, 0 otherwise.
+	 * @param Character The character asking
+	 * @return Seconds
+	 */
+	static float GetRequestTolerance(const AActor* Character);
 
 	/** Above this speed a simulated proxy counts as moving (uu/s): it has no input to read (D103). */
 	static constexpr float MovingSpeed = 50.f;
@@ -124,6 +188,40 @@ public:
 	 */
 	static float GetAttackPlayRate(float AttackSpeed);
 
+	/**
+	 * Whether a move is before its recovery (D170), the rule the owner and the server share.
+	 * @param SinceStart   Seconds since the move started, negative for no move
+	 * @param RecoveryTime Its recovery time, seconds
+	 * @param Tolerance    Seconds taken off the recovery (the server's allowance for an owner's request)
+	 * @return True from its start until its recovery less the tolerance
+	 */
+	static bool IsBeforeRecovery(double SinceStart, float RecoveryTime, float Tolerance = 0.f);
+
+	/**
+	 * Keeps a dodge or a roll as this machine's current move, starting now (D170): its recovery time from the current
+	 * set's montage. The attack it interrupts is forgotten (the combo starts over) and a kept attack press is dropped.
+	 * @param Kind  Dodge or Roll
+	 * @param Index The dodge's side (EVCHitDirection)
+	 */
+	void RecordMove(EVCMoveKind Kind, int32 Index);
+
+	/**
+	 * Whether this machine's current dodge or roll is before its recovery (D170): no jump, guard or attack meanwhile.
+	 * @param Tolerance Seconds taken off the recovery: the server's allowance for an owner's request (AttackRequestTolerance)
+	 * @return True while it is
+	 */
+	bool IsMoveBeforeRecovery(float Tolerance = 0.f) const;
+
+	/** Server: the move the owner asked for (AVCCharacterBase::Server_RequestMove), for the move ability that follows. */
+	void SetRequestedMove(const FVCMoveRequest& Request) { RequestedMove = Request; bHasRequestedMove = true; }
+
+	/**
+	 * Server: the owner's requested move, cleared.
+	 * @param OutRequest The request
+	 * @return False when there was none (an NPC's own activation)
+	 */
+	bool TakeRequestedMove(FVCMoveRequest& OutRequest) { OutRequest = RequestedMove; const bool bHad = bHasRequestedMove; bHasRequestedMove = false; return bHad; }
+
 	/** What a press of the attack does now on this machine, from the attack it plays (ClassifyAttackPress). */
 	EVCAttackPress ClassifyAttackPress() const;
 
@@ -146,7 +244,8 @@ public:
 	static EVCChargeRelease ClassifyChargeRelease(double HeldSeconds, float ChargeTime);
 
 	/**
-	 * Whether this character may start a charge now (CanChargeFrom with its set, its press, its gait and its movement mode).
+	 * Whether this character may start a charge now (CanChargeFrom with its set, its press, its gait and its movement mode;
+	 * never during a dodge or a roll before its recovery, D170).
 	 * @return True to charge
 	 */
 	bool CanStartCharge() const;
@@ -204,7 +303,7 @@ public:
 	bool AcceptAttack(int32 RequestedIndex, float AttackSpeed, int32& OutIndex, float& OutPlayRate);
 
 	/**
-	 * Server: the combo index the owner asked for with its swing (AVCCharacterBase::Server_RequestMeleeSwing), for the
+	 * Server: the combo index the owner asked for with its swing (AVCCharacterBase::Server_RequestMove), for the
 	 * melee ability's activation that follows; -1 clears it.
 	 */
 	void SetRequestedAttack(int32 Index) { RequestedAttackIndex = Index; }
@@ -218,7 +317,10 @@ public:
 	 */
 	void BufferAttack(bool bSecondary = false);
 
-	/** The owner: whether a kept press is due (the current attack reached its recovery); it is consumed. */
+	/**
+	 * The owner: whether a kept press is due (the current attack reached its recovery, or the current dodge or roll its
+	 * recovery: D170); it is consumed.
+	 */
 	bool TakeDueBufferedAttack();
 
 	/** Whether a press is kept for the recovery. */
@@ -379,6 +481,9 @@ private:
 	/** The attack montage of the current set playing on the body and its position, or null. */
 	UAnimMontage* GetPlayingAttackMontage(float& OutPosition) const;
 
+	/** The dodge or roll montage of the current set playing on the body (not on its way out) and its position, or null. */
+	UAnimMontage* GetPlayingMoveMontage(float& OutPosition) const;
+
 	/** The current attack (D104): its combo index, its start (world seconds) and its times at its play rate. */
 	int32 ComboIndex = -1;
 	double AttackStartTime = -1.0;
@@ -397,6 +502,14 @@ private:
 
 	/** The combo index the owner asked for, until the melee ability takes it (server). */
 	int32 RequestedAttackIndex = -1;
+
+	/** The current dodge or roll (D170): its start (world seconds, negative for none) and its recovery, seconds. */
+	double MoveStartTime = -1.0;
+	float MoveRecoveryTime = 0.f;
+
+	/** The move the owner asked for, until the move ability takes it (server). */
+	FVCMoveRequest RequestedMove;
+	bool bHasRequestedMove = false;
 
 	int32 ActionsPlayed = 0;
 	EVCAnimAction LastAction = EVCAnimAction::Attack;

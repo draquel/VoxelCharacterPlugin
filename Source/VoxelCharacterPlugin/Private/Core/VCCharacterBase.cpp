@@ -567,7 +567,8 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 	// A press kept during an attack's swing plays the next attack at its recovery (D104).
 	if (ActionMontages && IsLocallyControlled() && ActionMontages->TakeDueBufferedAttack())
 	{
-		StartMeleeSwing(ActionMontages->IsBufferedAttackSecondary());
+		// A kept press never starts a charge: its button may have come up long ago (D167).
+		StartMeleeSwing(ActionMontages->IsBufferedAttackSecondary(), /*bAllowCharge*/ false);
 	}
 	UpdateCharge();
 	UpdateDrawnGrip();
@@ -912,6 +913,10 @@ void AVCCharacterBase::GrantDefaultAbilities(UAbilitySystemComponent* ASC)
 	{
 		ASC->GiveAbility(FGameplayAbilitySpec(PS->BlockAbilityClass, 1, INDEX_NONE, this));
 	}
+	if (PS->DodgeAbilityClass)
+	{
+		ASC->GiveAbility(FGameplayAbilitySpec(PS->DodgeAbilityClass, 1, INDEX_NONE, this));
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -984,6 +989,12 @@ bool AVCCharacterBase::StartMeleeSwing(bool bSecondary, bool bAllowCharge)
 		// No secondary branch for what is held (D166): the press does nothing.
 		return false;
 	}
+	// A press during a dodge or a roll is kept and plays the button's first attack at the move's recovery (D170).
+	if (ActionMontages && ActionMontages->IsMoveBeforeRecovery())
+	{
+		ActionMontages->BufferAttack(bSecondary);
+		return true;
+	}
 	if (ActionMontages && ActionMontages->IsCharging())
 	{
 		if (!bSecondary)
@@ -1000,14 +1011,7 @@ bool AVCCharacterBase::StartMeleeSwing(bool bSecondary, bool bAllowCharge)
 	{
 		ActionMontages->BeginCharge();
 		ActionMontages->PlayActionLocal(EVCAnimAction::Charge, 0);
-		if (HasAuthority())
-		{
-			ApplyChargeChange(EVCChargeChange::Begin);
-		}
-		else
-		{
-			Server_SetCharge(EVCChargeChange::Begin);
-		}
+		SendChargeChange(EVCChargeChange::Begin);
 		return true;
 	}
 	if (ActionMontages && ActionMontages->GetMontage(EVCAnimAction::Attack, 0))
@@ -1040,7 +1044,7 @@ bool AVCCharacterBase::StartMeleeSwing(bool bSecondary, bool bAllowCharge)
 	{
 		return ActivateMeleeSwing(Variant);
 	}
-	Server_RequestMeleeSwing(static_cast<int8>(FMath::Clamp(Variant, -1, 127)));
+	Server_RequestMove(FVCMoveRequest(EVCMoveKind::Attack, Variant));
 	return true;
 }
 
@@ -1081,7 +1085,7 @@ void AVCCharacterBase::StartChargedSwing()
 		ActivateMeleeSwing(Variant);
 		return;
 	}
-	Server_RequestMeleeSwing(static_cast<int8>(FMath::Clamp(Variant, -1, 127)));
+	Server_RequestMove(FVCMoveRequest(EVCMoveKind::Attack, Variant));
 }
 
 void AVCCharacterBase::CancelCharge(bool bLower)
@@ -1099,15 +1103,7 @@ void AVCCharacterBase::CancelCharge(bool bLower)
 	{
 		ActionMontages->StopActionLocal(EVCAnimAction::Charge);
 	}
-	const EVCChargeChange Change = bLower ? EVCChargeChange::Lower : EVCChargeChange::Stop;
-	if (HasAuthority())
-	{
-		ApplyChargeChange(Change);
-	}
-	else
-	{
-		Server_SetCharge(Change);
-	}
+	SendChargeChange(bLower ? EVCChargeChange::Lower : EVCChargeChange::Stop);
 }
 
 void AVCCharacterBase::UpdateCharge()
@@ -1135,9 +1131,14 @@ void AVCCharacterBase::UpdateCharge()
 	}
 }
 
-void AVCCharacterBase::Server_SetCharge_Implementation(EVCChargeChange Change)
+void AVCCharacterBase::SendChargeChange(EVCChargeChange Change)
 {
-	ApplyChargeChange(Change);
+	if (HasAuthority())
+	{
+		ApplyChargeChange(Change);
+		return;
+	}
+	Server_RequestMove(FVCMoveRequest(EVCMoveKind::Charge, static_cast<int32>(Change)));
 }
 
 void AVCCharacterBase::ApplyChargeChange(EVCChargeChange Change)
@@ -1172,12 +1173,6 @@ void AVCCharacterBase::ApplyChargeChange(EVCChargeChange Change)
 		ActionMontages->StopActionForEveryone(EVCAnimAction::Charge, bOwnerPlayedIt);
 		break;
 	}
-}
-
-void AVCCharacterBase::Server_RequestMeleeSwing_Implementation(int8 ComboIndex)
-{
-	// The ability checks the rest (the combo's timing, the attacker's state); an index out of the combo is the server's to pick.
-	ActivateMeleeSwing(ComboIndex);
 }
 
 bool AVCCharacterBase::TryStartRangedAttack()
@@ -2790,6 +2785,10 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	{
 		EIC->BindAction(Config->IA_Crouch, ETriggerEvent::Started, this, &AVCCharacterBase::Input_StartCrouch);
 		EIC->BindAction(Config->IA_Crouch, ETriggerEvent::Completed, this, &AVCCharacterBase::Input_StopCrouch);
+	}
+	if (Config->IA_Dodge)
+	{
+		EIC->BindAction(Config->IA_Dodge, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Dodge);
 	}
 
 	if (Config->IA_Interact)
