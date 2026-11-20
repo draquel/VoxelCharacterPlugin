@@ -122,8 +122,10 @@ shield) or always attacks (without one); it keeps two buttons, but a player cann
 
 **D167, the charge (C).** Recommended: **the first attack of a combo starts at the release, as the demo's.** A press
 from rest (not sprinting, not in the air) plays `Attack_Charge_Begin` at once (the windup reads as the response); a
-release in the windup or in the loop's first 0.5 s plays `_01` from that pose; still held 1.0 s into the loop, the
-charged attack `_15` fires by itself at twice the weapon's damage. A press within a combo keeps phase A's timing (the
+release any time before the charged strike plays `_01` from that pose (corrected 2026-11-19 when C was built: this
+read "in the windup or in the loop's first 0.5 s", the demo's rule, which leaves the rest of the loop without a
+transition; section 5's agreed test has a release at 1.2 s play `_01`; `Attack_Charge_End` is only the cancel); still
+held 1.0 s into the loop, the charged attack `_15` fires by itself at twice the weapon's damage. A press within a combo keeps phase A's timing (the
 charge is from rest only). The cost: a tapped first attack starts when the button comes up, a tap's length later
 (about 0.1 s), from the windup pose. The owner tells the server when the charge begins (others see the windup and the
 server starts its clock) and sends the charged strike; the server takes it when its own clock has run the charge
@@ -265,8 +267,9 @@ phase A's `_01`, 18 over `_08`; on `dev`, not caused here).
 ability) and `_02` after it; the owner's `Server_SetCharge` (`EVCChargeChange`: begin, lower, stop) and the charged
 strike as its combo index, which `AcceptAttack` takes once the server's own clock has run the charge time less 0.2 s.
 `vc.Anim.AttackCharge` (1; 0 the first attack at the press) is the A/B. Built otherwise than drafted: **a release any
-time before the charged strike plays `_01`** (section 5's test, a release at 1.2 s plays `_01`; D167's text and the demo
-have `_01` only within the loop's first 0.5 s and no transition after it): the lowering (`End`) is the cancel, played
+time before the charged strike plays `_01`** (section 5's test, a release at 1.2 s plays `_01`; D167's text had the
+demo's `_01` only within the loop's first 0.5 s and no transition after it; agreed with the coordinating session on
+2026-11-19 and D167 corrected to match): the lowering (`End`) is the cancel, played
 when a sprint or a jump begins during the charge; the guard over a charge stops it, the secondary attack replaces it, a
 flinch interrupts it. The charge time is the windup's section and the hold, 1.5 s from the press (section 2's "about
 1.45 s" is the demo's blend). The dedicated server plays the charge (its clips carry root motion, travelling none) and
