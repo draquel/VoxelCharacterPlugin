@@ -148,6 +148,26 @@ bool UVCActionMontageComponent::CanStartCharge() const
 		&& CanChargeFrom(bSetCharges, ClassifyAttackPress(), VCMovement && VCMovement->IsSprinting(), Movement && Movement->IsFalling());
 }
 
+bool UVCActionMontageComponent::CanRunAttackFrom(bool bSetHasRunAttack, bool bSprinting, float Speed, float MinSpeed)
+{
+	return bSetHasRunAttack && bSprinting && Speed > MinSpeed;
+}
+
+bool UVCActionMontageComponent::CanRunAttack(float SpeedTolerance) const
+{
+	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
+	const ACharacter* Character = Cast<ACharacter>(GetOwner());
+	const UVCMovementComponent* Movement = Character ? Cast<UVCMovementComponent>(Character->GetCharacterMovement()) : nullptr;
+	if (!Set || !Movement)
+	{
+		return false;
+	}
+	const FVector Up = FVCGravityFrame::GetUp(Movement);
+	const FVector Velocity = Movement->Velocity;
+	const float Speed = (Velocity - Up * FVector::DotProduct(Velocity, Up)).Size();
+	return CanRunAttackFrom(Set->HasRunAttack(), Movement->IsSprinting(), Speed, Set->RunAttackSpeed - FMath::Max(SpeedTolerance, 0.f));
+}
+
 void UVCActionMontageComponent::BeginCharge()
 {
 	const UWorld* World = GetWorld();
@@ -216,7 +236,7 @@ void UVCActionMontageComponent::RecordAttack(int32 Index, float PlayRate)
 	MoveStartTime = -1.0;
 }
 
-int32 UVCActionMontageComponent::ChooseAttack(float AttackSpeed, float& OutPlayRate, bool bSecondary)
+int32 UVCActionMontageComponent::ChooseAttack(float AttackSpeed, float& OutPlayRate, bool bSecondary, bool bAllowRunAttack)
 {
 	OutPlayRate = GetAttackPlayRate(AttackSpeed);
 	const UVCActionAnimSet* Set = GetCurrentActionAnimSet();
@@ -228,6 +248,12 @@ int32 UVCActionMontageComponent::ChooseAttack(float AttackSpeed, float& OutPlayR
 	// The button's next of the combo when a press now continues it (one kept for the recovery does by then), else the
 	// button's first (D166).
 	const EVCAttackPress Press = ClassifyAttackPress();
+	// A fresh primary press while sprinting fast plays the run attack instead of the combo (D168).
+	if (!bSecondary && bAllowRunAttack && CanRunAttack())
+	{
+		RecordAttack(Set->RunAttack, OutPlayRate);
+		return Set->RunAttack;
+	}
 	const bool bContinues = ComboIndex >= 0 && AttackComboCount == Count
 		&& (Press == EVCAttackPress::Continue || Press == EVCAttackPress::Buffer);
 	const int32 Index = bContinues ? Set->GetNextAttack(ComboIndex, bSecondary) : Set->GetFirstAttack(bSecondary);
@@ -279,6 +305,15 @@ bool UVCActionMontageComponent::AcceptAttack(int32 RequestedIndex, float AttackS
 	if (Set->HasCharge() && RequestedIndex == Set->ChargedAttack)
 	{
 		OutIndex = ChargeSeconds >= 0.0 && ChargeSeconds >= Set->GetChargeTime() - AttackRequestTolerance ? Set->ChargedAttack : 0;
+		RecordAttack(OutIndex, OutPlayRate);
+		return true;
+	}
+	// The run attack (D168): taken while this machine's character sprints fast enough, the request's allowance taken off
+	// the speed; else the server's pick for the primary below.
+	if (Set->HasRunAttack() && RequestedIndex == Set->RunAttack
+		&& CanRunAttack(GetRequestTolerance(GetOwner()) > 0.f ? RunAttackSpeedTolerance : 0.f))
+	{
+		OutIndex = Set->RunAttack;
 		RecordAttack(OutIndex, OutPlayRate);
 		return true;
 	}

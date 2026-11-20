@@ -1398,11 +1398,13 @@ protected:
 	 * index, which sweeps on the server at the hit time. TryStartMeleeAttack's swing at a target and the primary action's
 	 * swing at the air with a melee weapon in hand (G174), and the secondary attack's (D166). A primary press from rest
 	 * with a set that charges starts the charge instead (the sword moves plan, D167): the first attack comes at the release.
-	 * @param bSecondary   The secondary attack's press: the combo's secondary branch
-	 * @param bAllowCharge Whether a primary press may start a charge (false for the release's first attack)
+	 * A primary press while sprinting fast plays the set's run attack (D168).
+	 * @param bSecondary  The secondary attack's press: the combo's secondary branch
+	 * @param bFreshPress A press made now, which may start a charge or the run attack (false for a kept press played at
+	 *                    the recovery and for a charge's release)
 	 * @return True if the press was taken (a swing requested, a charge begun, or kept); false for the secondary without a branch
 	 */
-	bool StartMeleeSwing(bool bSecondary = false, bool bAllowCharge = true);
+	bool StartMeleeSwing(bool bSecondary = false, bool bFreshPress = true);
 
 	/** The owner: the charged strike, held long enough (D167): its montage at once, the request to the server. */
 	void StartChargedSwing();

@@ -197,8 +197,8 @@ attacker builds FCGFDamageContext
   `AnimBP_EssentialSwordShield_UE5` is a live retarget of the UE4 ABP (a Retarget Pose From Mesh node), so its third attack is
   `UE4_SSH_Attack_04_Seq`, the same motion as the UE5 clip. The sword's Chop plays `SSH_Attack_01`, a forward cut from
   the idle (D108; `_04`, the finisher, spins), and every set's Chop hits at its clip's measured strike (G182: 0.48 s
-  for the sword's). The demo's other attacks are `SWORD_MOVES_PLAN.md`'s phases: the secondary branch and the charge
-  below (B and C), the run, air and plunge attacks and the dodge to come.
+  for the sword's). The demo's other attacks are `SWORD_MOVES_PLAN.md`'s phases: the secondary branch, the charge and
+  the run attack below (B, C and D), the dodge ("The dodge and the roll"), the air and plunge attacks to come.
 - **The secondary branch** (the sword moves plan's B, D166, 2026-11-19). The combo is a table: each attack of a set's
   `AttackCombo` has a step (`FVCAttackComboStep` in `AttackComboSteps`) naming the attack the primary and the secondary
   attack continue with, and `SecondaryAttackStart` is the one the secondary starts a combo with
@@ -233,6 +233,24 @@ attacker builds FCGFDamageContext
   1.2 s into the charge plays `_01`, a hold plays `_15` 1.51 s after the press on the owner and the server takes it (its
   clock started 0.12 s after the owner's), then a press plays `_02`; each on the three machines, ending at the same
   place, with no correction.
+- **The run attack** (the plan's D, D168, 2026-11-20). A primary press made while sprinting faster than the set's
+  `RunAttackSpeed` (550 uu/s, halfway from the run's 400 to the sprint's 700; `UVCActionMontageComponent::CanRunAttackFrom`:
+  the sprint gait and the speed across local up) plays the set's `RunAttack` instead of the combo: the SwordShield set's
+  `_12` (combo index 7: hit 0.77 s, recovery 1.07). Only a fresh press does (`StartMeleeSwing`'s `bFreshPress`,
+  `ChooseAttack`'s `bAllowRunAttack`): a press kept from an attack's swing or a dodge, and a charge's release, play the
+  combo. Its montage carries the capsule on the move (`UVCAnimMetaData_CarriesCapsule`, added by the layers script), the
+  one attack that does: the clip is a run-in lunge authored at the sprint's speed, about 452 uu, then it stops the body
+  at the strike (by 0.9 s) and stands until its recovery, which breaks to the locomotion on the move as any attack's;
+  the sprint starts again from there (kept as the clip has it, the user's choice on 2026-11-20). A press in its
+  recovery, or after it within the combo's window, starts the combo again (`_01`; its step names `_01` and `_08`). The
+  request is the attack's (`EVCMoveKind::Attack`, index 7); `AcceptAttack` takes it while the server's own character
+  sprints faster than the set's speed less `RunAttackSpeedTolerance` (100 uu/s, an owner's request read up to a move
+  late), else picks the primary's. Measured with `vox.PIE.Net 2 lag=100` and `vox.AttackTrace` (`r0.3-4` holds the
+  sprint): a press at 670 uu/s plays `_12` on the owner and the server 0.13 s later, the body carried 453 uu (the
+  clip's 452); a press 0.96 s into it plays `_01` at its recovery; a walking press, one 0.1 s into a sprint (448 uu/s)
+  and one after `_12`'s recovery under the speed play `_01`; a dodge 0.4 s into `_12` rolls out of it; each on every
+  machine, at the same place, with no correction. On `PlanetTest` at 30 N 40 E on a slope it carried the body 404 uu
+  across local up, slowed by the slope as the sprint was (624 against 700).
 
 ### The bow (ranged combat plan, 2026-11-06 to 11-07)
 
@@ -505,7 +523,7 @@ re-mesh).
   server's replay decide alike; a simulated proxy, which runs no moves, takes it from its speed over 50 uu/s and
   follows the server's replicated movement otherwise. Standing, the lunge moves the capsule; moving, the locomotion
   keeps it. A montage flagged to carry the capsule (`UVCAnimMetaData_CarriesCapsule`, the sword moves plan's D168: the
-  dodge and the roll, authored to travel) takes its root motion with input too: `ApplyMontageRootMotionMode` asks
+  dodge, the roll and the sword's run attack, authored to travel) takes its root motion with input too: `ApplyMontageRootMotionMode` asks
   `IsPlayingCapsuleMontage` (an active montage with root motion and the flag, `UVCActionAnimSet::CarriesCapsule`) on
   every machine from its own montages, so the owner's prediction and the server's replay still decide alike; the layers
   script adds the flag. Test `VoxelCharacter.Movement.MontageCarriesCapsule`.
@@ -1125,7 +1143,8 @@ does nothing while the guard is up (D94).
    Weapon fragment and no Ranged Weapon fragment) swings at the air (`StartMeleeSwing`, G174): the same swing as step 2,
    and the server's sweep at the hit time lands on whatever is in reach then. Bare hands do nothing here. In steps 2 and
    4, with a set that charges, a press from rest begins the charge and the swing comes at the release or by itself
-   after the hold (D167); `ReleasePrimaryAction` releases it.
+   after the hold (D167); `ReleasePrimaryAction` releases it. Sprinting faster than the set's `RunAttackSpeed`, a press
+   plays the set's run attack instead (D168).
 5. Dig or place: with edit mode on, or a digging tool in the main hand for a dig (`HasDiggingTool`: `GetMiningSpeed() >
    1`). Unarmed digging and placing need edit mode.
 
@@ -1516,7 +1535,7 @@ and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `C
 `Combat.Block.GuardTakesFrontHits` (D94), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the attack flow's
 `Anim.RecoveryTime`, `Anim.AttackPressRule`, `Anim.AttackCombo` and `Combat.Melee.AcceptAttack` (D102-D107, G179); the sword moves'
 `Anim.Sword.ComboTable`, `Anim.Sword.SecondaryPress` and `Combat.Melee.AcceptSecondary` (D166), `Anim.Sword.ChargeRule` and
-`Combat.Melee.ChargedStrike` (D167); the sheaths'
+`Combat.Melee.ChargedStrike` (D167), `Anim.Sword.RunAttackRule` and `Combat.Melee.RunAttack` (D168); the sheaths'
 `EquipmentLoop.SheathSlots` (the three sheaths, a shield on the back drawn into the off hand with the sword, D95-D96), `SheathActionSet` (the set follows the drawn weapon, R and X, the snapshot's drawn state),
 `SheathSaveEntry`, `SheathHandOffTime` and `SheathCarriedStrip` (the equipment sheathing plan's S2-S4); the state
 machine's `Locomotion.ClipChoice`, `StanceWeight`, `SetChange` (L1), `States`, `Pace`, `Transitions`, `Instance` and

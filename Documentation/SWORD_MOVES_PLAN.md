@@ -1,7 +1,7 @@
 # Sword Moves Plan: the sword attack flow's phases B to F
 
 > **Agreed 2026-11-19** (the user: "Yes, as recommended": D165-D171 each as recommended, section 7). **B and C built
-> 2026-11-19, F 2026-11-20** (section 8); D and E to come. Lane 1 (B, C, D) and lane 2 (F) run in parallel, then E (D171).
+> 2026-11-19, F and D 2026-11-20** (section 8); E to come. Lane 1 (B, C, D) and lane 2 (F) run in parallel, then E (D171).
 > Phases B-F of `SWORD_ATTACK_FLOW_PLAN.md` (frozen; phase A built 2026-11-12), the pack demo's other moves:
 > B the secondary branch (`draquel/UE5_PluginDev#422`), C the charge (#423), D the run attack (#424), E the air and
 > plunge attacks (#425), F the dodge and the roll (#426). Owner: VoxelCharacterPlugin (the montage component, the melee
@@ -201,7 +201,7 @@ gravity frame (a lunge, a roll and a plunge on a slope away from the pole). Each
   three cases, and with lag the others see the windup and the same strike.
 - **D, the run attack** (#424). The sprint test in the press chain, `_12` with its markers and D168's flag. Tests: the
   gait threshold, the flag's root motion mode on the move. Done: sprinting, a press plays `_12` and the speed holds
-  through it (the trace), a press in its recovery starts `_01`, walking or running below the threshold plays the combo.
+  through its travel (the trace; corrected 2026-11-20: the clip stops the body at its strike, section 8), a press in its recovery starts `_01`, walking or running below the threshold plays the combo.
 - **E, the air and plunge attacks** (#425). The two montages with sections (Begin, a looping Loop, Landing), the jump to
   the Landing section on landing on every machine, the server's checks and its slam at its own landing (D169). Tests:
   the falling predicate and its allowance, one air attack per fall, the slam's radius. Done: from a jump each plays
@@ -302,7 +302,7 @@ its 210 parity lines identical, the Nanite layouts 0 differ. Before the rebase t
 86c3483 (1068 of 1068, the editor gate 36 of 36) with `build.ps1 -Shipping` linking (the test file added); B alone built
 with its tests passing before its commit.
 
-**Not done:** D (the run attack), now that F's capsule flag (D168) and move request are in `dev`; E after it.
+**Not done:** E (the air and plunge attacks), after D.
 
 **F, the dodge and the roll** (#426; built 2026-11-20 on `claude/sword-moves-f` in VoxelCharacterPlugin and the
 parent). **The measurement first (D170's network):** the moves were built in phase A's form with D165's request and
@@ -358,3 +358,33 @@ direction, `pie=`, `stam=`, `inv=`; there `s`, `h`, `g`, `j`). The SwordShield s
 and roll in memory only for this branch's checks: after both merge, rerun `Scripts/setup_character_layers.py` on top of
 `dev` and save the set.
 
+**D, the run attack** (#424; built 2026-11-20 on `claude/sword-moves-d` in VoxelCharacterPlugin and the parent, on
+`dev` with B, C and F). As D168: a fresh primary press while sprinting faster than the set's `RunAttackSpeed` (550 uu/s,
+across local up; `CanRunAttackFrom`) plays `_12`, the SwordShield set's `RunAttack` (combo index 7, its step `_01` /
+`_08` after it), its montage flagged to carry the capsule (F's `UVCAnimMetaData_CarriesCapsule`, set by the layers
+script, which measured the clip as section 3 has it: hit 0.767 s, recovery 1.067). A kept press (from an attack's swing
+or a dodge) and a charge's release never play it (`bFreshPress`); the server takes the owner's index 7 while its own
+character sprints faster than the speed less `RunAttackSpeedTolerance` (100 uu/s), else picks the primary's. Built
+otherwise than drafted: **the speed holds through the travel, not through the strike.** The clip is a run-in lunge
+(about 1000 uu/s at its start, then 580) that stops the body by 0.9 s, at the strike, and stands until its recovery
+(1.07 s), when the attack's break hands it to the locomotion and the sprint starts again from rest (about 1 s back to
+700). Asked before deciding; **the user chose to keep it as authored** (2026-11-20, "Stop as authored"), and section 5's
+done line now says "through its travel". The alternative was the flag only up to the clip's travelled marker, then the
+locomotion carrying the capsule under the strike. `vox.AttackTrace` gained a held sprint (`r0.5-2`). Tests
+`VoxelCharacter.Anim.Sword.RunAttackRule` (the gait and the speed, the allowance, the set's table; the layers script's
+set: `_12` carries the capsule, `_01` does not) and `VoxelCharacter.Combat.Melee.RunAttack` (a fighter sprinting on a
+floor: walking plays `_01`, a kept press sprinting `_01`, a fresh one `_12`; the server takes `_12` sprinting fast
+enough, `_01` under the speed and not sprinting; nothing before `_12`'s recovery, `_01` after it).
+
+**Checked in PIE** on `CharacterTest` with `vox.PIE.Net 2 lag=100` (`Saved/QA/sword_moves/trace_d_*.txt`): a press at
+670 uu/s plays `_12` on the owner and the server 0.13 s later, the body carried 453 uu (the clip's 452) on both; a press
+0.96 s into it is kept and plays `_01` at its recovery; a press walking (371 uu/s), one 0.1 s into a sprint (448 uu/s)
+and one after `_12`'s recovery under the speed (268 uu/s) play `_01`; a dodge 0.4 s into `_12` rolls out of it. Each
+ends at the same place on the three machines with no correction. A press while falling plays the combo (the air attack
+is E's). On `PlanetTest` at 30 N 40 E, on a slope: the sprint's press played `_12`, which carried the body 404 uu across
+local up, standing; the slope slowed it as it slowed the sprint (0.89 of the plane's both, 624 uu/s against 700).
+
+**Gate** (D, the branch's tip): `build.ps1` no warning (`build_warnings.py`), `build.ps1 -Shipping` linking with no
+warning; the headless suite 1076 of 1076 (dev's 1074 and D's two), no new warning kind against B and C's last run (only the
+new test world's name in the EndPlay line every `FPlayWorld` test logs); the editor gate 36 of 36 (the replication tests
+with a dedicated server among them), its 210 parity lines identical, the Nanite layouts 0 of 9 differ.
