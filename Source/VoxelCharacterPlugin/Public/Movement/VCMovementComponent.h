@@ -834,18 +834,40 @@ public:
 	 * Whether a montage's root motion (an attack's lunge) moves the capsule only while the character stands (the sword
 	 * attack flow plan, D106): on every move with input the anim instance ignores it, so the legs and the capsule stay
 	 * the locomotion's and a swing on the run does not stop the run (G180). The owner's prediction and the server's
-	 * replay decide from the same move's input; a simulated proxy from its speed.
+	 * replay decide from the same move's input; a simulated proxy from its speed. A montage flagged to carry the capsule
+	 * (UVCAnimMetaData_CarriesCapsule, the sword moves plan's D168: the dodge and the roll) takes it with input as well.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Movement")
 	bool bMontageRootMotionOnlyStanding = true;
 
 	/**
-	 * Pure: whether a move takes a montage's root motion (D106).
-	 * @param bOnlyStanding  bMontageRootMotionOnlyStanding
-	 * @param bWantsToMove   The move has input (a simulated proxy: it moves)
+	 * Pure: whether a move takes a montage's root motion (D106, D168).
+	 * @param bOnlyStanding    bMontageRootMotionOnlyStanding
+	 * @param bWantsToMove     The move has input (a simulated proxy: it moves)
+	 * @param bCarriesCapsule  The montage playing with root motion carries the capsule (UVCActionAnimSet::CarriesCapsule)
 	 * @return True to take it
 	 */
-	static bool ShouldTakeMontageRootMotion(bool bOnlyStanding, bool bWantsToMove) { return !bOnlyStanding || !bWantsToMove; }
+	static bool ShouldTakeMontageRootMotion(bool bOnlyStanding, bool bWantsToMove, bool bCarriesCapsule = false)
+	{
+		return bCarriesCapsule || !bOnlyStanding || !bWantsToMove;
+	}
+
+	/**
+	 * Whether a montage that carries the capsule (D168) plays on the body with root motion now: the dodge or the roll.
+	 * Read on every machine from its own montages, so the owner's moves and the server's replay of them agree.
+	 */
+	bool IsPlayingCapsuleMontage() const;
+
+	/**
+	 * Authority: spends stamina at once for a move (the sword moves plan, D170: 15 a dodge, 20 a roll); regeneration then
+	 * waits StaminaRegenDelay, as after the sprint.
+	 * @param Amount Stamina to spend
+	 * @return False when the owner has less than Amount (nothing spent); true without a stamina attribute (nothing to pay)
+	 */
+	bool SpendStamina(float Amount);
+
+	/** The owner's current stamina, or a negative value when it has no stamina attribute (every machine: it replicates). */
+	float GetStamina() const { return GetOwnerStamina(); }
 
 	/**
 	 * Set the engine's movement values from the gait table for this tick: the row's cap by the rotation mode and the

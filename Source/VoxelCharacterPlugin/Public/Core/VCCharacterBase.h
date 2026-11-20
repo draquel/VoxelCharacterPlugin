@@ -11,6 +11,7 @@
 #include "Interfaces/CGFInventoryInterface.h"
 #include "Interfaces/CGFLightBearerInterface.h"
 #include "Effects/VCRagdollBuoyancy.h"
+#include "Animation/VCActionMontageComponent.h"
 #include "Engine/NetSerialization.h"
 #include "VCCharacterBase.generated.h"
 
@@ -330,6 +331,17 @@ public:
 	/** Release the primary action, as IA_PrimaryAction's release does: a bow's draw looses, a timed break stops. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
 	void ReleasePrimaryAction();
+
+	/**
+	 * Dodge, as IA_Dodge's press does (the sword moves plan, D170): with movement input a roll toward it (the capsule turned
+	 * to the input first), with none a step back, with the facing locked to the view a step toward the input's side. The
+	 * owner plays it at once and asks the server (Server_RequestMove), which spends the stamina, holds the immunity and
+	 * plays it for everyone else. Nothing when the held set has no dodge, in the air, short of stamina, or during another
+	 * dodge or roll before its recovery. For scripts and QA as PressPrimaryAction.
+	 * @return True when the move started (on the owner)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
+	bool TryStartDodge();
 
 	/**
 	 * Press the secondary action, as IA_SecondaryAction's press does: a bow aims, a shield raises its guard (D94), edit mode
@@ -1388,9 +1400,28 @@ protected:
 	 */
 	bool ActivateMeleeSwing(int32 ComboIndex);
 
-	/** The owner's swing: the server activates the melee ability with the owner's combo index (D104). */
+	/**
+	 * The owner's move (the sword moves plan, D165): one request for every move it plays at its input. An attack activates
+	 * the melee ability with the owner's combo index (D104); a dodge or a roll the dodge ability (D170). The server checks
+	 * each with the predicate the owner checked.
+	 * @param Request The move's kind, its index, and a roll's direction
+	 */
 	UFUNCTION(Server, Reliable)
-	void Server_RequestMeleeSwing(int8 ComboIndex);
+	void Server_RequestMove(const FVCMoveRequest& Request);
+
+	/**
+	 * Authority: activates the ability of a move (D165): the melee ability for an attack, the dodge ability for a dodge or
+	 * a roll, with the request kept for it to take.
+	 * @param Request The owner's move
+	 * @return True if the ability activated
+	 */
+	bool ActivateMove(const FVCMoveRequest& Request);
+
+	/** Whether the body's facing follows the view (a bow drawn in third person, the first-person view): the dodge steps (D170). */
+	bool IsFacingLockedToView() const;
+
+	/** No jump before a dodge's or a roll's recovery (D170), on the owner and on the server alike. */
+	virtual bool CanJumpInternal_Implementation() const override;
 
 	/**
 	 * Raise the guard (D94): with a shield in the off hand (UVCBlockAbility::CanStartBlock), the owner's guard at once and
@@ -1432,6 +1463,8 @@ protected:
 	void Input_Interact(const FInputActionValue& Value);
 	void Input_ToggleView(const FInputActionValue& Value);
 	void Input_PrimaryAction(const FInputActionValue& Value);
+	/** IA_Dodge: TryStartDodge (D170). */
+	void Input_Dodge(const FInputActionValue& Value);
 	/** The primary action is released (or cancelled): a timed block break stops (WM-C15). */
 	void Input_StopPrimaryAction(const FInputActionValue& Value);
 	void Input_SecondaryAction(const FInputActionValue& Value);
