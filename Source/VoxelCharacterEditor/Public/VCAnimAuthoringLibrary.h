@@ -158,6 +158,17 @@ public:
 	static bool AppendMontageSegment(UAnimMontage* Montage, UAnimSequenceBase* Sequence, FName SectionName, bool bLoopSection);
 
 	/**
+	 * Sets which section a montage's section leads into (the sword moves plan, D167: the charge's held loop leads into
+	 * itself, its lowering after it into nothing, though AppendMontageSegment linked the loop to it).
+	 * @param Montage     The montage
+	 * @param SectionName The section
+	 * @param NextSection The section it leads into; None ends the montage there
+	 * @return True when the section leads there afterwards
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AnimAuthoring")
+	static bool LinkMontageSections(UAnimMontage* Montage, FName SectionName, FName NextSection);
+
+	/**
 	 * Sets the slot a montage's first track plays in (a montage the factory makes plays in DefaultSlot).
 	 * @param Montage  The montage
 	 * @param SlotName The slot ("UpperBody"); a slot node of that name plays it

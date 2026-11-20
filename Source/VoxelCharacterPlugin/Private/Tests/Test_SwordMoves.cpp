@@ -15,11 +15,16 @@
 #include "Tags/CGFGameplayTags.h"
 #include "AbilitySystemComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/Controller.h"
 
 // ---------------------------------------------------------------------------
 // The sword's moves (Documentation/SWORD_MOVES_PLAN.md):
 // - B, the secondary branch (D166): the combo's table walked by both buttons in every order, the press classes on a
 //   secondary step, the server's acceptance of a secondary index and its own pick for the button pressed.
+// - C, the charge (D167): from rest only (not in a combo, not sprinting, not in the air); the charge time from the
+//   montage's windup; a release before it plays the first attack, at it the charged strike; the server takes the charged
+//   strike only once its own clock has run the charge time less the allowance; the strike deals twice the damage and a
+//   press in its recovery continues with _02.
 // ---------------------------------------------------------------------------
 
 namespace VCSwordMovesTestHelpers
@@ -66,15 +71,47 @@ namespace VCSwordMovesTestHelpers
 		return Set;
 	}
 
+	/**
+	 * The branched set with the SwordShield set's charge: the windup 0.5 s, the held loop 1.5 s, the lowering 1 s (one
+	 * montage, three sections), and the charged strike _15 (combo index 6: 3 s, hitting at 0.8 s, recovering from 1.27 s)
+	 * at twice the damage, continuing with _02.
+	 */
+	UVCActionAnimSet* MakeChargingSet()
+	{
+		UVCActionAnimSet* Set = MakeBranchedSet();
+		Set->AttackCombo.Add(MakeSwordAttack(3.f, 0.8f, 1.27f));
+		FVCAttackComboStep& Charged = Set->AttackComboSteps.AddDefaulted_GetRef();
+		Charged.NextPrimary = 1;
+		Charged.NextSecondary = 3;
+		Charged.DamageMultiplier = 2.f;
+		Set->ChargedAttack = 6;
+		Set->ChargeHoldTime = 1.f;
+		UAnimMontage* Charge = NewObject<UAnimMontage>(GetTransientPackage());
+		Charge->SetCompositeLength(3.f);
+		const auto AddSection = [Charge](FName Name, float Time)
+		{
+			FCompositeSection Section;
+			Section.SectionName = Name;
+			Section.Link(Charge, Time);
+			Charge->CompositeSections.Add(Section);
+		};
+		AddSection(TEXT("Default"), 0.f);
+		AddSection(UVCActionAnimSet::ChargeLoopSection, 0.5f);
+		AddSection(UVCActionAnimSet::ChargeEndSection, 2.f);
+		Set->Charge = Charge;
+		return Set;
+	}
+
 	void TickSwordFrame(UWorld* World, float DeltaSeconds)
 	{
 		++GFrameCounter;
 		World->Tick(LEVELTICK_All, DeltaSeconds);
 	}
 
-	AVCNPCCharacterBase* SpawnSwordFighter(UWorld* World, UVCActionAnimSet* Set, bool bMelee)
+	AVCNPCCharacterBase* SpawnSwordFighter(UWorld* World, UVCActionAnimSet* Set, bool bMelee,
+		const FVector& Location = FVector::ZeroVector, const FGameplayTag& Faction = CGFGameplayTags::Faction_Player)
 	{
-		const FTransform Transform(FVector::ZeroVector);
+		const FTransform Transform(Location);
 		AVCNPCCharacterBase* NPC = World->SpawnActorDeferred<AVCNPCCharacterBase>(AVCNPCCharacterBase::StaticClass(), Transform,
 			nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 		if (!NPC)
@@ -84,12 +121,15 @@ namespace VCSwordMovesTestHelpers
 		NPC->StartingMaxHealth = 100.f;
 		NPC->DestroyAfterDeathDelay = 0.f;
 		NPC->bAIEnabled = false;
-		NPC->CombatComponent->FactionTag = CGFGameplayTags::Faction_Player;
+		NPC->CombatComponent->FactionTag = Faction;
 		if (bMelee)
 		{
 			NPC->DefaultAbilities.Add(UVCMeleeAttackAbility::StaticClass());
 		}
-		NPC->ActionMontages->ActionAnimSets.Add(Set);
+		if (Set)
+		{
+			NPC->ActionMontages->ActionAnimSets.Add(Set);
+		}
 		NPC->FinishSpawning(Transform);
 		if (UCharacterMovementComponent* Move = NPC->GetCharacterMovement())
 		{
@@ -265,6 +305,119 @@ bool FVCSword_AcceptSecondary::RunTest(const FString& Parameters)
 	const int32 Played = Montages->GetActionsPlayed();
 	Request(4);
 	TestEqual(TEXT("Too early in _08: no attack"), Montages->GetActionsPlayed(), Played);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCSword_ChargeRule, "VoxelCharacter.Anim.Sword.ChargeRule", VC_SWORD_FLAGS)
+bool FVCSword_ChargeRule::RunTest(const FString& Parameters)
+{
+	using namespace VCSwordMovesTestHelpers;
+	// From rest only: a new combo, not sprinting, not in the air, with a set that charges.
+	TestTrue(TEXT("From rest"), UVCActionMontageComponent::CanChargeFrom(true, EVCAttackPress::NewCombo, false, false));
+	TestFalse(TEXT("Not in a combo's recovery"), UVCActionMontageComponent::CanChargeFrom(true, EVCAttackPress::Continue, false, false));
+	TestFalse(TEXT("Not after a strike"), UVCActionMontageComponent::CanChargeFrom(true, EVCAttackPress::Buffer, false, false));
+	TestFalse(TEXT("Not in a wind-up"), UVCActionMontageComponent::CanChargeFrom(true, EVCAttackPress::Ignore, false, false));
+	TestFalse(TEXT("Not sprinting"), UVCActionMontageComponent::CanChargeFrom(true, EVCAttackPress::NewCombo, true, false));
+	TestFalse(TEXT("Not in the air"), UVCActionMontageComponent::CanChargeFrom(true, EVCAttackPress::NewCombo, false, true));
+	TestFalse(TEXT("Not without a charge (or with vc.Anim.AttackCharge 0)"), UVCActionMontageComponent::CanChargeFrom(false, EVCAttackPress::NewCombo, false, false));
+
+	const UVCActionAnimSet* Set = MakeChargingSet();
+	TestTrue(TEXT("The set charges"), Set->HasCharge());
+	TestTrue(TEXT("The charge time: the windup and the hold"), FMath::IsNearlyEqual(Set->GetChargeTime(), 1.5f, 1.0e-4f));
+	TestFalse(TEXT("The branched set alone does not charge"), MakeBranchedSet()->HasCharge());
+
+	// The plan's cases: a tap and a release at 1.2 s play the first attack, a hold to the charge time the charged strike.
+	TestTrue(TEXT("A tap: the first attack"), UVCActionMontageComponent::ClassifyChargeRelease(0.1, Set->GetChargeTime()) == EVCChargeRelease::FirstAttack);
+	TestTrue(TEXT("Released at 1.2 s: the first attack"), UVCActionMontageComponent::ClassifyChargeRelease(1.2, Set->GetChargeTime()) == EVCChargeRelease::FirstAttack);
+	TestTrue(TEXT("Held to 1.5 s: the charged strike"), UVCActionMontageComponent::ClassifyChargeRelease(1.5, Set->GetChargeTime()) == EVCChargeRelease::Charged);
+
+	TestEqual(TEXT("After the charged strike the primary goes on with _02"), Set->GetNextAttack(6, false), 1);
+	TestFalse(TEXT("The charged strike is no secondary attack"), Set->IsSecondaryAttack(6));
+	TestTrue(TEXT("Its damage twice the weapon's"), FMath::IsNearlyEqual(Set->GetAttackDamageMultiplier(6), 2.f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCSword_ChargeServer, "VoxelCharacter.Combat.Melee.ChargedStrike", VC_SWORD_FLAGS)
+bool FVCSword_ChargeServer::RunTest(const FString& Parameters)
+{
+	using namespace VCSwordMovesTestHelpers;
+	VCTesting::FPlayWorld W(TEXT("VCSwordChargeWorld"), /*bDestroyActorsFirst=*/true);
+	AVCNPCCharacterBase* NPC = SpawnSwordFighter(W.World, MakeChargingSet(), true);
+	AVCNPCCharacterBase* Victim = SpawnSwordFighter(W.World, nullptr, false, FVector(150.0, 0.0, 0.0), CGFGameplayTags::Faction_Monster);
+	if (!TestNotNull(TEXT("Fighter"), NPC) || !TestNotNull(TEXT("Victim"), Victim))
+	{
+		return false;
+	}
+	Victim->SetActorRotation(FRotator(0.0, 180.0, 0.0));
+	// The attacker swings only when the test asks: its AI would fight the hostile before it on its own.
+	if (AController* Brain = NPC->GetController())
+	{
+		Brain->UnPossess();
+		Brain->Destroy();
+	}
+	UVCActionMontageComponent* Montages = NPC->ActionMontages;
+	UAbilitySystemComponent* ASC = NPC->GetAbilitySystemComponent();
+	if (!TestNotNull(TEXT("ASC"), ASC))
+	{
+		return false;
+	}
+	const auto Advance = [&W](float Seconds)
+	{
+		for (float Elapsed = 0.f; Elapsed < Seconds - UE_KINDA_SMALL_NUMBER; Elapsed += 0.05f)
+		{
+			TickSwordFrame(W.World, 0.05f);
+		}
+	};
+	const auto Request = [&](int32 Index)
+	{
+		Montages->SetRequestedAttack(Index);
+		return ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(CGFGameplayTags::Ability_Attack_Melee));
+	};
+
+	// From rest the character may charge; in a combo it may not.
+	TestTrue(TEXT("At rest: a charge"), Montages->CanStartCharge());
+	float Rate = 0.f;
+	TestEqual(TEXT("A first attack"), Montages->ChooseAttack(1.f, Rate), 0);
+	Advance(0.3f);
+	TestFalse(TEXT("In the combo: no charge"), Montages->CanStartCharge());
+	Advance(1.5f);
+	TestTrue(TEXT("Past the combo's window: a charge again"), Montages->CanStartCharge());
+
+	// A charged strike sent early (the server's clock at 1.0 s of 1.5, beyond the 0.2 s allowance): the first attack.
+	const float Before = Victim->CombatComponent->GetHealth();
+	Montages->BeginCharge();
+	TestTrue(TEXT("Charging"), Montages->IsCharging());
+	Advance(1.f);
+	TestTrue(TEXT("Taken"), Request(6));
+	TestEqual(TEXT("Too early for the charged strike: _01"), Montages->GetLastAttackIndex(), 0);
+	TestFalse(TEXT("The charge ends with the attack"), Montages->IsCharging());
+	Advance(0.3f);
+	const float AfterFirst = Victim->CombatComponent->GetHealth();
+	const float FirstDamage = Before - AfterFirst;
+	AddInfo(FString::Printf(TEXT("_01: %.1f damage"), FirstDamage));
+	TestTrue(TEXT("_01 hits"), FirstDamage > 0.f);
+
+	// The charge run to its time less the allowance (1.3 s): the charged strike, at twice the damage.
+	Advance(1.5f);
+	Montages->BeginCharge();
+	Advance(1.35f);
+	TestTrue(TEXT("Taken"), Request(6));
+	TestEqual(TEXT("The charged strike"), Montages->GetLastAttackIndex(), 6);
+	Advance(0.9f);
+	const float ChargedDamage = AfterFirst - Victim->CombatComponent->GetHealth();
+	AddInfo(FString::Printf(TEXT("_15: %.1f damage"), ChargedDamage));
+	TestTrue(TEXT("Twice the first attack's damage"), FMath::IsNearlyEqual(ChargedDamage, 2.f * FirstDamage, 0.01f));
+
+	// A press in its recovery goes on with _02 (on the owner's pick and on the server's).
+	Advance(0.45f);
+	TestTrue(TEXT("In the charged strike's recovery"), Montages->ClassifyAttackPress() == EVCAttackPress::Continue);
+	TestTrue(TEXT("The next requested"), Request(1));
+	TestEqual(TEXT("_02 after the charged strike"), Montages->GetLastAttackIndex(), 1);
+
+	// No charge kept: a charged request is the first attack.
+	Advance(2.f);
+	TestTrue(TEXT("Taken"), Request(6));
+	TestEqual(TEXT("No charge on the server: _01"), Montages->GetLastAttackIndex(), 0);
 	return true;
 }
 

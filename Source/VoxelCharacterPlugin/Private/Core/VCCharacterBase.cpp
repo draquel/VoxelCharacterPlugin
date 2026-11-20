@@ -569,6 +569,7 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 	{
 		StartMeleeSwing(ActionMontages->IsBufferedAttackSecondary());
 	}
+	UpdateCharge();
 	UpdateDrawnGrip();
 	UpdateSheathHandOff();
 	UpdateBowReload();
@@ -961,7 +962,7 @@ bool AVCCharacterBase::TryStartMeleeAttack()
 	return StartMeleeSwing();
 }
 
-bool AVCCharacterBase::StartMeleeSwing(bool bSecondary)
+bool AVCCharacterBase::StartMeleeSwing(bool bSecondary, bool bAllowCharge)
 {
 	if (!CombatComponent || IsIncapacitated())
 	{
@@ -982,6 +983,32 @@ bool AVCCharacterBase::StartMeleeSwing(bool bSecondary)
 	{
 		// No secondary branch for what is held (D166): the press does nothing.
 		return false;
+	}
+	if (ActionMontages && ActionMontages->IsCharging())
+	{
+		if (!bSecondary)
+		{
+			// Still charging: the release or the hold decides (D167).
+			return true;
+		}
+		// The secondary attack over a charge: the charge ends, the branch starts from rest; the server's acceptance of
+		// the attack ends its clock.
+		ActionMontages->EndCharge();
+	}
+	// A primary press from rest charges (D167): the windup at once, the first attack at the release.
+	if (!bSecondary && bAllowCharge && ActionMontages && ActionMontages->CanStartCharge())
+	{
+		ActionMontages->BeginCharge();
+		ActionMontages->PlayActionLocal(EVCAnimAction::Charge, 0);
+		if (HasAuthority())
+		{
+			ApplyChargeChange(EVCChargeChange::Begin);
+		}
+		else
+		{
+			Server_SetCharge(EVCChargeChange::Begin);
+		}
+		return true;
 	}
 	if (ActionMontages && ActionMontages->GetMontage(EVCAnimAction::Attack, 0))
 	{
@@ -1029,6 +1056,122 @@ bool AVCCharacterBase::ActivateMeleeSwing(int32 ComboIndex)
 		ActionMontages->SetRequestedAttack(ComboIndex);
 	}
 	return ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(CGFGameplayTags::Ability_Attack_Melee));
+}
+
+void AVCCharacterBase::StartChargedSwing()
+{
+	if (!ActionMontages || !CombatComponent || IsIncapacitated())
+	{
+		return;
+	}
+	const AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
+	const UVCMeleeAttackAbility* Melee = PS && PS->MeleeAttackAbilityClass
+		? Cast<UVCMeleeAttackAbility>(PS->MeleeAttackAbilityClass->GetDefaultObject()) : nullptr;
+	float PlayRate = 1.f;
+	const int32 Variant = ActionMontages->ChooseChargedAttack(Melee ? Melee->GetAttackSpeed(this) : 1.f, PlayRate);
+	if (Variant < 0)
+	{
+		return;
+	}
+	ActionMontages->PlayActionLocal(EVCAnimAction::Attack, Variant, PlayRate);
+	// The server takes the charged strike when its own clock has run the charge (less the allowance), else plays the
+	// first attack (UVCActionMontageComponent::AcceptAttack).
+	if (HasAuthority())
+	{
+		ActivateMeleeSwing(Variant);
+		return;
+	}
+	Server_RequestMeleeSwing(static_cast<int8>(FMath::Clamp(Variant, -1, 127)));
+}
+
+void AVCCharacterBase::CancelCharge(bool bLower)
+{
+	if (!ActionMontages || !ActionMontages->IsCharging())
+	{
+		return;
+	}
+	ActionMontages->EndCharge();
+	if (bLower)
+	{
+		ActionMontages->PlayActionLocal(EVCAnimAction::Charge, 1);
+	}
+	else
+	{
+		ActionMontages->StopActionLocal(EVCAnimAction::Charge);
+	}
+	const EVCChargeChange Change = bLower ? EVCChargeChange::Lower : EVCChargeChange::Stop;
+	if (HasAuthority())
+	{
+		ApplyChargeChange(Change);
+	}
+	else
+	{
+		Server_SetCharge(Change);
+	}
+}
+
+void AVCCharacterBase::UpdateCharge()
+{
+	if (!ActionMontages || !ActionMontages->IsCharging() || !IsLocallyControlled())
+	{
+		return;
+	}
+	// Something stopped the charge's montage (a flinch, a death, a weapon changed): the charge is over, no strike.
+	if (IsIncapacitated() || !ActionMontages->IsChargePlaying())
+	{
+		ActionMontages->EndCharge();
+		return;
+	}
+	// A charge is from rest only (D167): a sprint or a jump begun during it lowers it.
+	const UVCMovementComponent* Movement = Cast<UVCMovementComponent>(GetCharacterMovement());
+	if (Movement && (Movement->IsSprinting() || Movement->IsFalling()))
+	{
+		CancelCharge(/*bLower*/ true);
+		return;
+	}
+	if (UVCActionMontageComponent::ClassifyChargeRelease(ActionMontages->GetChargeSeconds(), ActionMontages->GetChargeTime()) == EVCChargeRelease::Charged)
+	{
+		StartChargedSwing();
+	}
+}
+
+void AVCCharacterBase::Server_SetCharge_Implementation(EVCChargeChange Change)
+{
+	ApplyChargeChange(Change);
+}
+
+void AVCCharacterBase::ApplyChargeChange(EVCChargeChange Change)
+{
+	if (!ActionMontages || !HasAuthority())
+	{
+		return;
+	}
+	const bool bOwnerPlayedIt = IsPlayerControlled();
+	switch (Change)
+	{
+	case EVCChargeChange::Begin:
+		// The server's own rule (from rest, not sprinting, not in the air), on its own clock; refused, the owner's charged
+		// request later plays the first attack. On a machine that is owner and server the owner's charge is this one.
+		if (!IsLocallyControlled())
+		{
+			if (IsIncapacitated() || !ActionMontages->CanStartCharge())
+			{
+				UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s: the charge refused on the server"), *GetName());
+				return;
+			}
+			ActionMontages->BeginCharge();
+		}
+		ActionMontages->PlayActionForEveryone(EVCAnimAction::Charge, 0, 1.f, bOwnerPlayedIt);
+		break;
+	case EVCChargeChange::Lower:
+		ActionMontages->EndCharge();
+		ActionMontages->PlayActionForEveryone(EVCAnimAction::Charge, 1, 1.f, bOwnerPlayedIt);
+		break;
+	case EVCChargeChange::Stop:
+		ActionMontages->EndCharge();
+		ActionMontages->StopActionForEveryone(EVCAnimAction::Charge, bOwnerPlayedIt);
+		break;
+	}
 }
 
 void AVCCharacterBase::Server_RequestMeleeSwing_Implementation(int8 ComboIndex)
@@ -2915,6 +3058,20 @@ void AVCCharacterBase::Input_StopPrimaryAction(const FInputActionValue& Value)
 
 void AVCCharacterBase::ReleasePrimaryAction()
 {
+	// A charge released before its strike plays the first attack from the windup's pose (D167); the charged strike
+	// fired by itself already.
+	if (ActionMontages && ActionMontages->IsCharging() && IsLocallyControlled())
+	{
+		if (UVCActionMontageComponent::ClassifyChargeRelease(ActionMontages->GetChargeSeconds(), ActionMontages->GetChargeTime()) == EVCChargeRelease::Charged)
+		{
+			StartChargedSwing();
+		}
+		else
+		{
+			ActionMontages->EndCharge();
+			StartMeleeSwing(/*bSecondary*/ false, /*bAllowCharge*/ false);
+		}
+	}
 	ReleaseRangedAttack();
 	if (BlockInteraction)
 	{
@@ -3014,6 +3171,8 @@ bool AVCCharacterBase::StartBlock()
 	{
 		return false;
 	}
+	// A charge under way is given up at once (D167): the guard goes up over it.
+	CancelCharge(/*bLower*/ false);
 	// The owner raises its guard at once; the server's activation plays it for everyone else and holds State.Blocking.
 	PlayOwnAction(EVCAnimAction::Block);
 	if (!ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(VCGameplayTags::Ability_Block)))

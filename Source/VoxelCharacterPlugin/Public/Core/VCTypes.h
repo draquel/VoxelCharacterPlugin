@@ -286,6 +286,18 @@ struct VOXELCHARACTERPLUGIN_API FVCPlayerSaveState
 	FSoftObjectPath ChosenAppearance;
 };
 
+/** A change of the owner's charge the server hears of (AVCCharacterBase::Server_SetCharge; the sword moves plan, D167). */
+UENUM()
+enum class EVCChargeChange : uint8
+{
+	/** The charge begins: the server starts its clock and everyone else sees the windup. */
+	Begin,
+	/** The charge is given up with its lowering (the charge montage's End section). */
+	Lower,
+	/** The charge is given up at once (the guard raised over it). */
+	Stop,
+};
+
 /** The carried light changed (feature 7): lit / dark, fuel seconds left and capacity (0 / 0 when it needs no fuel). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnVCCarriedLightChanged, bool, bLit, float, FuelSeconds, float, MaxFuel);
 

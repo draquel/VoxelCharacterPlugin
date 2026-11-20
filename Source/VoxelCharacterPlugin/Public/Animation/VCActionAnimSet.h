@@ -47,6 +47,11 @@ enum class EVCAnimAction : uint8
 	 * (EVCReloadFrom). The grab is the montage's UVCAnimNotify_ItemHandOff, the nock its UVCAnimNotify_ActionHit.
 	 */
 	Reload,
+	/**
+	 * Holding the sword back to charge a strike (the sword moves plan, D167): the windup, then the held pose looping
+	 * until the release or the charged strike. Variant 1 plays its lowering (the charge given up without a strike).
+	 */
+	Charge,
 };
 
 /** Where a reload takes its arrow from: the variant of EVCAnimAction::Reload (D99). */
@@ -211,6 +216,38 @@ public:
 	/** The attack a press of the secondary attack (IA_SecondaryAttack) starts a combo with; -1: the set has none. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
 	int32 SecondaryAttackStart = -1;
+
+	/**
+	 * The charge (D167): the windup (its first section), the held pose (ChargeLoopSection, looping) and the lowering
+	 * (ChargeEndSection). A primary press from rest plays it; the release plays the first attack, and a hold of
+	 * ChargeHoldTime into the loop plays ChargedAttack by itself. Empty: the set has no charge.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Charge")
+	TObjectPtr<UAnimMontage> Charge;
+
+	/** The charged strike, an index into AttackCombo (its step names its damage multiplier and what follows it); -1: none. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Charge")
+	int32 ChargedAttack = -1;
+
+	/** Seconds held in the charge's loop before the charged strike fires by itself. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Charge", meta = (ClampMin = "0"))
+	float ChargeHoldTime = 1.f;
+
+	/** The charge montage's held pose, looping. */
+	static const FName ChargeLoopSection;
+
+	/** The charge montage's lowering, played when the charge is given up. */
+	static const FName ChargeEndSection;
+
+	/** Whether the set can charge: a charge montage and a charged strike in the combo. */
+	bool HasCharge() const { return Charge != nullptr && AttackCombo.IsValidIndex(ChargedAttack); }
+
+	/**
+	 * Seconds from the press to the charged strike (D167): the windup's length (the charge montage's first section) and
+	 * ChargeHoldTime.
+	 * @return The time, 0 without a charge
+	 */
+	float GetChargeTime() const;
 
 	/** Seconds after an attack's montage ends within which the next attack still continues the combo (D104). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation", meta = (ClampMin = "0"))

@@ -3,6 +3,9 @@
 #include "Animation/VCActionAnimSet.h"
 #include "Animation/AnimMontage.h"
 
+const FName UVCActionAnimSet::ChargeLoopSection(TEXT("Loop"));
+const FName UVCActionAnimSet::ChargeEndSection(TEXT("End"));
+
 FString UVCAnimNotify_ActionHit::GetNotifyName_Implementation() const
 {
 	return TEXT("ActionHit");
@@ -50,6 +53,7 @@ UAnimMontage* UVCActionAnimSet::GetMontage(EVCAnimAction Action, int32 Variant) 
 	case EVCAnimAction::BlockEnd:   return BlockEnd;
 	case EVCAnimAction::BlockHit:   return BlockHit;
 	case EVCAnimAction::GuardBreak: return GuardBreak;
+	case EVCAnimAction::Charge:   return Charge;
 	case EVCAnimAction::Reload:
 		return Variant == static_cast<int32>(EVCReloadFrom::Bag) && ReloadFromBag ? ReloadFromBag.Get() : ReloadFromQuiver.Get();
 	case EVCAnimAction::Unsheathe:
@@ -105,6 +109,18 @@ bool UVCActionAnimSet::IsSecondaryAttack(int32 Index) const
 		}
 	}
 	return false;
+}
+
+float UVCActionAnimSet::GetChargeTime() const
+{
+	if (!HasCharge())
+	{
+		return 0.f;
+	}
+	// The windup is the first section: up to the loop's start (the whole montage when it has no loop).
+	const int32 Loop = Charge->GetSectionIndex(ChargeLoopSection);
+	const float Windup = Loop != INDEX_NONE ? Charge->CompositeSections[Loop].GetTime() : Charge->GetPlayLength();
+	return Windup + ChargeHoldTime;
 }
 
 float UVCActionAnimSet::GetAttackDamageMultiplier(int32 Index) const

@@ -1384,11 +1384,39 @@ protected:
 	 * Swing: by the combo's rule (the sword attack flow plan, D104) the owner's montage at once, or the press kept until
 	 * the current attack's recovery, or nothing in its wind-up; then the melee ability's activation with the owner's combo
 	 * index, which sweeps on the server at the hit time. TryStartMeleeAttack's swing at a target and the primary action's
-	 * swing at the air with a melee weapon in hand (G174), and the secondary attack's (D166).
-	 * @param bSecondary The secondary attack's press: the combo's secondary branch
-	 * @return True if the press was taken (a swing requested, or kept); false for the secondary without a branch
+	 * swing at the air with a melee weapon in hand (G174), and the secondary attack's (D166). A primary press from rest
+	 * with a set that charges starts the charge instead (the sword moves plan, D167): the first attack comes at the release.
+	 * @param bSecondary   The secondary attack's press: the combo's secondary branch
+	 * @param bAllowCharge Whether a primary press may start a charge (false for the release's first attack)
+	 * @return True if the press was taken (a swing requested, a charge begun, or kept); false for the secondary without a branch
 	 */
-	bool StartMeleeSwing(bool bSecondary = false);
+	bool StartMeleeSwing(bool bSecondary = false, bool bAllowCharge = true);
+
+	/** The owner: the charged strike, held long enough (D167): its montage at once, the request to the server. */
+	void StartChargedSwing();
+
+	/**
+	 * The owner: the charge given up (D167): with its lowering, or at once (a guard raised over it); the server hears of it.
+	 * @param bLower Play the charge's lowering (its End section), else stop it
+	 */
+	void CancelCharge(bool bLower);
+
+	/**
+	 * The owner's charge while the primary is held (D167): ended when something stopped its montage, lowered when a sprint
+	 * or a jump begins, the strike when due.
+	 */
+	void UpdateCharge();
+
+	/**
+	 * The owner's charge changed (D167): the server starts its own clock at a begin (when its rule allows the charge)
+	 * and shows the windup to everyone else, or ends its clock and shows the lowering or the stop.
+	 * @param Change Begin, Lower or Stop
+	 */
+	UFUNCTION(Server, Reliable)
+	void Server_SetCharge(EVCChargeChange Change);
+
+	/** Authority: what Server_SetCharge does (a listen server's or a standalone player's own charge calls it directly). */
+	void ApplyChargeChange(EVCChargeChange Change);
 
 	/**
 	 * Authority: the melee ability's activation for a swing, with the owner's combo index for the ability to take (G179).
