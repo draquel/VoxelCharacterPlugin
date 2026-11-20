@@ -564,6 +564,12 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 	}
 
 	TickWorldSafety(DeltaSeconds);
+	// A guard pressed during an attack's swing rises at the attack's recovery (D172), the button still held (its release
+	// dropped it).
+	if (ActionMontages && IsLocallyControlled() && ActionMontages->TakeDueBufferedGuard())
+	{
+		StartBlock();
+	}
 	// A press kept during an attack's swing plays the next attack at its recovery (D104).
 	if (ActionMontages && IsLocallyControlled() && ActionMontages->TakeDueBufferedAttack())
 	{
@@ -1267,7 +1273,8 @@ void AVCCharacterBase::ReleaseRangedAttack()
 void AVCCharacterBase::SetFacesAim(bool bFaceAim)
 {
 	UCharacterMovementComponent* Move = GetCharacterMovement();
-	if (!Move || CurrentViewMode == EVCViewMode::FirstPerson)
+	// The first-person rule turns the body with the view already (the owner's view mode, the server's request: G256).
+	if (!Move || bFacesView)
 	{
 		return;
 	}
@@ -1930,21 +1937,19 @@ void AVCCharacterBase::SetViewMode(EVCViewMode NewMode)
 		}
 	}
 
-	// 2. Rotation behavior
-	if (UCharacterMovementComponent* MovComp = GetCharacterMovement())
+	// 2. Rotation behavior: first person turns the body with the view, third person faces where it moves. The server
+	// applies the same rule from the owner's request (G256), so whatever reads the facing (the gait's strafe speed, an
+	// attack's lunge) agrees on both machines. The moves made before the toggle go first, so the server replays them
+	// under the rule they were made with (as a dodge's request, D170).
+	const bool bNewFacesView = NewMode == EVCViewMode::FirstPerson;
+	ApplyViewFacing(bNewFacesView);
+	if (IsLocallyControlled() && !HasAuthority())
 	{
-		if (NewMode == EVCViewMode::FirstPerson)
+		if (UCharacterMovementComponent* MovComp = GetCharacterMovement())
 		{
-			// FP: character yaw locked to camera
-			bUseControllerRotationYaw = true;
-			MovComp->bOrientRotationToMovement = false;
+			MovComp->FlushServerMoves();
 		}
-		else
-		{
-			// TP: character faces movement direction
-			bUseControllerRotationYaw = false;
-			MovComp->bOrientRotationToMovement = true;
-		}
+		Server_SetFacesView(bNewFacesView);
 	}
 	// A view toggle mid-aim keeps the body on the view and moves the camera with the mode (G155, C3).
 	bAimStateApplied = false;
@@ -1981,6 +1986,29 @@ void AVCCharacterBase::SetViewMode(EVCViewMode NewMode)
 
 	// 5. Broadcast
 	OnViewModeChanged.Broadcast(OldMode, NewMode);
+}
+
+void AVCCharacterBase::ApplyViewFacing(bool bInFacesView)
+{
+	bFacesView = bInFacesView;
+	bUseControllerRotationYaw = bInFacesView;
+	if (UCharacterMovementComponent* MovComp = GetCharacterMovement())
+	{
+		MovComp->bOrientRotationToMovement = !bInFacesView;
+	}
+}
+
+void AVCCharacterBase::Server_SetFacesView_Implementation(bool bInFacesView)
+{
+	// The owner's view rule (G256), any value valid: a locally controlled pawn (a listen server's) applies its own.
+	if (IsLocallyControlled() || bFacesView == bInFacesView)
+	{
+		return;
+	}
+	ApplyViewFacing(bInFacesView);
+	// Back in third person while aiming, the body faces the view again by the aim's rule (as SetViewMode's toggle).
+	ApplyAimState();
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s: the body %s the view on the server"), *GetName(), bInFacesView ? TEXT("follows") : TEXT("no longer follows"));
 }
 
 void AVCCharacterBase::HoldBlendNearClip()
@@ -3005,8 +3033,8 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 void AVCCharacterBase::PressPrimaryAction()
 {
 	// Priority chain: GAS ability -> [edit mode only] equipped item action -> voxel dig -> fallback
-	// Behind a raised guard nothing else happens (D94): lower it first.
-	if (IsIncapacitated() || bBlocking)
+	// Behind a raised guard nothing else happens (D94), nor behind one kept for the attack's recovery (D172): lower it first.
+	if (IsIncapacitated() || IsGuardHeld())
 	{
 		return;
 	}
@@ -3158,7 +3186,7 @@ void AVCCharacterBase::PressSecondaryAttack()
 {
 	// As the primary's swing (PressPrimaryAction): nothing behind a raised guard (D94: RMB keeps it), while a weapon comes
 	// out or goes back, or in edit mode; a melee weapon with a secondary branch swings it (D166), at a target or the air.
-	if (IsIncapacitated() || bBlocking || bEditModeEnabled)
+	if (IsIncapacitated() || IsGuardHeld() || bEditModeEnabled)
 	{
 		return;
 	}
@@ -3175,7 +3203,17 @@ void AVCCharacterBase::PressSecondaryAttack()
 void AVCCharacterBase::ReleaseSecondaryAction()
 {
 	SetWantsToAim(false);
+	// A guard kept for the attack's recovery is dropped (D172).
+	if (ActionMontages)
+	{
+		ActionMontages->ClearBufferedGuard();
+	}
 	StopBlock();
+}
+
+bool AVCCharacterBase::IsGuardHeld() const
+{
+	return bBlocking || (ActionMontages && ActionMontages->HasBufferedGuard());
 }
 
 bool AVCCharacterBase::StartBlock()
@@ -3185,7 +3223,25 @@ bool AVCCharacterBase::StartBlock()
 		return true;
 	}
 	// The hands are busy while a weapon comes out or goes back (D79).
-	if (!UVCBlockAbility::CanStartBlock(this) || (ActionMontages && ActionMontages->IsSheathActionPlaying()))
+	if (ActionMontages && ActionMontages->IsSheathActionPlaying())
+	{
+		return false;
+	}
+	// A press during an attack's swing is kept and the guard rises at the attack's recovery (G252, D172), as a press
+	// during a dodge waits for its recovery (D170): the server plays no guard over an attack (only montages with root
+	// motion), so both machines play the attack to its recovery and take its root motion alike. A charge is no attack
+	// in its swing: the guard goes up over it at once (D167, below).
+	if (ActionMontages && IsLocallyControlled() && ActionMontages->IsAttackBeforeRecovery())
+	{
+		FVCShieldStats Shield;
+		if (!UVCBlockAbility::GetHeldShield(this, Shield))
+		{
+			return false;
+		}
+		ActionMontages->BufferGuard();
+		return true;
+	}
+	if (!UVCBlockAbility::CanStartBlock(this))
 	{
 		return false;
 	}
@@ -3197,6 +3253,11 @@ bool AVCCharacterBase::StartBlock()
 	// A charge under way is given up at once (D167): the guard goes up over it.
 	CancelCharge(/*bLower*/ false);
 	// The owner raises its guard at once; the server's activation plays it for everyone else and holds State.Blocking.
+	// An attack still in its recovery ends here as on the server (D172), so both take the same root motion.
+	if (ActionMontages && IsLocallyControlled())
+	{
+		ActionMontages->StopAttackForGuard();
+	}
 	PlayOwnAction(EVCAnimAction::Block);
 	if (!ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(VCGameplayTags::Ability_Block)))
 	{

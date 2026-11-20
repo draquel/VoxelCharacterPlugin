@@ -202,7 +202,8 @@ public:
 
 	/**
 	 * Keeps a dodge or a roll as this machine's current move, starting now (D170): its recovery time from the current
-	 * set's montage. The attack it interrupts is forgotten (the combo starts over) and a kept attack press is dropped.
+	 * set's montage. The attack it interrupts is forgotten (the combo starts over) and a kept attack or guard press is
+	 * dropped.
 	 * @param Kind  Dodge or Roll
 	 * @param Index The dodge's side (EVCHitDirection)
 	 */
@@ -214,6 +215,13 @@ public:
 	 * @return True while it is
 	 */
 	bool IsMoveBeforeRecovery(float Tolerance = 0.f) const;
+
+	/**
+	 * Whether this machine's current attack is before its recovery (G252, D172): a guard pressed meanwhile waits for it.
+	 * @param Tolerance Seconds taken off the recovery: the server's allowance for an owner's request (AttackRequestTolerance)
+	 * @return True from the attack's start until its recovery less the tolerance
+	 */
+	bool IsAttackBeforeRecovery(float Tolerance = 0.f) const;
 
 	/** Server: the move the owner asked for (AVCCharacterBase::Server_RequestMove), for the move ability that follows. */
 	void SetRequestedMove(const FVCMoveRequest& Request) { RequestedMove = Request; bHasRequestedMove = true; }
@@ -406,6 +414,33 @@ public:
 	/** Whether a press is kept for the recovery. */
 	bool HasBufferedAttack() const { return bAttackBuffered; }
 
+	/**
+	 * The owner: keep a guard pressed during an attack's swing until the attack's recovery (D172), as a dodge keeps a press
+	 * (D170). A kept attack press is dropped: the guard is the later press, and nothing swings behind a guard (D94).
+	 */
+	void BufferGuard();
+
+	/** The owner: drop a kept guard (the button came up before the recovery, or a dodge or roll started). */
+	void ClearBufferedGuard() { bGuardBuffered = false; }
+
+	/**
+	 * Ends the attack montage playing on this machine's body (its recovery, past which a guard may rise) as a recovery
+	 * breaks on a move (RecoveryBlendOut): the guard's rule on the owner and on the server alike (D172). A dedicated server
+	 * plays no guard montage, which on the owner replaces the attack, so without this the server took the recovery's root
+	 * motion to the attack's end and the owner did not.
+	 * @return True when an attack montage was stopped
+	 */
+	bool StopAttackForGuard();
+
+	/** Whether a guard press is kept for the attack's recovery (D172). */
+	bool HasBufferedGuard() const { return bGuardBuffered; }
+
+	/**
+	 * The owner: whether a kept guard is due (the current attack reached its recovery, and no dodge or roll is before its
+	 * own); it is consumed.
+	 */
+	bool TakeDueBufferedGuard();
+
 	/** Whether the kept press (or the last one taken) was the secondary attack's. */
 	bool IsBufferedAttackSecondary() const { return bBufferedSecondary; }
 
@@ -582,6 +617,9 @@ private:
 	/** A press kept for the current attack's recovery (the owner's), and whether it was the secondary attack's. */
 	bool bAttackBuffered = false;
 	bool bBufferedSecondary = false;
+
+	/** A guard press kept for the current attack's recovery (the owner's, D172). */
+	bool bGuardBuffered = false;
 
 	/** The combo index the owner asked for, until the melee ability takes it (server). */
 	int32 RequestedAttackIndex = -1;

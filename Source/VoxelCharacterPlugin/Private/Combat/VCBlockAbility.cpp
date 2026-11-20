@@ -73,9 +73,11 @@ bool UVCBlockAbility::CanStartBlock(const AActor* Avatar)
 	{
 		return false;
 	}
-	// No guard before a dodge's or a roll's recovery (the sword moves plan, D170).
+	// No guard before a dodge's or a roll's recovery (the sword moves plan, D170), nor before an attack's (D172: the owner
+	// keeps the press until then, so both machines play the attack to its recovery and take its root motion alike).
 	const UVCActionMontageComponent* Montages = Avatar ? Avatar->FindComponentByClass<UVCActionMontageComponent>() : nullptr;
-	if (Montages && Montages->IsMoveBeforeRecovery(UVCActionMontageComponent::GetRequestTolerance(Avatar)))
+	const float Tolerance = UVCActionMontageComponent::GetRequestTolerance(Avatar);
+	if (Montages && (Montages->IsMoveBeforeRecovery(Tolerance) || Montages->IsAttackBeforeRecovery(Tolerance)))
 	{
 		return false;
 	}
@@ -253,6 +255,10 @@ void UVCBlockAbility::ActivateAbility(const FGameplayAbilitySpecHandle Handle, c
 	// The owning player raised its own guard at input; everyone else follows the server.
 	if (UVCActionMontageComponent* Montages = Avatar->FindComponentByClass<UVCActionMontageComponent>())
 	{
+		// An attack in its recovery ends as the owner's did when its guard rose (D172): a dedicated server plays no guard
+		// to replace it, and would take the recovery's root motion the owner no longer takes. The owner's moves before the
+		// guard reach the server before this activation (the ability system flushes them), so both stop at the same move.
+		Montages->StopAttackForGuard();
 		const APawn* Pawn = Cast<APawn>(Avatar);
 		Montages->PlayActionForEveryone(EVCAnimAction::Block, 0, 1.f, Pawn && Pawn->IsPlayerControlled());
 	}

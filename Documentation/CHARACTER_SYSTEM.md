@@ -144,6 +144,21 @@ attacker builds FCGFDamageContext
   sees `GuardBreak` (`Guard_Break`). Pure damage and a hit with no source are not blocked; a body without stamina (an NPC)
   never breaks. While the guard is up the primary action does nothing and stamina does not regenerate. Not done: the
   guard does not slow the walk, NPCs do not block, and the shield's swap has no montage.
+  **A guard during an attack** (G252, D172, 2026-11-20) waits for the attack's recovery, as a press during a dodge waits
+  for the dodge's (D170): the owner keeps a press made before the recovery (`UVCActionMontageComponent::BufferGuard`) and
+  raises the guard at the recovery (`TakeDueBufferedGuard`, the character's tick), the button still held; its release
+  before then, or a dodge or a roll, drops it, and a kept guard drops a kept attack press and refuses a new one (nothing
+  swings behind a guard, `IsGuardHeld`). The server refuses the activation before the attack's recovery too
+  (`CanStartBlock`: `IsAttackBeforeRecovery`, less the request's allowance for a remote owner). The reason: a dedicated
+  server plays no guard (only montages with root motion), so a guard over the lunge left the owner taking the guard's
+  root motion and the server the attack's (37 corrections of up to 12 uu over `_01` with 100 ms of lag, 18 over `_08`).
+  Both now play the attack to its recovery, and when the guard rises over the recovery both end the attack's montage
+  (`StopAttackForGuard`, the recovery's blend: on the owner in `StartBlock`, on the server in the block ability's
+  activation, which the owner's flushed moves precede). With the kept press alone a dedicated server still ran the
+  recovery's last 3 uu of root motion that the owner's guard had replaced: 8 corrections of up to 2.3 uu. Measured on
+  `CharacterTest` (`vox.PIE.Net 2 lag=100`, `vox.AttackTrace 4 0 0.5 g0.75-1.8` and its `_08` and charge forms): no
+  correction, the three copies within 0.1 uu. A charge (D167) is no attack in its swing: the guard goes up over it at
+  once. Test `VoxelCharacter.Combat.Block.WaitsForAttackRecovery`.
 - **The dodge and the roll** (the sword moves plan's F, D165, D168, D170, 2026-11-20; `SWORD_MOVES_PLAN.md`). The
   dodge key (`IA_Dodge`, "Input" › The dodge) calls `TryStartDodge`: with movement input a roll toward it (the capsule
   turned to the input first, then the pack's `Roll_F`), with none a step back (`Dodge_01_BR`), and while the facing is
@@ -170,8 +185,8 @@ attacker builds FCGFDamageContext
   standing, rolls from a walk to all four sides, a dodge out of a swing and an attack pressed in a step all end at the
   same place on the three machines (within 1.2 uu) with no correction, so the predicted root motion source D170 held in
   reserve was not needed. In first person the server's capsule faced where the body walked, not the view, and a step to
-  the side was corrected by up to 378 uu until the request carried the facing (G256: the strafe and the attack's lunge
-  still are). Tests `VoxelCharacter.Combat.Dodge.*`, `VoxelCharacter.Movement.MontageCarriesCapsule`.
+  the side was corrected by up to 378 uu until the request carried the facing (the strafe and the attack's lunge were
+  corrected until the server applied the first-person rule too, G256: "Camera"). Tests `VoxelCharacter.Combat.Dodge.*`, `VoxelCharacter.Movement.MontageCarriesCapsule`.
 - **The sword's attack flow** (the sword attack flow plan, D102-D107, G178-G180, 2026-11-12;
   `SWORD_ATTACK_FLOW_PLAN.md`, frozen). The SwordShield set's combo is the pack demo's, `SSH_Attack_01`, `_02`, `_04`
   (each begins in the last one's follow-through pose), then `_01` again. Every attack montage carries two markers the
@@ -1015,8 +1030,18 @@ equipment visuals to the arms or the body (`FVCEquipmentSocketMapping`; an item 
 `hand_l`, keeps it in both views), updates the interaction range and broadcasts
 `OnViewModeChanged`; the anim instance reads `CurrentViewMode`. The view mode is the local player's and is not
 replicated (G87, 2026-11-02): `SetViewMode` runs on the machine that calls it (the owning client's toggle), and every
-other machine draws the pawn in third person, its equipment on the body sockets. Nothing on the server reads it (the
-server's interaction range check keeps the third-person range). It used to replicate from the server, which never
+other machine draws the pawn in third person, its equipment on the body sockets. The rotation rule alone reaches the
+server (G256, 2026-11-20): `SetViewMode` sends it (`Server_SetFacesView`, reliable, after the owner's pending moves), and
+the server applies the same flags to the owner's pawn (`ApplyViewFacing`: `bUseControllerRotationYaw`, not
+`bOrientRotationToMovement`; the face-aim flip leaves the first-person rule alone on both, `bFacesView`), so the body
+turns with the view there as on the owner and whatever reads the facing agrees: the gait table's rotation mode (the
+strafe's speed) and an attack's lunge (D106). Before, a first-person strafe was corrected 10-18 times in 0.6 s and a
+lunge after turning the view 90 degrees 25 times; on `CharacterTest` with `vox.PIE.Net 2 lag=100` both now give none
+(`vox.View fp 90`, then `vox.AttackTrace 2.5 r u1.5` or `vox.AttackTrace 2.5 0 0.3`: the same strafe speed, 311, and the
+same lunge on the three machines). The move data was the other route (a rule each saved move carries, as
+the wind's air, G220); the request was chosen: the rule changes at a toggle, not per move, and the flush before it puts
+the moves made under the old rule ahead of it. Test `VoxelCharacter.Movement.FacesViewOnServer`. Nothing else on the
+server reads the view mode (the server's interaction range check keeps the third-person range). It used to replicate from the server, which never
 received a client's change; a listen-server host in first person sent its mode to the clients, which attached its
 weapon to arms they do not draw. Test `VoxelCharacter.ViewMode.NotReplicated`. A system that cares about the view mode
 joins this sequence, on the local machine.
@@ -1156,7 +1181,7 @@ behind a raised guard, in edit mode or while a weapon comes out. In the air it p
 
 Primary and secondary actions (LMB / RMB) go through one chain; new action types insert into it, they do not replace
 it. Dead or downed characters ignore both; the primary action waits while a weapon is being unsheathed or sheathed, and
-does nothing while the guard is up (D94).
+does nothing while the guard is up or kept for an attack's recovery (D94, D172).
 "The main hand" below is the held item: the hand slot's own or a weapon drawn from a sheath.
 
 1. A ranged weapon in the main hand (the code's step 0): `TryStartRangedAttack` on the press, arrows or not ("No
@@ -1529,7 +1554,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 | Inventory, equipment | Server (the gameplay plugins' components on the pawn) | Their own replication |
 | Attributes, effects, abilities | Server (ASC on the player state; an NPC's on the NPC) | GAS replication; prediction keys for activation |
 | Progression | Server | `Progression` on the player state |
-| View mode | The local player's machine | Not replicated (G87); other machines draw third person |
+| View mode | The local player's machine; its rotation rule also the server's (`Server_SetFacesView`, G256) | Not replicated (G87); other machines draw third person |
 | Action set | Server (the equipment) | Derived on every machine from the replicated equipment slots |
 | Appearance | Server (`AVCPlayerState::ResolveAppearance`: the player's choice, the game mode's, the settings') | `Appearance` on the player state; every machine dresses the pawn; a dedicated server sets the body mesh only |
 | Action montages | The owner at input; the server for what it accepted | One unreliable multicast, skipped by the owner for its own actions (D49); the melee damage on the server at the montage's hit time; a draw let go too early stopped by a reliable multicast |
@@ -1558,7 +1583,7 @@ Island, Map, NearClip, Plane, Planet, Progression, Respawn, Save, Spawn, Terrain
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
 and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83), the swing at the air's `Combat.Melee.HoldsMeleeWeapon` (G174), the guard's `Combat.Block.Rules` and
-`Combat.Block.GuardTakesFrontHits` (D94), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the attack flow's
+`Combat.Block.GuardTakesFrontHits` (D94), `Combat.Block.WaitsForAttackRecovery` (D172), `Movement.FacesViewOnServer` (G256), `Anim.AimRaise` (D76) and `Anim.StanceFade` (D85); the attack flow's
 `Anim.RecoveryTime`, `Anim.AttackPressRule`, `Anim.AttackCombo` and `Combat.Melee.AcceptAttack` (D102-D107, G179); the sword moves'
 `Anim.Sword.ComboTable`, `Anim.Sword.SecondaryPress` and `Combat.Melee.AcceptSecondary` (D166), `Anim.Sword.ChargeRule` and
 `Combat.Melee.ChargedStrike` (D167), `Anim.Sword.RunAttackRule` and `Combat.Melee.RunAttack` (D168), `Anim.Sword.AirAttackRule` and `Combat.Melee.Plunge` (D169); the sheaths'
