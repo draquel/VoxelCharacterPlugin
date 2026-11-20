@@ -12,8 +12,12 @@
 #include "Combat/VCMeleeAttackAbility.h"
 #include "Core/VCGameplayTags.h"
 #include "Core/VCNPCCharacterBase.h"
+#include "Movement/VCMovementComponent.h"
 #include "Tags/CGFGameplayTags.h"
 #include "AbilitySystemComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
 
@@ -25,6 +29,9 @@
 //   montage's windup; a release before it plays the first attack, at it the charged strike; the server takes the charged
 //   strike only once its own clock has run the charge time less the allowance; the strike deals twice the damage and a
 //   press in its recovery continues with _02.
+// - D, the run attack (D168): a fresh primary press while sprinting faster than the set's speed plays _12 instead of the
+//   combo, never a kept press; the server takes it only while its own character sprints that fast; a press after it
+//   starts the combo again; its montage carries the capsule on the move.
 // ---------------------------------------------------------------------------
 
 namespace VCSwordMovesTestHelpers
@@ -99,6 +106,21 @@ namespace VCSwordMovesTestHelpers
 		AddSection(UVCActionAnimSet::ChargeLoopSection, 0.5f);
 		AddSection(UVCActionAnimSet::ChargeEndSection, 2.f);
 		Set->Charge = Charge;
+		return Set;
+	}
+
+	/**
+	 * The charging set with the SwordShield set's run attack: _12 (combo index 7: 2.5 s, hitting at 0.77 s, recovering
+	 * from 1.07 s), a press after it starting the combo again (_01 on the primary, _08 on the secondary).
+	 */
+	UVCActionAnimSet* MakeRunningSet()
+	{
+		UVCActionAnimSet* Set = MakeChargingSet();
+		Set->AttackCombo.Add(MakeSwordAttack(2.5f, 0.77f, 1.07f));
+		FVCAttackComboStep& Run = Set->AttackComboSteps.AddDefaulted_GetRef();
+		Run.NextPrimary = 0;
+		Run.NextSecondary = 3;
+		Set->RunAttack = 7;
 		return Set;
 	}
 
@@ -418,6 +440,149 @@ bool FVCSword_ChargeServer::RunTest(const FString& Parameters)
 	Advance(2.f);
 	TestTrue(TEXT("Taken"), Request(6));
 	TestEqual(TEXT("No charge on the server: _01"), Montages->GetLastAttackIndex(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCSword_RunAttackRule, "VoxelCharacter.Anim.Sword.RunAttackRule", VC_SWORD_FLAGS)
+bool FVCSword_RunAttackRule::RunTest(const FString& Parameters)
+{
+	using namespace VCSwordMovesTestHelpers;
+	// The gait and the speed (D168): sprinting, faster than the set's speed.
+	TestTrue(TEXT("A sprint at 600 over 550: the run attack"), UVCActionMontageComponent::CanRunAttackFrom(true, true, 600.f, 550.f));
+	TestFalse(TEXT("At the speed: not yet"), UVCActionMontageComponent::CanRunAttackFrom(true, true, 550.f, 550.f));
+	TestFalse(TEXT("A sprint's first steps under it: the combo"), UVCActionMontageComponent::CanRunAttackFrom(true, true, 500.f, 550.f));
+	TestFalse(TEXT("The run (no sprint) at any speed: the combo"), UVCActionMontageComponent::CanRunAttackFrom(true, false, 700.f, 550.f));
+	TestFalse(TEXT("A set without one: the combo"), UVCActionMontageComponent::CanRunAttackFrom(false, true, 700.f, 550.f));
+	TestTrue(TEXT("The server's allowance on an owner's request"),
+		UVCActionMontageComponent::CanRunAttackFrom(true, true, 500.f, 550.f - UVCActionMontageComponent::RunAttackSpeedTolerance));
+
+	const UVCActionAnimSet* Set = MakeRunningSet();
+	TestTrue(TEXT("The set has a run attack"), Set->HasRunAttack());
+	TestFalse(TEXT("The branched set has none"), MakeBranchedSet()->HasRunAttack());
+	TestTrue(TEXT("Over halfway from the run to the sprint by default"), FMath::IsNearlyEqual(Set->RunAttackSpeed, 550.f));
+	TestFalse(TEXT("The run attack is the primary's"), Set->IsSecondaryAttack(7));
+	TestEqual(TEXT("A primary press after it: _01"), Set->GetNextAttack(7, false), 0);
+	TestEqual(TEXT("A secondary press after it: _08"), Set->GetNextAttack(7, true), 3);
+	TestEqual(TEXT("No other attack leads to it"), Set->GetNextAttack(6, false), 1);
+
+	// Its root motion on the move: the flag takes it with input (the attacks without it keep D106).
+	TestTrue(TEXT("Carried: the move takes the root motion"), UVCMovementComponent::ShouldTakeMontageRootMotion(true, true, true));
+	TestFalse(TEXT("Not carried: the move ignores it"), UVCMovementComponent::ShouldTakeMontageRootMotion(true, true, false));
+	const UVCActionAnimSet* Sword = LoadObject<UVCActionAnimSet>(nullptr,
+		TEXT("/Game/CharacterAnimation/ActionSets/DA_VCActionSet_SwordShield.DA_VCActionSet_SwordShield"), nullptr, LOAD_NoWarn | LOAD_Quiet);
+	if (Sword)
+	{
+		// The layers script's set: _12 last, carrying the capsule; the combo's lunges do not.
+		if (TestTrue(TEXT("The sword's set has its run attack"), Sword->HasRunAttack()))
+		{
+			const UAnimMontage* Run = Sword->AttackCombo[Sword->RunAttack];
+			TestTrue(TEXT("_12 carries the capsule"), UVCActionAnimSet::CarriesCapsule(Run));
+			TestTrue(TEXT("Its hit before its recovery"), UVCActionAnimSet::GetHitTime(Run) < UVCActionAnimSet::GetRecoveryTime(Run));
+		}
+		TestFalse(TEXT("_01 does not"), UVCActionAnimSet::CarriesCapsule(Sword->AttackCombo.IsEmpty() ? nullptr : Sword->AttackCombo[0].Get()));
+	}
+	else
+	{
+		AddInfo(TEXT("No DA_VCActionSet_SwordShield (the CharacterAnimation pack is absent): the asset check skipped"));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCSword_RunAttackServer, "VoxelCharacter.Combat.Melee.RunAttack", VC_SWORD_FLAGS)
+bool FVCSword_RunAttackServer::RunTest(const FString& Parameters)
+{
+	using namespace VCSwordMovesTestHelpers;
+	VCTesting::FPlayWorld W(TEXT("VCSwordRunAttackWorld"), /*bDestroyActorsFirst=*/true);
+	UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (!TestNotNull(TEXT("The engine cube"), Cube))
+	{
+		return false;
+	}
+	// A floor 200 m wide, its top at 0.
+	AStaticMeshActor* Floor = W.World->SpawnActor<AStaticMeshActor>(FVector(0.0, 0.0, -50.0), FRotator::ZeroRotator);
+	Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
+	Floor->GetStaticMeshComponent()->SetStaticMesh(Cube);
+	Floor->SetActorScale3D(FVector(200.0, 200.0, 1.0));
+	Floor->GetStaticMeshComponent()->SetCollisionProfileName(TEXT("BlockAll"));
+
+	UVCActionAnimSet* Set = MakeRunningSet();
+	AVCNPCCharacterBase* NPC = SpawnSwordFighter(W.World, Set, true, FVector(-9000.0, 0.0, 100.0));
+	if (!TestNotNull(TEXT("Fighter"), NPC))
+	{
+		return false;
+	}
+	UVCMovementComponent* Move = Cast<UVCMovementComponent>(NPC->GetCharacterMovement());
+	UVCActionMontageComponent* Montages = NPC->ActionMontages;
+	UAbilitySystemComponent* ASC = NPC->GetAbilitySystemComponent();
+	if (!TestNotNull(TEXT("Movement"), Move) || !TestNotNull(TEXT("ASC"), ASC))
+	{
+		return false;
+	}
+	Move->bRunPhysicsWithNoController = true;
+	Move->SetMovementMode(MOVE_Walking);
+	// Walks along +X, the world and its movement ticking.
+	const auto Walk = [&](float Seconds)
+	{
+		for (float Elapsed = 0.f; Elapsed < Seconds - UE_KINDA_SMALL_NUMBER; Elapsed += 1.f / 30.f)
+		{
+			NPC->AddMovementInput(FVector::ForwardVector, 1.f);
+			TickSwordFrame(W.World, 1.f / 30.f);
+		}
+	};
+	const auto Speed = [Move]() { return static_cast<float>(FVector(Move->Velocity.X, Move->Velocity.Y, 0.0).Size()); };
+	const auto Request = [&](int32 Index)
+	{
+		Montages->SetRequestedAttack(Index);
+		return ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(CGFGameplayTags::Ability_Attack_Melee));
+	};
+	float Rate = 0.f;
+
+	// Walking, not sprinting: the combo, even under a low speed.
+	Walk(1.f);
+	TestTrue(TEXT("On the floor"), Move->IsMovingOnGround());
+	const float WalkSpeed = Speed();
+	AddInfo(FString::Printf(TEXT("Walking at %.0f uu/s"), WalkSpeed));
+	Set->RunAttackSpeed = WalkSpeed * 0.5f;
+	TestFalse(TEXT("Walking: no run attack"), Montages->CanRunAttack());
+	TestEqual(TEXT("A fresh press walking: _01"), Montages->ChooseAttack(1.f, Rate, false, /*bAllowRunAttack*/ true), 0);
+
+	// Sprinting: the run attack once faster than the set's speed.
+	Move->bWantsToSprint = true;
+	Walk(3.f);
+	const float SprintSpeed = Speed();
+	AddInfo(FString::Printf(TEXT("Sprinting at %.0f uu/s"), SprintSpeed));
+	TestTrue(TEXT("Sprinting"), Move->IsSprinting());
+	Set->RunAttackSpeed = SprintSpeed - 50.f;
+	TestTrue(TEXT("Sprinting faster than the set's speed"), Montages->CanRunAttack());
+	TestEqual(TEXT("A kept press sprinting: the combo, not the run attack"), Montages->ChooseAttack(1.f, Rate, false, /*bAllowRunAttack*/ false), 0);
+	Walk(3.f);
+	TestEqual(TEXT("A fresh press sprinting: _12"), Montages->ChooseAttack(1.f, Rate, false, /*bAllowRunAttack*/ true), 7);
+	TestEqual(TEXT("The secondary sprinting: its own (_08)"), Set->GetFirstAttack(true), 3);
+
+	// The server: _12 while its own character sprints that fast, then the combo from its recovery.
+	Walk(3.f);
+	TestTrue(TEXT("Taken"), Request(7));
+	TestEqual(TEXT("The server takes the run attack"), Montages->GetLastAttackIndex(), 7);
+	Walk(0.5f);
+	const int32 Played = Montages->GetActionsPlayed();
+	Request(0);
+	TestEqual(TEXT("Nothing before _12's recovery"), Montages->GetActionsPlayed(), Played);
+	Walk(0.7f);
+	TestTrue(TEXT("In _12's recovery"), Montages->ClassifyAttackPress() == EVCAttackPress::Continue);
+	TestEqual(TEXT("A kept press after _12: _01"), Montages->ChooseAttack(1.f, Rate, false, /*bAllowRunAttack*/ false), 0);
+
+	// Too slow for the server (an NPC's request has no allowance): the primary's own.
+	Walk(3.f);
+	Set->RunAttackSpeed = SprintSpeed + 50.f;
+	TestTrue(TEXT("Taken"), Request(7));
+	TestEqual(TEXT("Under the speed on the server: _01"), Montages->GetLastAttackIndex(), 0);
+
+	// The sprint let go: the combo at any speed.
+	Move->bWantsToSprint = false;
+	Walk(3.f);
+	Set->RunAttackSpeed = 10.f;
+	TestTrue(TEXT("Taken"), Request(7));
+	TestEqual(TEXT("Not sprinting on the server: _01"), Montages->GetLastAttackIndex(), 0);
 	return true;
 }
 

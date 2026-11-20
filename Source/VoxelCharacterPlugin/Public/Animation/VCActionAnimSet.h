@@ -268,6 +268,22 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Charge", meta = (ClampMin = "0"))
 	float ChargeHoldTime = 1.f;
 
+	/**
+	 * The run attack (the sword moves plan, D168), an index into AttackCombo: a primary press made while sprinting faster
+	 * than RunAttackSpeed plays it instead of the combo; its step names what a press after it continues with. Its montage
+	 * carries the capsule on the move (UVCAnimMetaData_CarriesCapsule), since its clip is authored at the sprint's speed.
+	 * -1: the set has none.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Run")
+	int32 RunAttack = -1;
+
+	/** The speed across local up (uu/s) over which a sprint's primary press plays the run attack (D168: halfway from the run's 400 to the sprint's 700). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Animation|Run", meta = (ClampMin = "0"))
+	float RunAttackSpeed = 550.f;
+
+	/** Whether the set has a run attack. */
+	bool HasRunAttack() const { return AttackCombo.IsValidIndex(RunAttack); }
+
 	/** The charge montage's held pose, looping. */
 	static const FName ChargeLoopSection;
 

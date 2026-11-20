@@ -250,6 +250,31 @@ public:
 	 */
 	bool CanStartCharge() const;
 
+	/**
+	 * The server's allowance on the run attack's speed for an owner's request (uu/s): the request's speed is read on the
+	 * server up to a move behind the owner's press.
+	 */
+	static constexpr float RunAttackSpeedTolerance = 100.f;
+
+	/**
+	 * Whether a primary press plays the run attack (the sword moves plan, D168): the set has one and the character
+	 * sprints faster than the set's speed.
+	 * @param bSetHasRunAttack Whether the held set has a run attack
+	 * @param bSprinting       Whether the character sprints (the gait, not the speed)
+	 * @param Speed            The character's speed across local up, uu/s
+	 * @param MinSpeed         The speed it must exceed (the set's RunAttackSpeed, less any allowance)
+	 * @return True for the run attack
+	 */
+	static bool CanRunAttackFrom(bool bSetHasRunAttack, bool bSprinting, float Speed, float MinSpeed);
+
+	/**
+	 * Whether this character's primary press plays the run attack now: CanRunAttackFrom with its set, its gait and its
+	 * speed across local up (D168).
+	 * @param SpeedTolerance uu/s taken off the set's RunAttackSpeed (RunAttackSpeedTolerance for an owner's request on the server)
+	 * @return True for the run attack
+	 */
+	bool CanRunAttack(float SpeedTolerance = 0.f) const;
+
 	/** Keeps the start of a charge on this machine (the owner at its press, the server at its request). */
 	void BeginCharge();
 
@@ -278,13 +303,15 @@ public:
 
 	/**
 	 * Picks the attack to play now and keeps it as this machine's current attack: the next of the combo for the button
-	 * when a press now continues it, else the button's first (the sword moves plan, D166: the combo's table).
-	 * @param AttackSpeed  Attacks per second (the weapon's)
-	 * @param OutPlayRate  The play rate (GetAttackPlayRate)
-	 * @param bSecondary   The secondary attack's button (IA_SecondaryAttack), else the primary's
+	 * when a press now continues it, else the button's first (the sword moves plan, D166: the combo's table). A fresh
+	 * primary press while sprinting fast plays the set's run attack instead (D168).
+	 * @param AttackSpeed     Attacks per second (the weapon's)
+	 * @param OutPlayRate     The play rate (GetAttackPlayRate)
+	 * @param bSecondary      The secondary attack's button (IA_SecondaryAttack), else the primary's
+	 * @param bAllowRunAttack Whether the press may play the run attack (false for a kept press and a charge's release)
 	 * @return The combo index (0 with no combo); -1 for the secondary when the set has none (nothing is kept)
 	 */
-	int32 ChooseAttack(float AttackSpeed, float& OutPlayRate, bool bSecondary = false);
+	int32 ChooseAttack(float AttackSpeed, float& OutPlayRate, bool bSecondary = false, bool bAllowRunAttack = false);
 
 	/**
 	 * Server: whether an attack may start now and which (D104, G179). An attack the owner picked on this very machine at
@@ -293,7 +320,8 @@ public:
 	 * button's next of the combo within the window (plus the tolerance), else the server picks its own for the same
 	 * button (D166: an index the secondary plays asks for the secondary's). The charged strike (D167) is taken when this
 	 * machine's charge has run its charge time less AttackRequestTolerance, else the first attack is played. Any attack
-	 * taken ends the charge. The attack is kept as current.
+	 * taken ends the charge. The run attack (D168) is taken while this machine's character sprints faster than the set's
+	 * speed less RunAttackSpeedTolerance, else the server picks the primary's. The attack is kept as current.
 	 * @param RequestedIndex The owner's combo index, -1 for none (an NPC)
 	 * @param AttackSpeed    Attacks per second (the weapon's)
 	 * @param OutIndex       The combo index to play

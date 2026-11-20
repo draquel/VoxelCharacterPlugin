@@ -567,8 +567,8 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 	// A press kept during an attack's swing plays the next attack at its recovery (D104).
 	if (ActionMontages && IsLocallyControlled() && ActionMontages->TakeDueBufferedAttack())
 	{
-		// A kept press never starts a charge: its button may have come up long ago (D167).
-		StartMeleeSwing(ActionMontages->IsBufferedAttackSecondary(), /*bAllowCharge*/ false);
+		// A kept press never starts a charge (its button may have come up long ago, D167) nor the run attack (D168).
+		StartMeleeSwing(ActionMontages->IsBufferedAttackSecondary(), /*bFreshPress*/ false);
 	}
 	UpdateCharge();
 	UpdateDrawnGrip();
@@ -967,7 +967,7 @@ bool AVCCharacterBase::TryStartMeleeAttack()
 	return StartMeleeSwing();
 }
 
-bool AVCCharacterBase::StartMeleeSwing(bool bSecondary, bool bAllowCharge)
+bool AVCCharacterBase::StartMeleeSwing(bool bSecondary, bool bFreshPress)
 {
 	if (!CombatComponent || IsIncapacitated())
 	{
@@ -1007,7 +1007,7 @@ bool AVCCharacterBase::StartMeleeSwing(bool bSecondary, bool bAllowCharge)
 		ActionMontages->EndCharge();
 	}
 	// A primary press from rest charges (D167): the windup at once, the first attack at the release.
-	if (!bSecondary && bAllowCharge && ActionMontages && ActionMontages->CanStartCharge())
+	if (!bSecondary && bFreshPress && ActionMontages && ActionMontages->CanStartCharge())
 	{
 		ActionMontages->BeginCharge();
 		ActionMontages->PlayActionLocal(EVCAnimAction::Charge, 0);
@@ -1030,7 +1030,8 @@ bool AVCCharacterBase::StartMeleeSwing(bool bSecondary, bool bAllowCharge)
 		const UVCMeleeAttackAbility* Melee = PS && PS->MeleeAttackAbilityClass
 			? Cast<UVCMeleeAttackAbility>(PS->MeleeAttackAbilityClass->GetDefaultObject()) : nullptr;
 		float PlayRate = 1.f;
-		Variant = ActionMontages->ChooseAttack(Melee ? Melee->GetAttackSpeed(this) : 1.f, PlayRate, bSecondary);
+		// A fresh primary press while sprinting fast plays the run attack (D168).
+		Variant = ActionMontages->ChooseAttack(Melee ? Melee->GetAttackSpeed(this) : 1.f, PlayRate, bSecondary, bFreshPress);
 		if (Variant < 0)
 		{
 			return false;
@@ -3068,7 +3069,7 @@ void AVCCharacterBase::ReleasePrimaryAction()
 		else
 		{
 			ActionMontages->EndCharge();
-			StartMeleeSwing(/*bSecondary*/ false, /*bAllowCharge*/ false);
+			StartMeleeSwing(/*bSecondary*/ false, /*bFreshPress*/ false);
 		}
 	}
 	ReleaseRangedAttack();
