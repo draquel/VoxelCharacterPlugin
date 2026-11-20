@@ -5,6 +5,8 @@
 
 const FName UVCActionAnimSet::ChargeLoopSection(TEXT("Loop"));
 const FName UVCActionAnimSet::ChargeEndSection(TEXT("End"));
+const FName UVCActionAnimSet::AirLoopSection(TEXT("Loop"));
+const FName UVCActionAnimSet::LandingSection(TEXT("Landing"));
 
 FString UVCAnimNotify_ActionHit::GetNotifyName_Implementation() const
 {
@@ -128,6 +130,17 @@ float UVCActionAnimSet::GetChargeTime() const
 	const int32 Loop = Charge->GetSectionIndex(ChargeLoopSection);
 	const float Windup = Loop != INDEX_NONE ? Charge->CompositeSections[Loop].GetTime() : Charge->GetPlayLength();
 	return Windup + ChargeHoldTime;
+}
+
+float UVCActionAnimSet::GetLandingTime(int32 Index) const
+{
+	const UAnimMontage* Montage = AttackCombo.IsValidIndex(Index) ? AttackCombo[Index].Get() : nullptr;
+	if (!Montage)
+	{
+		return 0.f;
+	}
+	const int32 Landing = Montage->GetSectionIndex(LandingSection);
+	return Landing != INDEX_NONE ? Montage->CompositeSections[Landing].GetTime() : Montage->GetPlayLength();
 }
 
 float UVCActionAnimSet::GetAttackDamageMultiplier(int32 Index) const

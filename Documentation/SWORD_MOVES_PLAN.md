@@ -1,7 +1,9 @@
 # Sword Moves Plan: the sword attack flow's phases B to F
 
-> **Agreed 2026-11-19** (the user: "Yes, as recommended": D165-D171 each as recommended, section 7). **B and C built
-> 2026-11-19, F and D 2026-11-20** (section 8); E to come. Lane 1 (B, C, D) and lane 2 (F) run in parallel, then E (D171).
+> **Frozen 2026-11-20.** This plan is history: agreed 2026-11-19 (the user: "Yes, as recommended": D165-D171 each as
+> recommended, section 7); B and C built 2026-11-19, F, D and E 2026-11-20 (section 8), lane 1 (B, C, D) beside lane 2
+> (F), then E (D171). As it is now: `CHARACTER_SYSTEM.md` "GAS" › The sword's attack flow and The dodge and the roll,
+> "Movement" › Montage root motion, "Input". The TwoHand set's moves (a phase G) were left until wanted.
 > Phases B-F of `SWORD_ATTACK_FLOW_PLAN.md` (frozen; phase A built 2026-11-12), the pack demo's other moves:
 > B the secondary branch (`draquel/UE5_PluginDev#422`), C the charge (#423), D the run attack (#424), E the air and
 > plunge attacks (#425), F the dodge and the roll (#426). Owner: VoxelCharacterPlugin (the montage component, the melee
@@ -302,7 +304,6 @@ its 210 parity lines identical, the Nanite layouts 0 differ. Before the rebase t
 86c3483 (1068 of 1068, the editor gate 36 of 36) with `build.ps1 -Shipping` linking (the test file added); B alone built
 with its tests passing before its commit.
 
-**Not done:** E (the air and plunge attacks), after D.
 
 **F, the dodge and the roll** (#426; built 2026-11-20 on `claude/sword-moves-f` in VoxelCharacterPlugin and the
 parent). **The measurement first (D170's network):** the moves were built in phase A's form with D165's request and
@@ -388,3 +389,38 @@ local up, standing; the slope slowed it as it slowed the sprint (0.89 of the pla
 warning; the headless suite 1076 of 1076 (dev's 1074 and D's two), no new warning kind against B and C's last run (only the
 new test world's name in the EndPlay line every `FPlayWorld` test logs); the editor gate 36 of 36 (the replication tests
 with a dedicated server among them), its 210 parity lines identical, the Nanite layouts 0 of 9 differ.
+
+**E, the air and plunge attacks** (#425; built 2026-11-20 on `claude/sword-moves-e` in VoxelCharacterPlugin and the
+parent, on `dev` with B, C, D and F). As D169: a primary press while falling plays `_Air_02`, the secondary's
+`_Plunge_01`, each one montage of three sections (the swing, the fall's loop looping, the landing; the layers script's
+section names `Loop` and `Landing`), the SwordShield set's `AirAttack` 8 and `PlungeAttack` 9 in its combo, measured as
+section 3 has them (the air swing's hit 0.367 s, its landing at 1.333 and its recovery 0.733 into it; the plunge's slam
+0.133 into its landing at 1.233, recovering 0.533 into it). One per fall, either one. Every machine jumps to the landing
+section at its own landing (the movement component's mode change, not in a replay of moves; into the water the montage
+stops), the attack's times then counting from the landing; the plunge's slam at the server's own landing (the melee
+ability waits for the fall's end) hits every hostile within `PlungeRadius` (200 uu) of the feet, across local up and
+along it, at 1.5 times the weapon's damage (its step's multiplier). The server takes an air index while its character
+falls or landed less than 0.2 s ago, else refuses it. The fall stays the fall, and to keep it so **no montage's root
+motion is taken in a fall** (`ShouldTakeMontageRootMotion`'s `bFalling`): taken, a montage's root motion replaces the
+fall's velocity across local up, so a jump forward with no input would stop in the air under the swing; D169 says the fall
+is unchanged, so this follows from it and is not a new decision. Tests `VoxelCharacter.Anim.Sword.AirAttackRule` (the
+fall and its allowance, one per fall, the slam's reach on a plane and under a planet's up, the set, no root motion in a
+fall; the layers script's set: the sections, the hits, the recoveries) and `VoxelCharacter.Combat.Melee.Plunge` (a
+fighter dropped onto a floor among three dummies: nothing before the landing, the two at 150 and 190 uu at 1.5 times its
+swing, not the one at 260; then the press classes from the landing, the allowance, and the air attack once a fall).
+
+**Checked in PIE** on `CharacterTest` with `vox.PIE.Net 2 lag=100` (`Saved/QA/sword_moves/trace_d_e_*.txt`): from a
+jump, the air attack 0.3 s after it on the owner and the server 0.12-0.13 s later and the other client, each jumping to
+the landing at its own touchdown (1.26, 1.39, 1.51 s), ending at the same place with no correction; from a 2 m ledge
+drop the air attack and the plunge the same, the fall's speed kept (282 to 317 uu/s under the walk's input); a 30 m fall
+held the loop until the touchdown and a second press in it did nothing; a running jump with the input let go kept its
+341 uu/s through the swing. The plunge among three dummies placed 150, 176 and 260 uu from where it landed hit the first
+two for 27 (the sword's swing at one of them: 18) and not the third. On `PlanetTest` at 30 N 40 E, on a slope, the air
+attack from a jump played to its landing at the touchdown; at 31 N 40 E with the NPCs' AI off (`vc.AI.Enabled 0`; with
+it on, the dummies walk up to the player before the slam) the plunge's slam hit a dummy 184 uu across local up from the
+feet and missed one 617 uu away.
+
+**Gate** (E, the branch's tip): `build.ps1` no warning (`build_warnings.py`), `build.ps1 -Shipping` linking with no warning;
+the headless suite 1078 of 1078 (dev's 1076 and E's two), no new warning kind against D's run (only the new test world's
+name in the EndPlay line every `FPlayWorld` test logs); the editor gate 36 of 36 (the replication tests with a dedicated
+server among them), its 210 parity lines identical, the Nanite layouts 0 of 9 differ. No finding.

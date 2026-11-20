@@ -7,6 +7,8 @@
 #include "GameplayTagContainer.h"
 #include "VCMeleeAttackAbility.generated.h"
 
+class UVCActionMontageComponent;
+
 /**
  * Melee attack: a server-side sweep along the avatar's view, one hit on the first hostile damageable, damage from the
  * main-hand weapon fragment or bare hands.
@@ -66,9 +68,23 @@ public:
 	 */
 	static bool HoldsMeleeWeapon(const AActor* Avatar);
 
+	/**
+	 * Whether the plunge's slam reaches a target (the sword moves plan, D169): within the radius of the feet across local
+	 * up, and within it along local up.
+	 * @param Feet   The attacker's feet (the capsule's bottom)
+	 * @param Up     Local up there (the gravity frame's)
+	 * @param Target The target's location
+	 * @param Radius The set's PlungeRadius
+	 * @return True when the slam hits it
+	 */
+	static bool IsInSlam(const FVector& Feet, const FVector& Up, const FVector& Target, float Radius);
+
 protected:
 	virtual void ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 		const FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
+
+	virtual void EndAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		const FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled) override;
 
 	/** Everything one swing needs, resolved from the main-hand weapon fragment or unarmed defaults. */
 	struct FAttackParameters
@@ -94,6 +110,21 @@ protected:
 	/** The swing's hit time arrived: apply it unless the attacker went down meanwhile, then end. */
 	UFUNCTION()
 	void OnHitTime();
+
+	/** The plunge's slam (authority, D169): every hostile damageable within the radius of the feet takes the attack. */
+	void ApplySlam(AActor* Avatar, const FAttackParameters& Attack, float Radius) const;
+
+	/** The server's fall ended during a plunge: the slam on the ground (not in the water) unless the attacker went down, then end. */
+	void OnPlungeLanded(bool bOnGround);
+
+	/** Stops waiting for the plunge's landing. */
+	void StopWaitingForLanding();
+
+	/** The plunge waiting for the server's landing: its montage component, the binding and the slam's radius. */
+	TWeakObjectPtr<UVCActionMontageComponent> PlungeMontages;
+	FDelegateHandle PlungeLandedHandle;
+	float PlungeRadius = 0.f;
+	bool bPlungePending = false;
 
 	/** World time of the last activation that got past the rate limit. */
 	double LastAttackTimeSeconds = -1.0;

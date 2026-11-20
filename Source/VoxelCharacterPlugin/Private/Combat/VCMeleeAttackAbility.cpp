@@ -12,6 +12,10 @@
 #include "GameFramework/Actor.h"
 #include "CollisionQueryParams.h"
 #include "CollisionShape.h"
+#include "Engine/OverlapResult.h"
+#include "Components/CapsuleComponent.h"
+#include "GameFramework/Character.h"
+#include "Movement/VCGravityFrame.h"
 
 #if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
 #include "Components/EquipmentManagerComponent.h"
@@ -197,6 +201,24 @@ void UVCMeleeAttackAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 			Montages->PlayActionForEveryone(EVCAnimAction::Attack, Variant, PlayRate, Pawn && Pawn->IsPlayerControlled());
 			HitDelay = UVCActionAnimSet::GetHitTime(Montage) / PlayRate;
 		}
+		// The plunge (D169): its hit is the slam at this machine's landing, however long the fall; taken within the
+		// allowance after a landing, it slams now.
+		const UVCActionAnimSet* Set = Montages->GetCurrentActionAnimSet();
+		if (Set && Variant == Set->GetAirAttack(/*bSecondary*/ true))
+		{
+			PendingAttack = Attack;
+			PlungeRadius = Set->PlungeRadius;
+			if (!Montages->IsFalling())
+			{
+				ApplySlam(Avatar, Attack, PlungeRadius);
+				EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
+				return;
+			}
+			bPlungePending = true;
+			PlungeMontages = Montages;
+			PlungeLandedHandle = Montages->OnFallEnded.AddUObject(this, &UVCMeleeAttackAbility::OnPlungeLanded);
+			return;
+		}
 	}
 	else
 	{
@@ -237,6 +259,105 @@ void UVCMeleeAttackAbility::OnHitTime()
 		ApplySwing(Avatar, PendingAttack);
 	}
 	EndAbility(GetCurrentAbilitySpecHandle(), GetCurrentActorInfo(), GetCurrentActivationInfo(), true, false);
+}
+
+void UVCMeleeAttackAbility::EndAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+	const FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled)
+{
+	StopWaitingForLanding();
+	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
+}
+
+void UVCMeleeAttackAbility::StopWaitingForLanding()
+{
+	if (UVCActionMontageComponent* Montages = PlungeMontages.Get())
+	{
+		Montages->OnFallEnded.Remove(PlungeLandedHandle);
+	}
+	PlungeMontages.Reset();
+	PlungeLandedHandle.Reset();
+	bPlungePending = false;
+}
+
+void UVCMeleeAttackAbility::OnPlungeLanded(bool bOnGround)
+{
+	if (!bPlungePending)
+	{
+		return;
+	}
+	StopWaitingForLanding();
+	AActor* Avatar = GetAvatarActorFromActorInfo();
+	const UAbilitySystemComponent* ASC = GetAbilitySystemComponentFromActorInfo();
+	const bool bDown = ASC && (ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Dead) || ASC->HasMatchingGameplayTag(CGFGameplayTags::State_Downed));
+	// Into the water the plunge ends without a slam.
+	if (Avatar && bOnGround && !bDown)
+	{
+		ApplySlam(Avatar, PendingAttack, PlungeRadius);
+	}
+	EndAbility(GetCurrentAbilitySpecHandle(), GetCurrentActorInfo(), GetCurrentActivationInfo(), true, false);
+}
+
+bool UVCMeleeAttackAbility::IsInSlam(const FVector& Feet, const FVector& Up, const FVector& Target, float Radius)
+{
+	const FVector Offset = Target - Feet;
+	const double Along = FVector::DotProduct(Offset, Up);
+	return FMath::Abs(Along) <= Radius && (Offset - Up * Along).SizeSquared() <= FMath::Square(static_cast<double>(Radius));
+}
+
+void UVCMeleeAttackAbility::ApplySlam(AActor* Avatar, const FAttackParameters& Attack, float Radius) const
+{
+	UWorld* World = Avatar ? Avatar->GetWorld() : nullptr;
+	const ACharacter* Character = Cast<ACharacter>(Avatar);
+	if (!World || !Character)
+	{
+		return;
+	}
+	const FVector Up = FVCGravityFrame::GetUp(Character->GetCharacterMovement());
+	const FVector Feet = Character->GetActorLocation() - Up * Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	// Candidates by the bodies' collision near the feet, then the slam's own reach from the feet to each one's place.
+	TArray<FOverlapResult> Overlaps;
+	FCollisionObjectQueryParams Objects;
+	Objects.AddObjectTypesToQuery(ECC_Pawn);
+	Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
+	Objects.AddObjectTypesToQuery(ECC_PhysicsBody);
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCPlungeSlam), /*bTraceComplex*/ false, Avatar);
+	World->OverlapMultiByObjectType(Overlaps, Feet, FQuat::Identity, Objects, FCollisionShape::MakeSphere(Radius * 1.5f), Params);
+	TSet<AActor*> Hit;
+	int32 Landed = 0;
+	for (const FOverlapResult& Overlap : Overlaps)
+	{
+		AActor* Target = Overlap.GetActor();
+		if (!Target || Target == Avatar || Hit.Contains(Target) || !UCGFCombatStatics::FindDamageable(Target).GetObject()
+			|| !UCGFCombatStatics::AreHostile(Avatar, Target) || !IsInSlam(Feet, Up, Target->GetActorLocation(), Radius))
+		{
+			continue;
+		}
+		Hit.Add(Target);
+		float Damage = Attack.Damage;
+		const bool bCritical = Attack.CritChance > 0.f && FMath::FRand() < Attack.CritChance;
+		if (bCritical)
+		{
+			Damage *= Attack.CritMultiplier;
+		}
+		FCGFDamageContext Context = UVCCombatStatics::MakeDamageContext(Avatar, Avatar, Damage, Attack.DamageType);
+		Context.HitLocation = Target->GetActorLocation();
+		Context.HitNormal = Up;
+		Context.SourceItemInstanceId = Attack.ItemInstanceId;
+		if (bCritical)
+		{
+			Context.ContextTags.AddTag(CGFGameplayTags::Damage_Critical);
+		}
+		const ECGFDamageResult Result = UVCCombatStatics::ApplyDamageToActor(Target, Context);
+		UE_LOG(LogVoxelCharacter, Log, TEXT("%s plunge slam -> %s: %.1f %s%s (%s)"), *GetNameSafe(Avatar), *GetNameSafe(Target), Damage,
+			*Attack.DamageType.ToString(), bCritical ? TEXT(" CRIT") : TEXT(""), *UEnum::GetValueAsString(Result));
+		Landed += Result == ECGFDamageResult::Applied ? 1 : 0;
+	}
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s plunge slam at (%.0f, %.0f, %.0f): %d hit, radius %.0f"), *GetNameSafe(Avatar), Feet.X, Feet.Y, Feet.Z, Hit.Num(), Radius);
+	if (Landed > 0)
+	{
+		// One slam wears the weapon once, as a swing that lands does.
+		ApplyWeaponWear(Avatar);
+	}
 }
 
 void UVCMeleeAttackAbility::ApplySwing(AActor* Avatar, const FAttackParameters& Attack) const
