@@ -1,9 +1,12 @@
 # VoxelCharacterPlugin — Claude Code Instructions
 
-> State as of 2026-11-02 (code review CR5). Terms: `Documentation/GLOSSARY.md`.
+> State as of 2026-11-20 (the sword moves plan done and frozen: the secondary branch, the charge, the run attack, the air and plunge attacks, the dodge and the roll). Terms: `Documentation/GLOSSARY.md`.
 
 The player and NPC layer: character, controller, player state, game mode, movement, camera, input, combat on GAS, NPC
-AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; one runtime module, `VoxelCharacterPlugin`.
+AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; a runtime module, `VoxelCharacterPlugin`, a second
+runtime module, `VoxelCharacterAnimation` (the player's motion matching: PoseSearch stays out of the first, D45), and an
+editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the animation content; the graph node of
+`FVCAnimNode_FootBoneIK`).
 
 ## Reading order
 
@@ -13,9 +16,21 @@ AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; one runtime mo
 2. `Documentation/MAP_UI_WIDGETS.md` — the minimap and world map, on planes and planets.
 3. `Documentation/EDITOR_CONSOLE_GUIDE.md` at the project root, §4 — every `vc.*` cvar and Exec function; the game
    module's `vox.*` commands drive this plugin's pawn for QA.
-4. `Documentation/FINDINGS.md` at the project root — open findings in this plugin (none since G75 closed, 2026-11-02).
+4. `Documentation/FINDINGS.md` at the project root — open findings in this plugin: G145 (a MetaHuman on a block step),
+   the character animation plan's leftover.
 5. History only: `Documentation/CharacterController_Design.md` (the February design, frozen),
-   `COMBAT_FOUNDATION_PLAN.md` and `EQUIPMENT_LOOP_PLAN.md` (frozen), `Documentation/Archive/ImplementationPlan.md`.
+   `COMBAT_FOUNDATION_PLAN.md`, `EQUIPMENT_LOOP_PLAN.md`, `RANGED_COMBAT_PLAN.md` (the bow, D52-D57, done 2026-11-07,
+   now in `CHARACTER_SYSTEM.md` "The bow") and `CHARACTER_ANIMATION_PLAN.md` (animation, IK and bodies, D43-D51, done
+   2026-11-07, now in `CHARACTER_SYSTEM.md` "Animation", "Appearance" and "NPCs") and `CHARACTER_REFINEMENT_PLAN.md`
+   (holding, the upper body, aiming, handling, D70-D75, done 2026-11-08, now in `CHARACTER_SYSTEM.md` "The bow",
+   "Movement", "Animation", "Camera", "HUD and widgets" and "Tests") and `LOCOMOTION_STATE_MACHINE_PLAN.md` (the
+   player's locomotion as a state machine over the Essential Animation packs, D86-D92, done 2026-11-11, now in
+   `CHARACTER_SYSTEM.md` "Animation" › The state machine and "Movement") and `SWORD_ATTACK_FLOW_PLAN.md` (the sword's
+   combo after the pack's demo, broken off by movement after the follow-through, D102-D107, phase A done 2026-11-12,
+   now in `CHARACTER_SYSTEM.md` "GAS" › The sword's attack flow and "Movement" › Montage root motion) and
+   `SWORD_MOVES_PLAN.md` (its phases B-F, the demo's other attacks, D165-D171, B and C built 2026-11-19, D, E and F
+   2026-11-20, frozen 2026-11-20), all frozen;
+   `Documentation/Archive/ImplementationPlan.md`.
 
 Across plugins: `Plugins/CommonGameFramework/Documentation/ARCHITECTURE.md`; VoxelWorlds'
 `Plugins/VoxelWorlds/Documentation/Features/WORLD_MODES.md` for frames, the sea and the surface queries this plugin
@@ -27,7 +42,7 @@ calls.
 |---|---|
 | `AVCCharacterBase`, `AVCPlayerController`, `AVCPlayerState` (ASC host), `AVCGameModeBase`, `AVCNPCCharacterBase` (own ASC), `AVCNPCAIController` | `UInventoryComponent` (ItemInventoryPlugin), `UInteractionComponent` (InteractionPlugin), `UEquipmentManagerComponent` (EquipmentPlugin) |
 | `UVCMovementComponent`, `FVCGravityFrame`, `FVCTerrainQueryHelper` | VoxelWorlds' chunk manager, edit manager, scatter manager and surface navigation |
-| `UVCCameraManager` and its modes, `UVCAnimInstance`, `UVCInputConfig` | `UAbilitySystemComponent`, `UGameplayEffect`, `UGameplayAbility` (GAS) |
+| `UVCCameraManager` and its modes, `UVCAnimInstance`, `UVCActionMontageComponent` and `UVCActionAnimSet`, `UVCCharacterAppearance` and `UVCAppearanceComponent`, `FVCAnimNode_FootBoneIK`, `UVCLocomotionAnimSet`, `UVCInputConfig` | `UAbilitySystemComponent`, `UGameplayEffect`, `UGameplayAbility` (GAS) |
 | `UVCCombatComponent` and the combat GAS classes, `UVCBlockInteractionComponent`, `UVCGatherTable` | `ICGFDamageableInterface`, `FCGFDamageContext`, `ICGFInventoryInterface`, `ICGFLightBearerInterface`, `ICGFRestPointInterface`, combat tags (CommonGameFramework) |
 | The HUD widgets, the map widgets, `UVCMapMarkerRegistry`, `UVCSettings` | Widget classes from the gameplay plugins (`UHotbarWidget`, `UItemCursorWidget`, ...) |
 
@@ -43,8 +58,19 @@ calls.
 - Cross-plugin contracts go through CommonGameFramework's `ICGF*` interfaces and gameplay tags; resolve at runtime with
   interface casts or `FindComponentByClass`.
 - The plugin must compile and run (movement, camera, input, combat) with all three absent.
+- WorldWeatherPlugin is optional the same way (`WITH_WORLD_WEATHER`, the weather plan's P4): the movement component
+  reads the weather's conditions at the pawn in its `.cpp` only (the wind push, the wet grip, and since P5 the air
+  temperature and a wet level); without the plugin the wind is zero, the ground dry and the air 15 C. The character's
+  `State.Weather.Wet` / `Cold` (P5) read those cached values, so they need no include of their own.
 - VoxelWorlds is a hard dependency, but read its settings by name where a dependency would be upward
   (`voxel.Edit.PlayerInputs` is looked up, not linked).
+- MetaHumans are content, not a dependency: an appearance (`UVCCharacterAppearance`) names a MetaHuman's Blueprint as
+  its parts actor, and nothing links RigLogic, HairStrands or LiveLink (the project enables those plugins). Which body
+  a world gives the player is the project's data (`UVCSettings`' appearances, D43), never code.
+- Niagara is a dependency (the water plan's W1: the splash and the wake); the systems themselves are the project's
+  content, named in `UVCSettings`, and a missing one is that effect absent.
+- The engine's AnimationBudgetAllocator plugin is a dependency (P7): the NPCs' meshes are
+  `USkeletalMeshComponentBudgeted`; the project enables the budget (`a.Budget.Enabled`, `a.Budget.BudgetMs`) in its config.
 
 ### Naming and C++
 
@@ -82,6 +108,12 @@ calls.
   gravity-relative yaw across frames (the frame twists near a planet's south pole).
 - After placing a pawn on a planet: `UpdatePlanetGravity()` then `SnapUprightToGravity()`.
 - NPCs use `UVCMovementComponent` too; do not give a voxel walker the stock component.
+- The player's ground numbers (the speed caps, acceleration, braking, friction, yaw rates) come from the gait table
+  (`FVCMovementTable GaitTable`, D75), applied every tick inside `PerformMovement` from saved-move state and the
+  rotation mode; never set `MaxWalkSpeed`, `MaxAcceleration`, `BrakingDecelerationWalking`, `GroundFriction` or
+  `RotationRate` on a player's component from outside (the next tick overwrites them): change the table, or a preset.
+  Anything the table reads must be state both the server and the predicting client hold. NPCs have the table off and
+  keep their own numbers.
 - Edits must never trap a pawn: the server refuses a place overlapping any pawn (`WouldPlaceTrapPawn`), and
   `ResolveTerrainEmbedding` is the safety net for everything else. Keep both.
 
@@ -92,6 +124,29 @@ calls.
   the chain; they do not replace or bypass it. Dead or downed characters ignore both.
 - Edit mode is local input state and gates unarmed digging and placing; the server validates every request regardless.
 - A view-mode-dependent system joins `AVCCharacterBase::SetViewMode`'s sequence.
+- The near clip plane is the process's and the project's (`NearClipPlane` in the project's engine settings): never
+  assign `GNearClippingPlane`. A view that needs a nearer plane for a while holds it through `FVCNearClipOverride`
+  (the plane found is remembered and put back) and ends the hold on every way out, `EndPlay` included (G192).
+- The underwater post-process (`UVCUnderwaterPostProcess`) is local-player-only (G133): the character creates it on the
+  pawn a local player controller views through and destroys it when that controller goes (`UpdateUnderwaterPostProcess`
+  on `BeginPlay` and `NotifyControllerChanged`). A view effect never lives on a remote player's or an NPC's pawn: an
+  unbound post-process volume tints every view in its world.
+- The water's effects (the water plan's W1) are cosmetic and never replicated: `UVCWaterEffectsComponent` makes the
+  splash, the wake and their sounds on each machine from the pawn's own movement mode, and the character creates it
+  everywhere but on a dedicated server (`PlaysIn`). Read the sea for a view or an effect through
+  `FVCTerrainQueryHelper::SampleWaterSurface` (in water and below the level; the water flag alone is true just above
+  the line), not `IsPositionUnderwater`.
+- The current of a river reach (the hydrology plan's H6) is read inside the swim move, at the pawn's position as the
+  move starts (`UVCMovementComponent::GetSwimCurrentAt`), and `Velocity` stays the swimmer's own: never cache the
+  current with the terrain context or keep any of it between moves, or a client's replay and the server's simulation
+  of one move differ and the client is corrected along the river (the wind's push is cached, and that is G220). Only
+  a swimmer is carried (D150). `VoxelEngine.Replication.RiverSwim` (the in-editor gate) holds it.
+- Buoyancy (the water plan's W2B). The framework's dropped item gets the voxel world's water through
+  `UVCWaterSurfaceBridge`, which implements CommonGameFramework's `ICGFWaterSurfaceInterface` and registers with
+  `UCGFWaterSubsystem`: never make a framework plugin read VoxelWorlds, and never cache a level in the bridge (the
+  sample is per position and per call; lakes and reaches will be more bodies). A dead body floats by
+  `FVCRagdollBuoyancy`, applied to the ragdoll on every machine while it simulates; nothing of a ragdoll replicates, so
+  whatever moves one must give the same result from the same world on each machine.
 
 ### Server authority
 

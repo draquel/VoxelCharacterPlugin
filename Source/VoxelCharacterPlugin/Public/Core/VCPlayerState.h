@@ -14,6 +14,10 @@ class UVCCharacterAttributeSet;
 class UVCCombatAttributeSet;
 class UGameplayEffect;
 class UGameplayAbility;
+class UVCCharacterAppearance;
+
+/** The player's appearance changed (the server when it resolves one, clients when it replicates). */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnVCAppearanceChanged);
 
 /**
  * Player state that owns the Ability System Component.
@@ -46,6 +50,24 @@ public:
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
 	TSubclassOf<UGameplayAbility> MeleeAttackAbilityClass;
+
+	/**
+	 * The bow's attack, granted with the melee attack (ranged combat plan B3). Defaults to UVCRangedAttackAbility; None
+	 * disables shooting.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
+	TSubclassOf<UGameplayAbility> RangedAttackAbilityClass;
+
+	/** The shield's guard, granted with the attacks (D94). Defaults to UVCBlockAbility; None disables blocking. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
+	TSubclassOf<UGameplayAbility> BlockAbilityClass;
+
+	/**
+	 * The dodge and the roll (the sword moves plan, D170), granted with the attacks. Defaults to UVCDodgeAbility; None
+	 * disables them.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|GAS")
+	TSubclassOf<UGameplayAbility> DodgeAbilityClass;
 
 	// --- Death / Respawn ---
 
@@ -146,11 +168,44 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Progression")
 	FOnVCProgressionChanged OnProgressionChanged;
 
+	// --- Appearance (character animation P6) ---
+
+	/** @return The body the player wears: resolved on the server, replicated (null: the pawn Blueprint's own body) */
+	const TSoftObjectPtr<UVCCharacterAppearance>& GetAppearance() const { return Appearance; }
+
+	/**
+	 * Authority: the player's own choice of body, saved with the player; null leaves it to the game mode and the settings.
+	 * Resolves the appearance again.
+	 * @param Choice The appearance, or null
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Appearance")
+	void SetChosenAppearance(const TSoftObjectPtr<UVCCharacterAppearance>& Choice);
+
+	/**
+	 * Authority: works out the body the player wears: its own choice, else the game mode's PlayerAppearance, else the
+	 * project settings' for the voxel world's meshing mode, else their default (null: the pawn Blueprint's own body).
+	 */
+	void ResolveAppearance();
+
+	/** Fires on the server when the appearance changes and on every client when it replicates. */
+	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Appearance")
+	FOnVCAppearanceChanged OnAppearanceChanged;
+
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
 	UFUNCTION()
 	void OnRep_Progression();
+
+	UFUNCTION()
+	void OnRep_Appearance();
+
+	/** The body the player wears (ResolveAppearance). */
+	UPROPERTY(ReplicatedUsing = OnRep_Appearance)
+	TSoftObjectPtr<UVCCharacterAppearance> Appearance;
+
+	/** The player's own choice (server only; saved). */
+	TSoftObjectPtr<UVCCharacterAppearance> ChosenAppearance;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Progression, BlueprintReadOnly, Category = "VoxelCharacter|Progression")
 	FVCProgressionStats Progression;

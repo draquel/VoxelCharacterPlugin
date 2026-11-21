@@ -15,6 +15,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCPlayerLoggingOut, AVCPlayerStat
 /** A player asked to save the world (the pause menu's Save; QA R20). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVCSaveRequested, AController*, RequestedBy);
 
+class UVCCharacterAppearance;
+
 /**
  * Game mode base that owns player respawn for the voxel character.
  *
@@ -75,6 +77,13 @@ public:
 	bool bKeepCorpse = true;
 
 	/**
+	 * The body every player wears in this game mode's maps, over the project settings' (character animation P6); a
+	 * player's own choice still comes first. Empty: the settings decide.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Appearance")
+	TSoftObjectPtr<UVCCharacterAppearance> PlayerAppearance;
+
+	/**
 	 * Called by the dying pawn on authority. Schedules the respawn.
 	 * @param Controller     The player's controller.
 	 * @param DeathTransform Where the pawn died.
@@ -106,6 +115,43 @@ public:
 	 */
 	static FTransform ResolveRespawnTransform(EVCRespawnPolicy Policy, bool bHasRestPoint, const FTransform& RestPoint,
 		const FTransform& DeathTransform, bool& bOutUsePlayerStart);
+
+	/**
+	 * The distance between two players' spawn places (G244). A player who starts where another player's pawn already
+	 * stands is given another player start, or a place this far from the taken one on rings around the start; a pawn the
+	 * terrain wait holds has its collision off, so the engine's own occupancy test never sees it. 0: every player at the
+	 * start itself (two pawns released inside each other push one out, down the slope).
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Spawn", meta = (ClampMin = "0"))
+	float PlayerSpawnSpacing = 250.f;
+
+	/** Rings of places around a taken start (6, 12, 18 places...); past the last the player spawns at the start itself. */
+	static constexpr int32 PlayerSpawnRings = 3;
+
+	/**
+	 * Pure: whether another pawn stands at a spawn place: within half the spacing of it across local up, and within
+	 * 5,000 uu along it (a pawn in a dungeon under the start, or across a planet, does not take it).
+	 * @param Place   The spawn place.
+	 * @param Up      Local up there (+Z, or the radius on a planet).
+	 * @param Taken   The other players' pawns.
+	 * @param Spacing The distance between two places.
+	 * @return True when one of Taken stands there.
+	 */
+	static bool IsSpawnPlaceTaken(const FVector& Place, const FVector& Up, TConstArrayView<FVector> Taken, float Spacing);
+
+	/**
+	 * Pure: the first free spawn place at a start (G244): the start itself, then rings of 6 * ring places, ring * Spacing
+	 * from it in the plane across local up, the first of each ring along Forward.
+	 * @param Start       The player start's location.
+	 * @param Up          Local up there.
+	 * @param Forward     The start's facing (the first place of each ring); any direction across Up will do.
+	 * @param Taken       The other players' pawns.
+	 * @param Spacing     The distance between two places (PlayerSpawnSpacing).
+	 * @param OutLocation The place found; the start itself when every place is taken.
+	 * @return The place's index: 0 the start, 1 to 6 the first ring, ...; INDEX_NONE when every place is taken.
+	 */
+	static int32 FindFreeSpawnPlace(const FVector& Start, const FVector& Up, const FVector& Forward, TConstArrayView<FVector> Taken,
+		float Spacing, FVector& OutLocation);
 
 protected:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
@@ -144,8 +190,31 @@ protected:
 	FTimerHandle VoxelWorldShapeTimer;
 	int32 VoxelWorldShapePolls = 0;
 
-	/** A player state carrying a pending spawn transform (a loaded save) spawns there instead of a player start. */
+	/**
+	 * A player state carrying a pending spawn transform (a loaded save) spawns there instead of a player start; otherwise
+	 * the first free place at the start (FindFreeSpawnPlace, G244): the start itself while no other player stands there.
+	 */
 	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
+
+	/**
+	 * The engine's choice, unless another player's pawn stands at it and a player start no one stands at exists: then that
+	 * one (G244). A "Play from Here" start is kept (every player shares it, apart by FindFreeSpawnPlace).
+	 */
+	virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
+
+	/**
+	 * Where the other players' pawns stand (alive, player-controlled, not Player's own), for the spawn places.
+	 * @param Player   The player about to spawn.
+	 * @param OutTaken The locations.
+	 */
+	void GatherOtherPlayerPawns(const AController* Player, TArray<FVector>& OutTaken) const;
+
+	/**
+	 * Local up at a spawn place: the radius on a planet (a shell world), +Z otherwise.
+	 * @param Location The place.
+	 * @return The unit up.
+	 */
+	FVector GetSpawnUp(const FVector& Location) const;
 
 	/** Respawns adjust out of small overlaps (a bench, a slope) instead of failing to spawn. */
 	virtual APawn* SpawnDefaultPawnAtTransform_Implementation(AController* NewPlayer, const FTransform& SpawnTransform) override;

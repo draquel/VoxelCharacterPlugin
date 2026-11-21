@@ -22,6 +22,7 @@
 #include "VoxelMaterialRegistry.h"
 #include "VoxelWorldConfiguration.h"
 #include "Testing/VoxelTestChunkWorld.h"
+#include "Testing/VoxelTestScopedCVar.h"
 #include "Tests/VCBlockBreakTestListener.h"
 
 // ---------------------------------------------------------------------------
@@ -35,30 +36,11 @@
 
 namespace VCBlockFeedbackTestHelpers
 {
-	/** Set a console variable for the scope of a test and put the old value back. */
-	struct FCVarScope
-	{
-		IConsoleVariable* Var = nullptr;
-		FString Old;
-
-		FCVarScope(const TCHAR* Name, const TCHAR* Value)
-		{
-			Var = IConsoleManager::Get().FindConsoleVariable(Name);
-			if (Var)
-			{
-				Old = Var->GetString();
-				Var->Set(Value, ECVF_SetByCode);
-			}
-		}
-
-		~FCVarScope()
-		{
-			if (Var)
-			{
-				Var->Set(*Old, ECVF_SetByCode);
-			}
-		}
-	};
+	/**
+	 * Set a console variable for the scope of a test and put the old value back, both at the variable's own priority, at
+	 * least code's: a code-priority set under a console one is ignored and the test would run with the console's value (G249).
+	 */
+	using FCVarScope = VoxelTesting::FScopedCVar;
 
 	/** A validator that protects one voxel cell (a POI claim's stand-in). */
 	class FProtectCell : public IVoxelEditValidator
@@ -398,6 +380,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCBlock_Break, "VoxelCharacter.Cubic.BlockBrea
 bool FVCBlock_Break::RunTest(const FString& Parameters)
 {
 	using namespace VCBlockFeedbackTestHelpers;
+	FCVarScope Highlight(TEXT("vc.Dig.Highlight"), TEXT("1")); // the hold's cracks and outline are drawn
 	FCVarScope Scale(TEXT("vc.Dig.BreakTimeScale"), TEXT("1"));
 	FCVarScope PlayerInputs(TEXT("voxel.Edit.PlayerInputs"), TEXT("1"));
 	FBlockWorld B;

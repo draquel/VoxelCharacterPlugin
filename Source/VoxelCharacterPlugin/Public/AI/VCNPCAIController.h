@@ -58,6 +58,8 @@ struct VOXELCHARACTERPLUGIN_API FVCNPCAIDecisionInput
 	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") float FearRadius = 600.f;
 	/** Band beyond FearRadius it holds in; farther out it closes in again. */
 	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") float FearHoldBand = 350.f;
+	/** Prey holds where it is for the weather (a storm; the weather plan's P5): no roaming or patrolling, fleeing still. */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|AI") bool bHoldsForWeather = false;
 };
 
 /**
@@ -200,6 +202,16 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|AI")
 	EVCNPCTemperament GetTemperament() const { return Temperament; }
+
+	/**
+	 * Hold for the weather (the weather plan's P5): prey stops roaming and patrolling and stands where it is until the
+	 * hold is lifted; a threat still makes it flee. Hostiles ignore it.
+	 * @param bHold Whether to hold
+	 */
+	void SetWeatherHold(bool bHold) { bWeatherHold = bHold; }
+
+	/** @return Whether the pawn holds for the weather */
+	bool IsHoldingForWeather() const { return bWeatherHold; }
 
 	/**
 	 * Whether this NPC keeps away from Other right now: it fears light and Other carries a lit one.
@@ -434,6 +446,9 @@ protected:
 	// QA R16, read from the possessed AVCNPCCharacterBase.
 	UPROPERTY(VisibleAnywhere, Category = "VoxelCharacter|AI")
 	EVCNPCTemperament Temperament = EVCNPCTemperament::Aggressive;
+
+	/** Set by SetWeatherHold (the surface spawner, in a storm). */
+	bool bWeatherHold = false;
 	float WaryEngageRadius = 400.f;
 	bool bFearsLight = false;
 	float LightFearRadius = 600.f;

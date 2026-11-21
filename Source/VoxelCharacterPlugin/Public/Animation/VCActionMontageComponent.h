@@ -1,0 +1,641 @@
+// Copyright Daniel Raquel. All Rights Reserved.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "GameplayTagContainer.h"
+#include "Animation/VCActionAnimSet.h"
+#include "Types/CGFCombatTypes.h"
+#include "Engine/NetSerialization.h"
+#include "VCActionMontageComponent.generated.h"
+
+class UAnimInstance;
+class UAnimMontage;
+
+/** A fall ended (the sword moves plan, D169): on the ground (true), or into the water or another mode (false). */
+DECLARE_MULTICAST_DELEGATE_OneParam(FVCOnFallEnded, bool /*bOnGround*/);
+
+/** What a press of the attack does at a moment of the current attack (the sword attack flow plan, D104). */
+UENUM()
+enum class EVCAttackPress : uint8
+{
+	/** No attack, or past the combo's window: the first attack of a new combo, at once. */
+	NewCombo,
+	/** Before the strike: nothing (a press in the wind-up is not kept). */
+	Ignore,
+	/** From the strike to the recovery: kept, and the next attack plays at the recovery time. */
+	Buffer,
+	/** In the recovery or the window after it: the next attack of the combo, at once. */
+	Continue,
+};
+
+/** What the release of a charge does at a moment of it (the sword moves plan, D167). */
+UENUM()
+enum class EVCChargeRelease : uint8
+{
+	/** Before the charged strike: the first attack of the combo, from the windup's pose. */
+	FirstAttack,
+	/** Held long enough: the charged strike (it fires by itself, the release comes after it). */
+	Charged,
+};
+
+/**
+ * What a move request asks the server to play (the sword moves plan, D165): every move is an action montage the owner
+ * plays at its input and the server plays from the request, as the sword's attack. Phase F adds the dodge and the roll;
+ * the later phases add their moves here.
+ */
+UENUM()
+enum class EVCMoveKind : uint8
+{
+	/** An attack of the combo: the index is the owner's combo index (the sword attack flow plan, D104). */
+	Attack,
+	/** A dodge step (D170): the index is the side, an EVCHitDirection relative to the facing. */
+	Dodge,
+	/** A roll toward a direction (D170): the capsule turns to Direction first; the index is unused. */
+	Roll,
+	/**
+	 * A change of the owner's charge (D167): the index is an EVCChargeChange (it begins, it is lowered, it is stopped).
+	 * The charged strike itself is an Attack, its combo index the set's ChargedAttack.
+	 */
+	Charge,
+};
+
+/**
+ * One move the owner asks for (D165): its kind, an index whose meaning the kind gives, and for a move whose root motion
+ * runs along the facing (the dodge and the roll) the facing it starts with, which the server turns its capsule to. The
+ * server checks it with the predicate the owner checked (D-CR16) and plays its own.
+ */
+USTRUCT()
+struct VOXELCHARACTERPLUGIN_API FVCMoveRequest
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	EVCMoveKind Kind = EVCMoveKind::Attack;
+
+	/** The combo index for an attack (-1 for none: the server picks), the side for a dodge, the change for a charge. */
+	UPROPERTY()
+	int8 Index = -1;
+
+	/**
+	 * The facing the move starts with, in world space (horizontal in the owner's gravity frame): a roll's is the input's
+	 * direction (the capsule turns to it), a dodge's the owner's facing (the server's capsule need not face the same way:
+	 * in first person the owner's follows the view, the server's where the body moves). Zero: the server keeps its own.
+	 */
+	UPROPERTY()
+	FVector_NetQuantizeNormal Direction = FVector::ZeroVector;
+
+	FVCMoveRequest() = default;
+	FVCMoveRequest(EVCMoveKind InKind, int32 InIndex, const FVector& InDirection = FVector::ZeroVector)
+		: Kind(InKind), Index(static_cast<int8>(FMath::Clamp(InIndex, -1, 127))), Direction(InDirection) {}
+};
+
+/**
+ * Plays a character's action montages (character animation P3): attacks, digging, chopping, placing, using, hit reacts,
+ * deaths and getting up, from the UVCActionAnimSet of what the character holds (IVCAnimatedCharacter::GetAnimActionSet).
+ *
+ * Montages are cosmetic. The owner plays its own actions at once on input (PlayActionLocal); the server, once it has
+ * accepted the action, tells every other machine with one unreliable multicast (PlayActionForEveryone), which the owner
+ * skips, so nothing plays twice (D49). Server-side effects that wait for a montage (the melee hit) read the time from the
+ * asset, so a dedicated server, which plays no montage, still times them.
+ *
+ * On the server it also answers the owner's UVCCombatComponent: a hit react from the side the hit came from, a death
+ * montage for a body with no physics asset (one with a physics asset ragdolls), getting up when revived.
+ *
+ * The attack combo (the sword attack flow plan, D102-D104): each machine keeps the attack it plays (its combo index,
+ * its start and its hit, recovery and end times at its play rate). A press before the strike does nothing, one from the
+ * strike to the recovery is kept until the recovery, one in the recovery or just after continues the combo; the owner
+ * picks the index and the server accepts it when the same rule allows it. While an attack's recovery plays, the
+ * component ticks and breaks it off with a blend-out when the character wants to move.
+ *
+ * The dodge and the roll (the sword moves plan, D170) are kept the same way: the owner at its input and the server at
+ * the move ability's activation record the move (RecordMove); until its recovery the character neither jumps, guards nor
+ * attacks (a press of the attack is kept and plays at the recovery), and the move clears the combo.
+ *
+ * On AVCCharacterBase and AVCNPCCharacterBase. It replicates only for its multicast.
+ */
+UCLASS(ClassGroup = (VoxelCharacter), meta = (BlueprintSpawnableComponent))
+class VOXELCHARACTERPLUGIN_API UVCActionMontageComponent : public UActorComponent
+{
+	GENERATED_BODY()
+
+public:
+	UVCActionMontageComponent();
+
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+
+	/** The server's allowance for a request's trip when it checks an owner's attack against its own clock (seconds). */
+	static constexpr float AttackRequestTolerance = 0.2f;
+
+	/**
+	 * The allowance the server gives a check of a remote owner's request against its own clock (D104, D170): its
+	 * AttackRequestTolerance for a player-controlled character this machine does not control, 0 otherwise.
+	 * @param Character The character asking
+	 * @return Seconds
+	 */
+	static float GetRequestTolerance(const AActor* Character);
+
+	/** Above this speed a simulated proxy counts as moving (uu/s): it has no input to read (D103). */
+	static constexpr float MovingSpeed = 50.f;
+
+	/** The action sets this character plays, one per Equipment.AnimSet tag; the Unarmed set covers a tag with none. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TArray<TObjectPtr<UVCActionAnimSet>> ActionAnimSets;
+
+	/**
+	 * The set for an action-set tag.
+	 * @param ActionSet An Equipment.AnimSet.* tag
+	 * @return The set with that tag, else the Unarmed set, else null
+	 */
+	const UVCActionAnimSet* FindActionAnimSet(const FGameplayTag& ActionSet) const;
+
+	/** The set for what the owner holds now. @return It, or null when the owner has none */
+	const UVCActionAnimSet* GetCurrentActionAnimSet() const;
+
+	/**
+	 * The montage the owner plays now for an action.
+	 * @param Action  The action
+	 * @param Variant The combo index, or an EVCHitDirection for hit reacts and deaths
+	 * @return The current set's montage, or null
+	 */
+	UAnimMontage* GetMontage(EVCAnimAction Action, int32 Variant = 0) const;
+
+	/**
+	 * What a press does at a moment of an attack (D104), the rule the owner and the server share.
+	 * @param SinceStart   Seconds since the attack started, negative for no attack
+	 * @param HitTime      Its hit time, seconds at its play rate
+	 * @param RecoveryTime Its recovery time, seconds at its play rate
+	 * @param EndTime      Its length, seconds at its play rate
+	 * @param Window       Seconds past its end within which the combo continues
+	 * @return NewCombo, Ignore, Buffer or Continue
+	 */
+	static EVCAttackPress ClassifyAttackPress(double SinceStart, float HitTime, float RecoveryTime, float EndTime, float Window);
+
+	/**
+	 * Whether movement breaks an attack off now (D103): in its recovery, before its end, while the character wants to move.
+	 * @param SinceStart    Seconds since the attack started
+	 * @param RecoveryTime  Its recovery time, seconds at its play rate
+	 * @param EndTime       Its length, seconds at its play rate
+	 * @param bWantsToMove  The character wants to move (WantsToMove)
+	 * @return True to stop its montage
+	 */
+	static bool ShouldBreakRecovery(double SinceStart, float RecoveryTime, float EndTime, bool bWantsToMove);
+
+	/**
+	 * The play rate of an attack for a weapon (D107): its attacks per second as a rate, 1 as the clips were authored.
+	 * @param AttackSpeed The weapon's attacks per second
+	 * @return The rate, from 0.5 to 2
+	 */
+	static float GetAttackPlayRate(float AttackSpeed);
+
+	/**
+	 * Whether a move is before its recovery (D170), the rule the owner and the server share.
+	 * @param SinceStart   Seconds since the move started, negative for no move
+	 * @param RecoveryTime Its recovery time, seconds
+	 * @param Tolerance    Seconds taken off the recovery (the server's allowance for an owner's request)
+	 * @return True from its start until its recovery less the tolerance
+	 */
+	static bool IsBeforeRecovery(double SinceStart, float RecoveryTime, float Tolerance = 0.f);
+
+	/**
+	 * Keeps a dodge or a roll as this machine's current move, starting now (D170): its recovery time from the current
+	 * set's montage. The attack it interrupts is forgotten (the combo starts over) and a kept attack or guard press is
+	 * dropped.
+	 * @param Kind  Dodge or Roll
+	 * @param Index The dodge's side (EVCHitDirection)
+	 */
+	void RecordMove(EVCMoveKind Kind, int32 Index);
+
+	/**
+	 * Whether this machine's current dodge or roll is before its recovery (D170): no jump, guard or attack meanwhile.
+	 * @param Tolerance Seconds taken off the recovery: the server's allowance for an owner's request (AttackRequestTolerance)
+	 * @return True while it is
+	 */
+	bool IsMoveBeforeRecovery(float Tolerance = 0.f) const;
+
+	/**
+	 * Whether this machine's current attack is before its recovery (G252, D172): a guard pressed meanwhile waits for it.
+	 * @param Tolerance Seconds taken off the recovery: the server's allowance for an owner's request (AttackRequestTolerance)
+	 * @return True from the attack's start until its recovery less the tolerance
+	 */
+	bool IsAttackBeforeRecovery(float Tolerance = 0.f) const;
+
+	/** Server: the move the owner asked for (AVCCharacterBase::Server_RequestMove), for the move ability that follows. */
+	void SetRequestedMove(const FVCMoveRequest& Request) { RequestedMove = Request; bHasRequestedMove = true; }
+
+	/**
+	 * Server: the owner's requested move, cleared.
+	 * @param OutRequest The request
+	 * @return False when there was none (an NPC's own activation)
+	 */
+	bool TakeRequestedMove(FVCMoveRequest& OutRequest) { OutRequest = RequestedMove; const bool bHad = bHasRequestedMove; bHasRequestedMove = false; return bHad; }
+
+	/** What a press of the attack does now on this machine, from the attack it plays (ClassifyAttackPress). */
+	EVCAttackPress ClassifyAttackPress() const;
+
+	/**
+	 * Whether a primary press may start a charge (D167), the rule the owner and the server share: from rest only.
+	 * @param bSetCharges The held set has a charge (UVCActionAnimSet::HasCharge) and vc.Anim.AttackCharge is on
+	 * @param Press       What the press does by the combo's rule (ClassifyAttackPress): a charge needs a new combo
+	 * @param bSprinting  The character sprints
+	 * @param bFalling    The character is in the air
+	 * @return True to charge
+	 */
+	static bool CanChargeFrom(bool bSetCharges, EVCAttackPress Press, bool bSprinting, bool bFalling);
+
+	/**
+	 * What the release of a charge does (D167).
+	 * @param HeldSeconds Seconds since the charge began
+	 * @param ChargeTime  Seconds from the press to the charged strike (UVCActionAnimSet::GetChargeTime)
+	 * @return Charged once ChargeTime has passed, else FirstAttack
+	 */
+	static EVCChargeRelease ClassifyChargeRelease(double HeldSeconds, float ChargeTime);
+
+	/**
+	 * Whether this character may start a charge now (CanChargeFrom with its set, its press, its gait and its movement mode;
+	 * never during a dodge or a roll before its recovery, D170).
+	 * @return True to charge
+	 */
+	bool CanStartCharge() const;
+
+	/**
+	 * The server's allowance on the run attack's speed for an owner's request (uu/s): the request's speed is read on the
+	 * server up to a move behind the owner's press.
+	 */
+	static constexpr float RunAttackSpeedTolerance = 100.f;
+
+	/**
+	 * Whether a primary press plays the run attack (the sword moves plan, D168): the set has one and the character
+	 * sprints faster than the set's speed.
+	 * @param bSetHasRunAttack Whether the held set has a run attack
+	 * @param bSprinting       Whether the character sprints (the gait, not the speed)
+	 * @param Speed            The character's speed across local up, uu/s
+	 * @param MinSpeed         The speed it must exceed (the set's RunAttackSpeed, less any allowance)
+	 * @return True for the run attack
+	 */
+	static bool CanRunAttackFrom(bool bSetHasRunAttack, bool bSprinting, float Speed, float MinSpeed);
+
+	/**
+	 * Whether this character's primary press plays the run attack now: CanRunAttackFrom with its set, its gait and its
+	 * speed across local up (D168).
+	 * @param SpeedTolerance uu/s taken off the set's RunAttackSpeed (RunAttackSpeedTolerance for an owner's request on the server)
+	 * @return True for the run attack
+	 */
+	bool CanRunAttack(float SpeedTolerance = 0.f) const;
+
+	/**
+	 * Whether an air attack may start (the sword moves plan, D169): the set has one for the button, none was played in
+	 * this fall, and the character falls, or landed less long ago than the allowance (the server reading an owner's
+	 * request made just before the landing).
+	 * @param bSetHasIt     Whether the held set has an air attack for the button
+	 * @param bUsedThisFall Whether this fall already had one (one per time in the air)
+	 * @param bFalling      Whether the character falls (not swimming, not in the QA flight)
+	 * @param SinceLanded   Seconds since the character last landed, negative for never
+	 * @param Tolerance     The allowance after a landing, seconds
+	 * @return True for the air attack
+	 */
+	static bool CanAirAttackFrom(bool bSetHasIt, bool bUsedThisFall, bool bFalling, double SinceLanded, float Tolerance);
+
+	/**
+	 * Whether this character may start its air attack for a button now (CanAirAttackFrom with its set, its fall and its
+	 * last landing).
+	 * @param bSecondary The secondary attack's button (the plunge), else the primary's
+	 * @param Tolerance  Seconds after a landing it is still taken (AttackRequestTolerance on the server)
+	 * @return True for the air attack
+	 */
+	bool CanAirAttack(bool bSecondary, float Tolerance = 0.f) const;
+
+	/** Whether the character falls (a jump, a ledge, a long fall; not swimming, not the QA flight). */
+	bool IsFalling() const;
+
+	/** Whether the held set has an air attack for a button. */
+	bool HasAirAttack(bool bSecondary) const;
+
+	/**
+	 * The owner: picks the air attack for a button and keeps it as the current attack, the fall's one used (D169).
+	 * @param bSecondary  The secondary attack's button (the plunge), else the primary's
+	 * @param AttackSpeed Attacks per second (the weapon's)
+	 * @param OutPlayRate The play rate
+	 * @return Its combo index, -1 when the set has none
+	 */
+	int32 ChooseAirAttack(bool bSecondary, float AttackSpeed, float& OutPlayRate);
+
+	/**
+	 * Every machine: the character's fall ended (its movement component calls it). A playing air attack or plunge goes
+	 * on to its landing section on the ground (it stops in the water); the current attack's times count from the
+	 * landing; the fall's air attack is free again; OnFallEnded is broadcast (the server's plunge lands its slam).
+	 * @param bOnGround Whether the fall ended on the ground
+	 */
+	void HandleFallEnded(bool bOnGround);
+
+	/** A fall ended (D169): the server's plunge waits for it. */
+	FVCOnFallEnded OnFallEnded;
+
+	/** Keeps the start of a charge on this machine (the owner at its press, the server at its request). */
+	void BeginCharge();
+
+	/** Forgets the charge on this machine (released, given up or interrupted). */
+	void EndCharge() { ChargeStartTime = -1.0; }
+
+	/** Whether a charge is kept on this machine. */
+	bool IsCharging() const { return ChargeStartTime >= 0.0; }
+
+	/** Seconds since the kept charge began, negative for none. */
+	double GetChargeSeconds() const;
+
+	/** Seconds from the press to the charged strike for the held set, 0 when it has no charge. */
+	float GetChargeTime() const;
+
+	/** Whether the charge montage plays on this machine and is not on its way out (an interrupted charge has stopped it). */
+	bool IsChargePlaying() const;
+
+	/**
+	 * The owner: picks the charged strike and keeps it as the current attack, the charge forgotten (D167).
+	 * @param AttackSpeed Attacks per second (the weapon's)
+	 * @param OutPlayRate The play rate
+	 * @return The charged strike's combo index, -1 when the set has none
+	 */
+	int32 ChooseChargedAttack(float AttackSpeed, float& OutPlayRate);
+
+	/**
+	 * Picks the attack to play now and keeps it as this machine's current attack: the next of the combo for the button
+	 * when a press now continues it, else the button's first (the sword moves plan, D166: the combo's table). A fresh
+	 * primary press while sprinting fast plays the set's run attack instead (D168).
+	 * @param AttackSpeed     Attacks per second (the weapon's)
+	 * @param OutPlayRate     The play rate (GetAttackPlayRate)
+	 * @param bSecondary      The secondary attack's button (IA_SecondaryAttack), else the primary's
+	 * @param bAllowRunAttack Whether the press may play the run attack (false for a kept press and a charge's release)
+	 * @return The combo index (0 with no combo); -1 for the secondary when the set has none (nothing is kept)
+	 */
+	int32 ChooseAttack(float AttackSpeed, float& OutPlayRate, bool bSecondary = false, bool bAllowRunAttack = false);
+
+	/**
+	 * Server: whether an attack may start now and which (D104, G179). An attack the owner picked on this very machine at
+	 * this moment (a listen server's or a standalone player's) is taken as it is. Otherwise the attack before must have
+	 * reached its recovery (less AttackRequestTolerance); the owner's index is taken when it is a button's first or that
+	 * button's next of the combo within the window (plus the tolerance), else the server picks its own for the same
+	 * button (D166: an index the secondary plays asks for the secondary's). The charged strike (D167) is taken when this
+	 * machine's charge has run its charge time less AttackRequestTolerance, else the first attack is played. Any attack
+	 * taken ends the charge. The run attack (D168) is taken while this machine's character sprints faster than the set's
+	 * speed less RunAttackSpeedTolerance, else the server picks the primary's. An air attack or a plunge (D169) is taken
+	 * as asked while CanAirAttack allows it with AttackRequestTolerance, else refused. The attack is kept as current.
+	 * @param RequestedIndex The owner's combo index, -1 for none (an NPC)
+	 * @param AttackSpeed    Attacks per second (the weapon's)
+	 * @param OutIndex       The combo index to play
+	 * @param OutPlayRate    The play rate
+	 * @return False when it is too early for another attack
+	 */
+	bool AcceptAttack(int32 RequestedIndex, float AttackSpeed, int32& OutIndex, float& OutPlayRate);
+
+	/**
+	 * Server: the combo index the owner asked for with its swing (AVCCharacterBase::Server_RequestMove), for the
+	 * melee ability's activation that follows; -1 clears it.
+	 */
+	void SetRequestedAttack(int32 Index) { RequestedAttackIndex = Index; }
+
+	/** Server: the owner's requested combo index, cleared; -1 for none. */
+	int32 TakeRequestedAttack() { const int32 Index = RequestedAttackIndex; RequestedAttackIndex = -1; return Index; }
+
+	/**
+	 * The owner: keep a press made between the strike and the recovery until the recovery (D104).
+	 * @param bSecondary The press was the secondary attack's (D166)
+	 */
+	void BufferAttack(bool bSecondary = false);
+
+	/**
+	 * The owner: whether a kept press is due (the current attack reached its recovery, or the current dodge or roll its
+	 * recovery: D170); it is consumed.
+	 */
+	bool TakeDueBufferedAttack();
+
+	/** Whether a press is kept for the recovery. */
+	bool HasBufferedAttack() const { return bAttackBuffered; }
+
+	/**
+	 * The owner: keep a guard pressed during an attack's swing until the attack's recovery (D172), as a dodge keeps a press
+	 * (D170). A kept attack press is dropped: the guard is the later press, and nothing swings behind a guard (D94).
+	 */
+	void BufferGuard();
+
+	/** The owner: drop a kept guard (the button came up before the recovery, or a dodge or roll started). */
+	void ClearBufferedGuard() { bGuardBuffered = false; }
+
+	/**
+	 * Ends the attack montage playing on this machine's body (its recovery, past which a guard may rise) as a recovery
+	 * breaks on a move (RecoveryBlendOut): the guard's rule on the owner and on the server alike (D172). A dedicated server
+	 * plays no guard montage, which on the owner replaces the attack, so without this the server took the recovery's root
+	 * motion to the attack's end and the owner did not.
+	 * @return True when an attack montage was stopped
+	 */
+	bool StopAttackForGuard();
+
+	/** Whether a guard press is kept for the attack's recovery (D172). */
+	bool HasBufferedGuard() const { return bGuardBuffered; }
+
+	/**
+	 * The owner: whether a kept guard is due (the current attack reached its recovery, and no dodge or roll is before its
+	 * own); it is consumed.
+	 */
+	bool TakeDueBufferedGuard();
+
+	/** Whether the kept press (or the last one taken) was the secondary attack's. */
+	bool IsBufferedAttackSecondary() const { return bBufferedSecondary; }
+
+	/** The combo index of the current or last attack, -1 before any. */
+	int32 GetLastAttackIndex() const { return ComboIndex; }
+
+	/**
+	 * Whether the character wants to move (D103): its input's acceleration on the owner and on the server (from the
+	 * owner's moves), its speed across local up over MovingSpeed on a simulated proxy.
+	 */
+	bool WantsToMove() const;
+
+	/**
+	 * Plays an action's montage on this machine only. A repeated non-attack action that is still playing keeps playing.
+	 * A draw (a montage of three sections or more: the raise, the draw, the hold) starts at its second section when the
+	 * aim has already raised the weapon (UVCAnimInstance::AimRaiseWeight past one half), so the bow is not raised twice.
+	 * @param Action   The action
+	 * @param Variant  The combo index, or an EVCHitDirection
+	 * @param PlayRate Play rate
+	 * @return The montage's length at that rate, 0 when nothing played (no montage, no anim instance)
+	 */
+	float PlayActionLocal(EVCAnimAction Action, int32 Variant = 0, float PlayRate = 1.f);
+
+	/**
+	 * Authority: plays an action on every machine that draws the character, through one unreliable multicast. A dedicated
+	 * server draws nothing but plays a montage with root motion itself (an attack's lunge, D106), so the movement takes
+	 * the lunge there as the owner's does.
+	 * @param Action         The action
+	 * @param Variant        The combo index, or an EVCHitDirection
+	 * @param PlayRate       Play rate
+	 * @param bOwnerPlayedIt True when the owning player already played it at input: its machine skips it
+	 */
+	void PlayActionForEveryone(EVCAnimAction Action, int32 Variant = 0, float PlayRate = 1.f, bool bOwnerPlayedIt = false);
+
+	/**
+	 * Stops an action's montage on this machine (a bow's draw let go before it can shoot).
+	 * @param Action The action
+	 * @return True when its montage was playing
+	 */
+	bool StopActionLocal(EVCAnimAction Action);
+
+	/**
+	 * Whether an action's montage plays on this machine (the current set's).
+	 * @param Action The action
+	 * @return True while its montage plays
+	 */
+	bool IsActionPlaying(EVCAnimAction Action) const;
+
+	/**
+	 * The action's montage playing on the body and how far in (any variant of a Reload).
+	 * @param Action      The action
+	 * @param OutPosition Seconds into the montage
+	 * @return The playing montage, or null
+	 */
+	const UAnimMontage* GetPlayingActionMontage(EVCAnimAction Action, float& OutPosition) const;
+
+	/**
+	 * Authority: stops an action on every machine that draws the character, through one reliable multicast (a lost stop
+	 * would leave a looping draw playing).
+	 * @param Action          The action
+	 * @param bOwnerStoppedIt True when the owning player already stopped it at input: its machine skips it
+	 */
+	void StopActionForEveryone(EVCAnimAction Action, bool bOwnerStoppedIt = false);
+
+	/**
+	 * Plays an unsheathe or a sheathe on this machine (the equipment sheathing plan, D79): the montage of the weapon's own
+	 * set for its sheath, which need not be the set the owner holds now (an unsheathe starts with the hand empty). This
+	 * machine remembers it, so the weapon's visual changes bone at the montage's hand-off (IsSheathHandOffPending).
+	 * @param Action    Unsheathe or Sheathe
+	 * @param ActionSet The weapon's set (Equipment.AnimSet.*)
+	 * @param Sheath    The weapon's sheath slot
+	 * @return The montage's length, 0 when nothing played
+	 */
+	float PlaySheathActionLocal(EVCAnimAction Action, const FGameplayTag& ActionSet, const FGameplayTag& Sheath);
+
+	/**
+	 * Authority: plays an unsheathe or a sheathe on every machine that draws the character (one unreliable multicast).
+	 * @param bOwnerPlayedIt True when the owning player already played it at input: its machine skips it
+	 */
+	void PlaySheathActionForEveryone(EVCAnimAction Action, const FGameplayTag& ActionSet, const FGameplayTag& Sheath, bool bOwnerPlayedIt);
+
+	/**
+	 * The montage an unsheathe or a sheathe plays and its hand-off time, from the assets (a dedicated server times the
+	 * draw with this; it plays nothing).
+	 * @param OutHandOff Seconds into it at play rate 1
+	 * @return The montage, or null when the set has none for that sheath
+	 */
+	UAnimMontage* GetSheathMontage(EVCAnimAction Action, const FGameplayTag& ActionSet, const FGameplayTag& Sheath, float& OutHandOff) const;
+
+	/**
+	 * Whether this machine plays an unsheathe or a sheathe of a sheath and has not reached its hand-off: until then the
+	 * weapon's visual stays where the montage started it (at the sheath for an unsheathe, in the hand for a sheathe).
+	 * @param Sheath    The sheath slot
+	 * @param OutAction Unsheathe or Sheathe, when pending
+	 * @return True while pending
+	 */
+	bool IsSheathHandOffPending(const FGameplayTag& Sheath, EVCAnimAction& OutAction) const;
+
+	/** Whether an unsheathe or a sheathe montage plays on this machine (the owner ignores the primary action meanwhile). */
+	bool IsSheathActionPlaying() const;
+
+	/** How many actions this machine was asked to play (locally or by the multicast), for tests. */
+	int32 GetActionsPlayed() const { return ActionsPlayed; }
+
+	/** The last action this machine was asked to play, for tests. */
+	EVCAnimAction GetLastAction() const { return LastAction; }
+
+	/**
+	 * The side a hit came from for the owner: its source (the causer, else the instigator, else the hit location)
+	 * measured about the owner's local up from its facing.
+	 * @param Context The hit
+	 * @return An EVCHitDirection, as a montage variant
+	 */
+	int32 GetHitDirection(const FCGFDamageContext& Context) const;
+
+protected:
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_PlayAction(EVCAnimAction Action, uint8 Variant, float PlayRate, bool bOwnerPlayedIt);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_StopAction(EVCAnimAction Action, bool bOwnerStoppedIt);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_PlaySheathAction(EVCAnimAction Action, FGameplayTag ActionSet, FGameplayTag Sheath, bool bOwnerPlayedIt);
+
+	/** The unsheathe or sheathe this machine played last, for the visual's hand-off. */
+	EVCAnimAction SheathAction = EVCAnimAction::Unsheathe;
+	FGameplayTag SheathSlot;
+	TWeakObjectPtr<UAnimMontage> SheathMontage;
+
+	/** Server: a hit landed on the owner. */
+	UFUNCTION()
+	void HandleDamaged(const FCGFDamageContext& Context);
+
+	/** Server: the owner died. */
+	UFUNCTION()
+	void HandleDied(const FCGFDamageContext& Context);
+
+	/** Server: the owner was revived. */
+	UFUNCTION()
+	void HandleRevived();
+
+private:
+	/** The owner's body's anim instance, or null. */
+	UAnimInstance* GetBodyAnimInstance() const;
+
+	/** Keeps an attack as this machine's current one, starting now. */
+	void RecordAttack(int32 Index, float PlayRate);
+
+	/** Seconds since the current attack started, negative before any. */
+	double GetSecondsSinceAttack() const;
+
+	/** The attack montage of the current set playing on the body and its position, or null. */
+	UAnimMontage* GetPlayingAttackMontage(float& OutPosition) const;
+
+	/** The dodge or roll montage of the current set playing on the body (not on its way out) and its position, or null. */
+	UAnimMontage* GetPlayingMoveMontage(float& OutPosition) const;
+
+	/** The current attack, an air attack, counted from a landing now: its times run from its landing section (D169). */
+	void CountAirAttackFromLanding();
+
+	/** The current attack (D104): its combo index, its start (world seconds) and its times at its play rate. */
+	int32 ComboIndex = -1;
+	double AttackStartTime = -1.0;
+	float AttackHitTime = 0.f;
+	float AttackRecoveryTime = 0.f;
+	float AttackEndTime = 0.f;
+	float AttackComboWindow = 0.f;
+	int32 AttackComboCount = 0;
+
+	/** When the kept charge began (world seconds), negative for none (D167). */
+	double ChargeStartTime = -1.0;
+
+	/** A press kept for the current attack's recovery (the owner's), and whether it was the secondary attack's. */
+	bool bAttackBuffered = false;
+	bool bBufferedSecondary = false;
+
+	/** A guard press kept for the current attack's recovery (the owner's, D172). */
+	bool bGuardBuffered = false;
+
+	/** The combo index the owner asked for, until the melee ability takes it (server). */
+	int32 RequestedAttackIndex = -1;
+
+	/** Whether this fall had its air attack (D169), and when the character last landed (world seconds, negative for never). */
+	bool bAirAttackThisFall = false;
+	double LastLandedTime = -1.0;
+
+	/** The current dodge or roll (D170): its start (world seconds, negative for none) and its recovery, seconds. */
+	double MoveStartTime = -1.0;
+	float MoveRecoveryTime = 0.f;
+
+	/** The move the owner asked for, until the move ability takes it (server). */
+	FVCMoveRequest RequestedMove;
+	bool bHasRequestedMove = false;
+
+	int32 ActionsPlayed = 0;
+	EVCAnimAction LastAction = EVCAnimAction::Attack;
+};

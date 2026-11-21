@@ -1,6 +1,7 @@
 // Copyright Daniel Raquel. All Rights Reserved.
 
 #include "Combat/VCCombatComponent.h"
+#include "Combat/VCBlockAbility.h"
 #include "Combat/VCDamageEffect.h"
 #include "Core/VCCharacterAttributeSet.h"
 #include "Utilities/CGFCombatStatics.h"
@@ -162,6 +163,10 @@ ECGFDamageResult UVCCombatComponent::ApplyDamage(const FCGFDamageContext& Contex
 		return ECGFDamageResult::Rejected_ByTarget;
 	}
 
+	// A guard takes its share of a hit from the front and spends stamina for it (D94); the hit goes on with what is left.
+	FCGFDamageContext Landed = Context;
+	UVCBlockAbility::ApplyGuard(GetOwner(), TargetASC, Landed);
+
 	if (!DamageEffectClass)
 	{
 		UE_LOG(LogVoxelCharacter, Error, TEXT("%s: DamageEffectClass is unset; damage cannot be applied."), *GetNameSafe(GetOwner()));
@@ -170,7 +175,7 @@ ECGFDamageResult UVCCombatComponent::ApplyDamage(const FCGFDamageContext& Contex
 
 	// Source = the instigator's ASC when it has one (so its AttackPower is captured);
 	// otherwise the target applies the spec to itself and the execution ignores AttackPower.
-	AActor* InstigatorActor = Context.InstigatorActor.Get();
+	AActor* InstigatorActor = Landed.InstigatorActor.Get();
 	UAbilitySystemComponent* SourceASC = InstigatorActor
 		? UAbilitySystemGlobals::GetAbilitySystemComponentFromActor(InstigatorActor, false)
 		: nullptr;
@@ -180,15 +185,15 @@ ECGFDamageResult UVCCombatComponent::ApplyDamage(const FCGFDamageContext& Contex
 	}
 
 	FGameplayEffectContextHandle EffectContext = SourceASC->MakeEffectContext();
-	EffectContext.AddInstigator(InstigatorActor, Context.CauserActor.Get());
+	EffectContext.AddInstigator(InstigatorActor, Landed.CauserActor.Get());
 	EffectContext.AddSourceObject(GetOwner());
-	if (!Context.HitLocation.IsZero() || !Context.HitNormal.IsZero())
+	if (!Landed.HitLocation.IsZero() || !Landed.HitNormal.IsZero())
 	{
 		FHitResult Hit;
-		Hit.Location = Context.HitLocation;
-		Hit.ImpactPoint = Context.HitLocation;
-		Hit.Normal = Context.HitNormal;
-		Hit.ImpactNormal = Context.HitNormal;
+		Hit.Location = Landed.HitLocation;
+		Hit.ImpactPoint = Landed.HitLocation;
+		Hit.Normal = Landed.HitNormal;
+		Hit.ImpactNormal = Landed.HitNormal;
 		Hit.HitObjectHandle = FActorInstanceHandle(GetOwner());
 		EffectContext.AddHitResult(Hit);
 	}
@@ -201,16 +206,16 @@ ECGFDamageResult UVCCombatComponent::ApplyDamage(const FCGFDamageContext& Contex
 	}
 
 	FGameplayEffectSpec& Spec = *SpecHandle.Data;
-	Spec.SetSetByCallerMagnitude(CGFGameplayTags::SetByCaller_Damage, FMath::Max(0.f, Context.BaseDamage));
-	Spec.AddDynamicAssetTag(Context.DamageType.IsValid() ? Context.DamageType : CGFGameplayTags::Damage_Type_Physical);
-	for (const FGameplayTag& Tag : Context.ContextTags)
+	Spec.SetSetByCallerMagnitude(CGFGameplayTags::SetByCaller_Damage, FMath::Max(0.f, Landed.BaseDamage));
+	Spec.AddDynamicAssetTag(Landed.DamageType.IsValid() ? Landed.DamageType : CGFGameplayTags::Damage_Type_Physical);
+	for (const FGameplayTag& Tag : Landed.ContextTags)
 	{
 		Spec.AddDynamicAssetTag(Tag);
 	}
 
 	// Recorded before applying: the Health delegate fires synchronously inside the apply and
 	// reports this as the killing hit.
-	LastDamageContext = Context;
+	LastDamageContext = Landed;
 
 	SourceASC->ApplyGameplayEffectSpecToTarget(Spec, TargetASC);
 
@@ -218,11 +223,11 @@ ECGFDamageResult UVCCombatComponent::ApplyDamage(const FCGFDamageContext& Contex
 	EventData.EventTag = CGFGameplayTags::Event_Combat_Damaged;
 	EventData.Instigator = InstigatorActor;
 	EventData.Target = GetOwner();
-	EventData.EventMagnitude = Context.BaseDamage;
+	EventData.EventMagnitude = Landed.BaseDamage;
 	EventData.ContextHandle = EffectContext;
 	TargetASC->HandleGameplayEvent(EventData.EventTag, &EventData);
 
-	OnDamaged.Broadcast(Context);
+	OnDamaged.Broadcast(Landed);
 
 	return ECGFDamageResult::Applied;
 }

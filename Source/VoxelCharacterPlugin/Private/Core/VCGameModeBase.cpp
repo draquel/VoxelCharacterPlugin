@@ -11,6 +11,9 @@
 #include "GameFramework/PlayerState.h"
 #include "GameFramework/SpectatorPawn.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "GameFramework/PlayerStart.h"
+#include "Engine/PlayerStartPIE.h"
 #include "TimerManager.h"
 #include "Movement/VCTerrainQueryHelper.h"
 #include "VoxelChunkManager.h"
@@ -291,7 +294,162 @@ APawn* AVCGameModeBase::SpawnDefaultPawnFor_Implementation(AController* NewPlaye
 	UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s spawns %s at the start %s %s"), *GetNameSafe(NewPlayer),
 		*GetNameSafe(GetDefaultPawnClassForController(NewPlayer)), *GetNameSafe(StartSpot),
 		StartSpot ? *StartSpot->GetActorLocation().ToCompactString() : TEXT("-"));
+
+	// Another player's pawn at the start: a place of its own beside it (G244). Two pawns released inside each other push
+	// one out and it goes down the slope; the engine's occupancy test does not see a pawn the terrain wait holds (its
+	// collision is off). With no other player there, the start itself, as before.
+	if (StartSpot && PlayerSpawnSpacing > 0.f)
+	{
+		TArray<FVector> Taken;
+		GatherOtherPlayerPawns(NewPlayer, Taken);
+		const FVector StartLocation = StartSpot->GetActorLocation();
+		FVector Place = StartLocation;
+		const int32 Index = Taken.Num() > 0
+			? FindFreeSpawnPlace(StartLocation, GetSpawnUp(StartLocation), StartSpot->GetActorForwardVector(), Taken, PlayerSpawnSpacing, Place)
+			: 0;
+		if (Index != 0)
+		{
+			if (Index == INDEX_NONE)
+			{
+				UE_LOG(LogVoxelCharacter, Warning, TEXT("%s: every spawn place at %s is taken (%d other players); spawning at the start."),
+					*GetNameSafe(NewPlayer), *GetNameSafe(StartSpot), Taken.Num());
+			}
+			else
+			{
+				UE_LOG(LogVoxelCharacter, Log, TEXT("%s: the start %s is taken; spawning at place %d, %s (%.0f uu from it)."),
+					*GetNameSafe(NewPlayer), *GetNameSafe(StartSpot), Index, *Place.ToCompactString(), FVector::Dist(Place, StartLocation));
+			}
+			const FRotator StartRotation(0.f, StartSpot->GetActorRotation().Yaw, 0.f);
+			return SpawnDefaultPawnAtTransform(NewPlayer, FTransform(StartRotation, Place));
+		}
+	}
 	return Super::SpawnDefaultPawnFor_Implementation(NewPlayer, StartSpot);
+}
+
+AActor* AVCGameModeBase::ChoosePlayerStart_Implementation(AController* Player)
+{
+	AActor* Chosen = Super::ChoosePlayerStart_Implementation(Player);
+	if (!Chosen || Chosen->IsA<APlayerStartPIE>() || PlayerSpawnSpacing <= 0.f)
+	{
+		return Chosen;
+	}
+	TArray<FVector> Taken;
+	GatherOtherPlayerPawns(Player, Taken);
+	auto IsTaken = [this, &Taken](const AActor* Start)
+	{
+		return IsSpawnPlaceTaken(Start->GetActorLocation(), GetSpawnUp(Start->GetActorLocation()), Taken, PlayerSpawnSpacing);
+	};
+	if (Taken.Num() == 0 || !IsTaken(Chosen))
+	{
+		return Chosen;
+	}
+	// The engine's pick has a player on it (it judged it free: a waiting pawn's collision is off). Another start no one
+	// stands at, which the pawn fits (the engine's own test), comes first; else the pick, and a place beside it.
+	UWorld* World = GetWorld();
+	UClass* PawnClass = GetDefaultPawnClassForController(Player);
+	const APawn* PawnToFit = PawnClass ? PawnClass->GetDefaultObject<APawn>() : nullptr;
+	for (TActorIterator<APlayerStart> It(World); It; ++It)
+	{
+		APlayerStart* Start = *It;
+		if (Start == Chosen || Start->IsA<APlayerStartPIE>() || IsTaken(Start))
+		{
+			continue;
+		}
+		FVector Location = Start->GetActorLocation();
+		const FRotator Rotation = Start->GetActorRotation();
+		if (PawnToFit && World->EncroachingBlockingGeometry(PawnToFit, Location, Rotation) && !World->FindTeleportSpot(PawnToFit, Location, Rotation))
+		{
+			continue;
+		}
+		UE_LOG(LogVoxelCharacter, Log, TEXT("%s: the start %s is taken; using the free start %s."),
+			*GetNameSafe(Player), *GetNameSafe(Chosen), *GetNameSafe(Start));
+		return Start;
+	}
+	return Chosen;
+}
+
+void AVCGameModeBase::GatherOtherPlayerPawns(const AController* Player, TArray<FVector>& OutTaken) const
+{
+	OutTaken.Reset();
+	const APawn* Own = Player ? Player->GetPawn() : nullptr;
+	for (TActorIterator<APawn> It(GetWorld()); It; ++It)
+	{
+		const APawn* Pawn = *It;
+		if (!IsValid(Pawn) || Pawn == Own || !Pawn->IsPlayerControlled() || (Player && Pawn->GetController() == Player))
+		{
+			continue;
+		}
+		OutTaken.Add(Pawn->GetActorLocation());
+	}
+}
+
+FVector AVCGameModeBase::GetSpawnUp(const FVector& Location) const
+{
+	if (const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld()))
+	{
+		const FVoxelWorldBounds Bounds = ChunkMgr->GetWorldBounds();
+		if (Bounds.Shape == EVoxelWorldBoundsShape::Shell)
+		{
+			const FVector Up = (Location - Bounds.Center).GetSafeNormal();
+			if (!Up.IsNearlyZero())
+			{
+				return Up;
+			}
+		}
+	}
+	return FVector::UpVector;
+}
+
+bool AVCGameModeBase::IsSpawnPlaceTaken(const FVector& Place, const FVector& Up, TConstArrayView<FVector> Taken, float Spacing)
+{
+	// A pawn the wait placed stands on the generated surface, not at the start's height: compare across local up, within
+	// a band along it.
+	constexpr double MaxAlongUp = 5000.0;
+	const double Radius = 0.5 * Spacing;
+	for (const FVector& Other : Taken)
+	{
+		const FVector Offset = Other - Place;
+		const double Along = FVector::DotProduct(Offset, Up);
+		if (FMath::Abs(Along) <= MaxAlongUp && (Offset - Up * Along).SizeSquared() < Radius * Radius)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+int32 AVCGameModeBase::FindFreeSpawnPlace(const FVector& Start, const FVector& Up, const FVector& Forward, TConstArrayView<FVector> Taken,
+	float Spacing, FVector& OutLocation)
+{
+	OutLocation = Start;
+	if (!IsSpawnPlaceTaken(Start, Up, Taken, Spacing))
+	{
+		return 0;
+	}
+	// The first direction across up: the start's facing, or any direction across it when the facing is along up.
+	FVector Across = Forward - Up * FVector::DotProduct(Forward, Up);
+	if (!Across.Normalize())
+	{
+		Across = FVector::CrossProduct(Up, FMath::Abs(Up.Z) < 0.9 ? FVector::UpVector : FVector::ForwardVector).GetSafeNormal();
+	}
+	const FVector Side = FVector::CrossProduct(Up, Across);
+	int32 Index = 0;
+	for (int32 Ring = 1; Ring <= PlayerSpawnRings; ++Ring)
+	{
+		const int32 Count = 6 * Ring;
+		for (int32 I = 0; I < Count; ++I)
+		{
+			++Index;
+			const double Angle = 2.0 * UE_DOUBLE_PI * I / Count;
+			const FVector Place = Start + (Across * FMath::Cos(Angle) + Side * FMath::Sin(Angle)) * (Ring * Spacing);
+			if (!IsSpawnPlaceTaken(Place, Up, Taken, Spacing))
+			{
+				OutLocation = Place;
+				return Index;
+			}
+		}
+	}
+	return INDEX_NONE;
 }
 
 void AVCGameModeBase::Logout(AController* Exiting)

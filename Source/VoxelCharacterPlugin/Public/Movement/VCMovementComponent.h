@@ -10,7 +10,243 @@
 
 struct FGameplayAttributeData;
 struct FOnAttributeChangeData;
+struct FVoxelWaterSample;
 enum class EEditSource : uint8;
+enum class EVoxelSurfaceClass : uint8;
+class FVoxelMaterialTable;
+
+/** The gaits the gait table has a row for (the character refinement plan's C4, D75). */
+UENUM(BlueprintType)
+enum class EVCGait : uint8
+{
+	Walk,
+	Run,
+	Sprint,
+	Crouch
+};
+
+/** The capsule's rotation mode: toward where it moves, or toward the view (the bow drawn, first person). */
+UENUM(BlueprintType)
+enum class EVCRotationMode : uint8
+{
+	OrientToMovement,
+	Strafe
+};
+
+/** The movement presets vc.Move.Preset swaps between (C4's A/B). */
+UENUM()
+enum class EVCMovePreset : uint8
+{
+	/** The engine defaults the player ran on before C4: 600 every direction, 2048, 4096, friction 8, 500 degrees a second. */
+	Legacy,
+	/** The Game Animation Sample's per-frame tuning (SandboxCharacter_CMC), the clips' own numbers. */
+	GASP,
+	/** GASP's numbers tuned on the character test lane (the plan's C4 result: GASP's verbatim so far; the next pass's changes go here). */
+	Tuned
+};
+
+/**
+ * One gait's movement numbers (D75): the speed caps by direction, the acceleration, the braking and the friction.
+ * The movement component applies the row of the gait in force every tick, inside the predicted movement.
+ */
+USTRUCT(BlueprintType)
+struct VOXELCHARACTERPLUGIN_API FVCGaitSettings
+{
+	GENERATED_BODY()
+
+	/** Max speed moving forward (uu/s): the only cap in orient mode, where the body faces where it goes. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float MaxSpeedForward = 500.f;
+
+	/** Max speed sideways in strafe mode (uu/s); the input's angle to the facing picks between forward, this and backward. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float MaxSpeedStrafe = 350.f;
+
+	/** Max speed backward in strafe mode (uu/s). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float MaxSpeedBackward = 300.f;
+
+	/** Max acceleration (uu/s^2); the sprint's falls toward FVCMovementTable::SprintTopSpeedAcceleration with speed. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float MaxAcceleration = 800.f;
+
+	/** Braking deceleration while there is input (over the cap: a sprint released, a strafe's lower cap), uu/s^2. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float BrakingDecelerationMoving = 500.f;
+
+	/** Braking deceleration with no input (stopping), uu/s^2. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float BrakingDecelerationStopping = 2000.f;
+
+	/** Ground friction on dry, plain ground; the surface and the wetness scale it as they scaled the constant before. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float GroundFriction = 5.f;
+
+	/**
+	 * The engine's braking friction factor (its braking friction is the ground friction times this). GASP's is 0: a stop
+	 * is the braking deceleration alone, so its length is the same on every surface.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gait", meta = (ClampMin = "0.0"))
+	float BrakingFrictionFactor = 0.f;
+
+	FVCGaitSettings() = default;
+	FVCGaitSettings(float Forward, float Strafe, float Backward, float Acceleration, float BrakingMoving, float BrakingStopping,
+		float Friction, float BrakingFactor)
+		: MaxSpeedForward(Forward), MaxSpeedStrafe(Strafe), MaxSpeedBackward(Backward), MaxAcceleration(Acceleration)
+		, BrakingDecelerationMoving(BrakingMoving), BrakingDecelerationStopping(BrakingStopping), GroundFriction(Friction)
+		, BrakingFrictionFactor(BrakingFactor)
+	{
+	}
+
+	/**
+	 * The speed cap for an input at an angle to the facing: forward within 45 degrees, the strafe speed at 90, backward
+	 * from 135, linear between (GASP's Curve_StrafeSpeedMap).
+	 * @param AngleDegrees The input's (or the velocity's) angle to the body's forward about local up, any sign
+	 * @return The cap, uu/s
+	 */
+	float MaxSpeedAtAngle(float AngleDegrees) const;
+
+	/**
+	 * The row with its forward speed set and its strafe and backward caps in proportion (the locomotion plan's L2, D91).
+	 * @param Forward The new forward cap (uu/s); 0 or less keeps the row
+	 * @return The scaled row
+	 */
+	FVCGaitSettings WithForwardSpeed(float Forward) const;
+
+	/** @return The row as a C++ initializer, "{ 500, 350, 300, 800, 500, 2000, 5, 1 }" (vc.Move.Print, to commit) */
+	FString ToString() const;
+
+	bool operator==(const FVCGaitSettings& Other) const;
+	bool operator!=(const FVCGaitSettings& Other) const { return !(*this == Other); }
+};
+
+/**
+ * The forward caps a held set's locomotion clips run at (UVCLocomotionClipSet's WalkSpeed, RunSpeed, SprintSpeed; the
+ * locomotion plan's D91, L2; and the crouch set's CrouchSpeed, L3). 0 keeps the table's own row. Aim is a ceiling on
+ * every gait and angle while the character aims (the held set's AimSpeed), not a row's forward cap.
+ */
+struct FVCGaitCaps
+{
+	float Walk = 0.f;
+	float Run = 0.f;
+	float Sprint = 0.f;
+	float Crouch = 0.f;
+	float Aim = 0.f;
+
+	/** @return Whether any cap is set */
+	bool IsSet() const { return Walk > 0.f || Run > 0.f || Sprint > 0.f || Crouch > 0.f || Aim > 0.f; }
+
+	bool operator==(const FVCGaitCaps& Other) const
+	{
+		return Walk == Other.Walk && Run == Other.Run && Sprint == Other.Sprint && Crouch == Other.Crouch && Aim == Other.Aim;
+	}
+};
+
+/**
+ * The player's movement table (D75): a row per gait, the rotation rates by mode, and the sprint's ramps. GASP's numbers
+ * are the defaults; FVCMovementTable::Preset builds each of vc.Move.Preset's tables.
+ */
+USTRUCT(BlueprintType)
+struct VOXELCHARACTERPLUGIN_API FVCMovementTable
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gaits")
+	FVCGaitSettings Walk = FVCGaitSettings(200.f, 180.f, 150.f, 800.f, 500.f, 2000.f, 5.f, 0.f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gaits")
+	FVCGaitSettings Run = FVCGaitSettings(500.f, 350.f, 300.f, 800.f, 500.f, 2000.f, 5.f, 0.f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gaits")
+	FVCGaitSettings Sprint = FVCGaitSettings(700.f, 700.f, 700.f, 800.f, 500.f, 2000.f, 5.f, 0.f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Gaits")
+	FVCGaitSettings Crouch = FVCGaitSettings(225.f, 200.f, 180.f, 800.f, 500.f, 2000.f, 5.f, 0.f);
+
+	/** Yaw rate on the ground in orient mode (degrees a second; negative = instant: the graph turns the body, GASP). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rotation")
+	float GroundOrientRotationRate = -1.f;
+
+	/** Yaw rate on the ground in strafe mode (negative = instant). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rotation")
+	float GroundStrafeRotationRate = -1.f;
+
+	/** Yaw rate in the air (GASP: 200). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rotation")
+	float AirRotationRate = 200.f;
+
+	/** Yaw rate swimming and in debug flight (the swim's tuning is otherwise untouched by the table). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rotation")
+	float SwimRotationRate = 500.f;
+
+	/** The sprint's acceleration falls from its row's to this between the two speeds of SprintAccelerationRamp (GASP: 800 to 300). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Sprint", meta = (ClampMin = "0.0"))
+	float SprintTopSpeedAcceleration = 300.f;
+
+	/** The speeds (uu/s) the sprint's acceleration ramps between. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Sprint")
+	FVector2D SprintAccelerationRamp = FVector2D(300.0, 700.0);
+
+	/** The sprint's ground friction falls from its row's to this between the two speeds of SprintFrictionRamp (GASP: 5 to 3). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Sprint", meta = (ClampMin = "0.0"))
+	float SprintTopSpeedFriction = 3.f;
+
+	/** The speeds (uu/s) the sprint's friction ramps between. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Sprint")
+	FVector2D SprintFrictionRamp = FVector2D(0.0, 500.0);
+
+	/** @return The row of a gait */
+	const FVCGaitSettings& Row(EVCGait Gait) const;
+	FVCGaitSettings& Row(EVCGait Gait);
+
+	/**
+	 * The sprint's acceleration and friction at a speed (the ramps above).
+	 * @param Speed The speed across local up, uu/s
+	 * @return The acceleration, uu/s^2
+	 */
+	float SprintAccelerationAtSpeed(float Speed) const;
+	float SprintFrictionAtSpeed(float Speed) const;
+
+	/** @return A preset's whole table */
+	static FVCMovementTable Preset(EVCMovePreset Preset);
+
+	/**
+	 * The table with the walk, run, sprint and crouch rows at a held set's caps (FVCGaitSettings::WithForwardSpeed); the
+	 * rates and the ramps unchanged (the locomotion plan's L2; the crouch's since L3).
+	 * @param Caps The caps; one of 0 keeps its row
+	 * @return The table
+	 */
+	FVCMovementTable WithForwardCaps(const FVCGaitCaps& Caps) const;
+
+	/** @return The table as the rows and rates vc.Move.Print logs, one line each */
+	FString ToString() const;
+};
+
+/** The engine values one tick of the gait table sets (UVCMovementComponent::ComputeGaitValues). */
+struct FVCGaitValues
+{
+	/** Whether the row applies (on the ground or in the air); swimming and flying take the yaw rate alone. */
+	bool bRowApplies = false;
+	float MaxSpeed = 0.f;
+	float MaxAcceleration = 0.f;
+	float BrakingDeceleration = 0.f;
+	float GroundFriction = 0.f;
+	float BrakingFrictionFactor = 0.f;
+	float RotationRate = 0.f;
+};
+
+/**
+ * The wind's state that a move carries and restores (G220): the air the move is simulated with (the wind at the pawn
+ * times its exposure, quantized), the drift the move left on the velocity and the seconds the pawn has been falling.
+ * The saved move keeps it so a combined or replayed move starts where the original did, and a correction takes the
+ * acknowledged move's end.
+ */
+struct FVCWindMoveState
+{
+	FVector Air = FVector::ZeroVector;
+	FVector Drift = FVector::ZeroVector;
+	float AirborneSeconds = 0.f;
+};
 
 /**
  * Extended CharacterMovementComponent with voxel terrain awareness.
@@ -37,8 +273,31 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement")
 	const FVCTerrainContext& GetTerrainContext() const { return CachedTerrainContext; }
 
-	/** Map a voxel MaterialID to a logical surface type. */
+	/**
+	 * A voxel material's surface underfoot: its surface class in the world's material table (FVoxelMaterialDefinition::
+	 * SurfaceClass, G247; the registry's defaults carry the classes this plugin once held in a table by ID, an atlas sets
+	 * them for the materials it adds, such as the demo's road and trail). A material the table does not know, or with no
+	 * class, is Default.
+	 * @param MaterialID The voxel's material
+	 * @param Materials The world's material table (UVoxelChunkManager::GetMaterialTable)
+	 * @return The surface type
+	 */
+	static EVCSurfaceType MaterialIDToSurfaceType(uint8 MaterialID, const FVoxelMaterialTable& Materials);
+
+	/**
+	 * A voxel material's surface underfoot in the registry's default materials, for a caller with no world.
+	 * @param MaterialID The voxel's material
+	 * @return The surface type (MaterialIDToSurfaceType against FVoxelMaterialTable::Defaults)
+	 */
 	static EVCSurfaceType MaterialIDToSurfaceType(uint8 MaterialID);
+
+	/**
+	 * The movement's surface type for a voxel material's surface class (G247): the voxel engine names the ground, this
+	 * plugin gives it friction, hardness and footsteps.
+	 * @param SurfaceClass The material's surface class
+	 * @return The surface type; Default for Unset
+	 */
+	static EVCSurfaceType SurfaceClassToSurfaceType(EVoxelSurfaceClass SurfaceClass);
 
 	/** Get friction multiplier for a given surface type. */
 	static float GetSurfaceFriction(EVCSurfaceType Surface);
@@ -130,6 +389,41 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float SwimmingSurfaceDamping = 0.85f;
 
+	// --- The current (the hydrology plan's H6, D150) ---
+	// A river reach carries a swimmer downstream at the river's own speed; a lake and the sea are still. The swim move
+	// reads the current at the pawn's own position at the start of the move (GetSwimCurrentAt) and moves the pawn by its
+	// velocity and the current together, and the velocity it keeps afterwards is the pawn's own, through the water: the
+	// braking and the drag act on the swimmer and never on the river, and nothing about the current is kept between
+	// moves. The current is so a function of where the pawn is and of the world's bodies, which every machine builds
+	// alike, and a client's prediction, its replay after a correction and the server's simulation of the same move add
+	// the same current (the wind's push is read on each machine's own schedule, which is G220). Only a swimmer is
+	// carried: floating items and dead bodies rest where they are.
+
+	/** How much of a river reach's flow carries a swimmer: 1 at the river's own speed, 0 not at all. The same on every machine (a class default). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Swimming", meta = (ClampMin = "0.0"))
+	float WaterCurrentFactor = 1.f;
+
+	/**
+	 * The current that carries a swimmer at a position: the flow of the river reach over it (the voxel world's sample
+	 * of the water there, UVoxelChunkManager::SampleWater) times WaterCurrentFactor. Zero in a lake, in the sea, over
+	 * dry ground, further above the river's surface than the capsule's half height, and in a world with no lake and no
+	 * river. The one function the client's prediction and the server's simulation of a swim move both call (D-CR16).
+	 * @param Location The pawn's location
+	 * @return The current, world units a second
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Swimming")
+	FVector GetSwimCurrentAt(const FVector& Location) const;
+
+	/**
+	 * Pure: the current a sample of the water gives a swimmer. A river reach's flow times the factor where the position
+	 * is under the reach's surface or no more than ReachAbove over it; zero for a lake, the sea and no water.
+	 * @param Water The water over the position (FVoxelWaterLevels::Sample)
+	 * @param Factor WaterCurrentFactor
+	 * @param ReachAbove How far over the surface the position may be and still be carried (the capsule's half height)
+	 * @return The current, world units a second
+	 */
+	static FVector ComputeSwimCurrent(const FVoxelWaterSample& Water, float Factor, float ReachAbove);
+
 	/** Current logical surface type (derived from voxel material). */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Movement|Voxel")
 	EVCSurfaceType CurrentSurfaceType = EVCSurfaceType::Default;
@@ -181,6 +475,137 @@ public:
 	 */
 	static FVector ApplyWorldEdgePushBack(const FVoxelWorldBounds& Bounds, const FVector& Location, const FVector& Velocity,
 		float MaxSpeed, float BandWidth, float PushSpeed, float& OutProximity);
+
+	// --- Weather (the weather plan's P4) ---
+	// The wind leans on the pawn and wet ground loses grip. Both read the weather at the pawn once per terrain-context
+	// refresh (UpdateVoxelTerrainContext, WorldWeatherPlugin's GetConditionsAt) and apply inside the movement simulation.
+	// The wind's push is a function of the move alone (G220): a machine's read is its own (the gust changes faster than
+	// the reads, the exposure is its own trace), so a locally controlled move takes the air from the read and carries it
+	// in the saved move and the move data, and the server simulates a client's move with the air the client sent,
+	// clamped to the gust's envelope about its own read (ClampClientWindAir). Without WorldWeatherPlugin
+	// (WITH_WORLD_WEATHER 0) nothing changes. Flying is exempt, as the edge is.
+
+	/** The fraction of the wind's speed the pawn drifts at in the open (a storm's 900 uu/s carries it at 90). 0 turns the push off. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float WindPushFactor = 0.1f;
+
+	/** How much of the ground's grip full wetness takes away (the ground friction's factor is 1 - wetness x this). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0", ClampMax = "0.95"))
+	float WetGripFactor = 0.4f;
+
+	/**
+	 * Seconds in the air before the wind's full drift takes the pawn (a jump, a real drop): a floor lost for a frame or
+	 * two on rough voxel ground does not count, so an idle pawn stays put.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0"))
+	float WindAirborneDelay = 0.35f;
+
+	/** The wind at the pawn as last read (world uu/s, tangent to the local up; zero without the weather plugin). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Weather")
+	FVector GetWeatherWind() const { return CachedWeatherWind; }
+
+	/** The pawn's exposure to the sky as last read (1 in the open, 0 sheltered). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Weather")
+	float GetWeatherExposure() const { return CachedWeatherExposure; }
+
+	/** The ground's wetness under the pawn as last read (0 dry, 1 soaked). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Weather")
+	float GetWeatherWetness() const { return CachedWeatherWetness; }
+
+	/** Seconds of full rain (rate 1, exposed) that soak the pawn from dry (the wet level 0 to 1; the weather plan's P5). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "1.0"))
+	float WetSoakSeconds = 12.f;
+
+	/** Seconds a soaked pawn takes to dry with nothing falling on it. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "1.0"))
+	float WetDrySeconds = 90.f;
+
+	/** The stamina's regeneration while State.Weather.Wet is on, as a fraction of the dry rate. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float WetStaminaRegenMultiplier = 0.5f;
+
+	/** How soaked the pawn is (0 dry, 1 soaked): the rain on it over WetSoakSeconds, a swim at once, drying over WetDrySeconds. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Weather")
+	float GetWeatherWetLevel() const { return WeatherWetLevel; }
+
+	/** The air temperature at the pawn (C) from the last weather read (15 without the weather plugin). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Weather")
+	float GetWeatherTemperatureC() const { return CachedWeatherTemperatureC; }
+
+	/**
+	 * Pure: one step of the wet level. Swimming soaks at once; otherwise the rain on the pawn (its rate times the
+	 * exposure, snow at a third) raises the level over SoakSeconds and nothing falling dries it over DrySeconds.
+	 * @param Level       The level before the step (0..1)
+	 * @param RateOnPawn  Precipitation reaching the pawn (0..1)
+	 * @param bSwimming   In the water
+	 * @param DeltaTime   The step, seconds
+	 * @param SoakSeconds WetSoakSeconds
+	 * @param DrySeconds  WetDrySeconds
+	 * @return The level after the step (0..1)
+	 */
+	static float AdvanceWetLevel(float Level, float RateOnPawn, bool bSwimming, float DeltaTime, float SoakSeconds, float DrySeconds);
+
+	/**
+	 * Pure: the wind's drift on the pawn, Wind x Factor x Exposure, scaled by how much the pawn moves of itself: a
+	 * standing pawn is not moved (it can idle anywhere in any wind), a walking pawn is slowed against the wind and
+	 * helped along it in proportion to its speed (full at MaxSpeed), and a pawn in the air is carried at the full drift.
+	 * CalcVelocity takes the previous tick's drift off the velocity before the braking and the friction (which would
+	 * otherwise eat it) and puts this tick's back on after them. The wind itself blends over a front's transition, so
+	 * the drift needs no ramp of its own. A zero wind, factor or exposure is no drift.
+	 * @param Wind      The wind at the pawn, world uu/s
+	 * @param Factor    WindPushFactor
+	 * @param Exposure  The pawn's exposure to the sky (0..1)
+	 * @param OwnSpeed  The pawn's own speed this tick (after the braking and the friction, before the drift), uu/s
+	 * @param MaxSpeed  The speed at which the drift is full (GetMaxSpeed)
+	 * @param bAirborne In the air past WindAirborneDelay: the full drift whatever the speed
+	 * @return The drift, world uu/s
+	 */
+	static FVector ComputeWindDrift(const FVector& Wind, float Factor, float Exposure, float OwnSpeed, float MaxSpeed, bool bAirborne);
+
+	/**
+	 * How far a client's air on a move may stray from the server's own read before the server clamps it (G220): the slack
+	 * is this fraction of the server's mean wind plus WindClientSlackFloor, across the wind and past the gust's top.
+	 * An honest client's air passes as sent (its read differs from the server's by the gust's phase, the exposure and
+	 * the latency of a change); a forged one gains at most the slack's drift (WindPushFactor of it).
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float WindClientTolerance = 0.25f;
+
+	/** The slack's floor, uu/s: what a client may claim with no wind at the server (a calm's change on its way). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Weather", meta = (ClampMin = "0.0"))
+	float WindClientSlackFloor = 50.f;
+
+	/**
+	 * Pure: the air a move carries, the wind times the exposure rounded to whole uu/s per axis within an int16, so the
+	 * client simulates with exactly what the move data sends (G220).
+	 * @param Air The wind at the pawn times its exposure, world uu/s
+	 * @return The quantized air
+	 */
+	static FVector QuantizeWindAir(const FVector& Air);
+
+	/**
+	 * Pure: the server's check of a client's air (G220, D-CR16). Along the server's mean wind the air may run from minus
+	 * the slack to the gust's top (the mean x (1 + Gustiness)) plus the slack, the exposure being anywhere in [0, 1];
+	 * across it, the slack; the slack is Mean x Tolerance + SlackFloor. Inside the envelope the air is returned as sent,
+	 * bit for bit; outside, each part is clamped to it.
+	 * @param ClientAir  The air the client sent with the move, world uu/s
+	 * @param MeanWind   The server's read of the wind at the pawn without the gust, world uu/s
+	 * @param Gustiness  The front's gustiness (0..1)
+	 * @param Tolerance  WindClientTolerance
+	 * @param SlackFloor WindClientSlackFloor
+	 * @param bOutClamped Receives whether the air was outside the envelope
+	 * @return The air the server simulates the move with
+	 */
+	static FVector ClampClientWindAir(const FVector& ClientAir, const FVector& MeanWind, float Gustiness, float Tolerance, float SlackFloor, bool& bOutClamped);
+
+	/** The wind's state of the move being simulated (the saved move's and the corrections' bookkeeping, G220). */
+	FVCWindMoveState GetWindMoveState() const;
+
+	/** Restores the wind's state (a combined move's start, a correction's acknowledged move). */
+	void SetWindMoveState(const FVCWindMoveState& State);
+
+	/** The air of the move being simulated (a replayed move's own). */
+	void SetMoveWindAir(const FVector& Air) { MoveWindAir = Air; }
 
 	// --- Planet gravity (VoxelWorlds SPHERICAL_PLANET_REQUIREMENTS.md SP-F1; WORLD_MODES_REVIEW_PLAN.md §17, WM-W1) ---
 	// On a planet (the voxel world's bounds are a shell) gravity points at the centre: the engine's custom gravity
@@ -318,6 +743,220 @@ public:
 	/** Swim-rise input state (saved-move flag FLAG_Custom_1). */
 	bool bWantsToAscend = false;
 
+	// --- The gait table (the character refinement plan's C4, decision D75) ---
+	// The player plays the Game Animation Sample's motion-matching graph, whose clips were made for GASP's per-frame
+	// movement tuning: a speed cap per gait and direction, a low acceleration, a soft braking with input and a firm one
+	// stopping, a friction of 5, and an instant capsule yaw on the ground (the graph turns the body: offset root bone,
+	// steering, orientation warping). ApplyGaitTable sets the engine's values from the table every tick at the start of
+	// PerformMovement, so the server's replay and the client's prediction compute the same numbers from the same
+	// saved-move state (the sprint, the walk and the crouch flags, the input) and the rotation mode both sides set.
+	// NPCs keep their own numbers (AVCNPCCharacterBase turns the table off). The swim and flight tuning is untouched.
+
+	/** Apply the gait table every tick (players). Off, the component keeps the values set on it (NPCs, G73's budget). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Gait")
+	bool bUseGaitTable = true;
+
+	/** The rows and rates in force (vc.Move.Preset swaps the whole table, vc.Move.Set one value, vc.Move.Print logs it). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Gait")
+	FVCMovementTable GaitTable;
+
+	/**
+	 * The gait in force: crouched, else sprinting (wanted and not out of breath), else walking (SetWalking), else the run.
+	 * @return The gait
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Gait")
+	EVCGait GetGait() const;
+
+	/** @return The rotation mode the engine's flags say: strafe when the body turns toward the view */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Gait")
+	EVCRotationMode GetRotationMode() const { return bOrientRotationToMovement ? EVCRotationMode::OrientToMovement : EVCRotationMode::Strafe; }
+
+	/** @return The table's row of the gait in force */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Gait")
+	const FVCGaitSettings& GetGaitRow() const { return GaitTable.Row(GetGait()); }
+
+	/**
+	 * Ask to walk (a walk gait; no input is bound to it yet, §8 of the plan: the walk row is reachable by code and the
+	 * console). Travels with the saved move.
+	 * @param bWantsWalk True while walking is wanted
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Movement|Gait")
+	void SetWalking(bool bWantsWalk);
+
+	/** Walk input state (saved-move flag FLAG_Custom_2). */
+	bool bWantsToWalk = false;
+
+	// --- The held set's gait caps (the locomotion state machine plan's L2, D91) ---
+	// Under the state machine (vc.Anim.Locomotion 2) the packs' loops are authored at about 92 and 302 uu/s, so the walk,
+	// run and sprint rows scale to the held set's clip set's caps (120, 400, 700 on the packs). The caps come from the
+	// held item, replicated state each machine holds (the character sets them); whether they apply is the predicting
+	// client's anim class, so it travels in the saved move and the server applies what the client predicted. Motion
+	// matching, the Blueprint's graph and the NPCs keep the table as it is.
+
+	/**
+	 * Set the caps the rows scale to while bWantsClipGaitCaps (the held set's clip set's, else the base set's).
+	 * @param Caps The caps
+	 */
+	void SetClipGaitCaps(const FVCGaitCaps& Caps) { ClipGaitCaps = Caps; }
+
+	/** @return The caps the character set */
+	const FVCGaitCaps& GetClipGaitCaps() const { return ClipGaitCaps; }
+
+	/** The player plays the state machine, so the clips' caps apply (saved-move flag FLAG_Custom_3). */
+	bool bWantsClipGaitCaps = false;
+
+	/**
+	 * The character aims: the held set's aim ceiling (FVCGaitCaps::Aim) applies while the clips' caps do. Set on every
+	 * machine by AVCCharacterBase::ApplyAimState (the owner at its input, the server from its bIsAiming), the same aim
+	 * state that turns the capsule to the view, which the table already reads as the rotation mode.
+	 */
+	bool bAimingForGait = false;
+
+	/**
+	 * Pure: the speed ceiling one tick applies: the held set's aim ceiling while the caps apply and the character aims.
+	 * @param Caps    The held set's caps
+	 * @param bApply  Whether the caps apply (bWantsClipGaitCaps)
+	 * @param bAiming Whether the character aims (bAimingForGait)
+	 * @return The ceiling (uu/s), 0 for none
+	 */
+	static float ResolveSpeedCeiling(const FVCGaitCaps& Caps, bool bApply, bool bAiming);
+
+	/**
+	 * Pure: the table one tick applies: the component's, at the clips' caps when they apply.
+	 * @param Table  The component's table
+	 * @param Caps   The held set's caps
+	 * @param bApply Whether the caps apply (bWantsClipGaitCaps)
+	 * @return The table in force
+	 */
+	static FVCMovementTable ResolveGaitTable(const FVCMovementTable& Table, const FVCGaitCaps& Caps, bool bApply);
+
+	/**
+	 * Whether a montage's root motion (an attack's lunge) moves the capsule only while the character stands (the sword
+	 * attack flow plan, D106): on every move with input the anim instance ignores it, so the legs and the capsule stay
+	 * the locomotion's and a swing on the run does not stop the run (G180). The owner's prediction and the server's
+	 * replay decide from the same move's input; a simulated proxy from its speed. A montage flagged to carry the capsule
+	 * (UVCAnimMetaData_CarriesCapsule, the sword moves plan's D168: the dodge and the roll) takes it with input as well.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Movement")
+	bool bMontageRootMotionOnlyStanding = true;
+
+	/**
+	 * Pure: whether a move takes a montage's root motion (D106, D168).
+	 * @param bOnlyStanding    bMontageRootMotionOnlyStanding
+	 * @param bWantsToMove     The move has input (a simulated proxy: it moves)
+	 * @param bCarriesCapsule  The montage playing with root motion carries the capsule (UVCActionAnimSet::CarriesCapsule)
+	 * @param bFalling         The move falls: the fall stays the fall (the sword moves plan, D169), no montage steers it
+	 * @return True to take it
+	 */
+	static bool ShouldTakeMontageRootMotion(bool bOnlyStanding, bool bWantsToMove, bool bCarriesCapsule = false, bool bFalling = false)
+	{
+		return !bFalling && (bCarriesCapsule || !bOnlyStanding || !bWantsToMove);
+	}
+
+	/**
+	 * Whether a montage that carries the capsule (D168) plays on the body with root motion now: the dodge or the roll.
+	 * Read on every machine from its own montages, so the owner's moves and the server's replay of them agree.
+	 */
+	bool IsPlayingCapsuleMontage() const;
+
+	/**
+	 * Authority: spends stamina at once for a move (the sword moves plan, D170: 15 a dodge, 20 a roll); regeneration then
+	 * waits StaminaRegenDelay, as after the sprint.
+	 * @param Amount Stamina to spend
+	 * @return False when the owner has less than Amount (nothing spent); true without a stamina attribute (nothing to pay)
+	 */
+	bool SpendStamina(float Amount);
+
+	/** The owner's current stamina, or a negative value when it has no stamina attribute (every machine: it replicates). */
+	float GetStamina() const { return GetOwnerStamina(); }
+
+	/**
+	 * Set the engine's movement values from the gait table for this tick: the row's cap by the rotation mode and the
+	 * input's angle to the facing, the sprint's acceleration and friction by speed, the braking by whether there is
+	 * input, the friction scaled by the surface and the wetness, the yaw rate by the mode. PerformMovement calls it;
+	 * public for the tests and the debug overlay. Does nothing with the table off, or swimming and flying.
+	 */
+	void ApplyGaitTable();
+
+	/**
+	 * Pure: the values one tick of the table sets (ApplyGaitTable's arithmetic). The cap is the row's forward speed in
+	 * orient mode, else the row's speed at the angle between the movement and the facing (the velocity's when moving,
+	 * the input's when starting); the sprint's acceleration and friction follow the table's ramps by speed; the braking
+	 * is the row's moving value with input and its stopping value without; the friction is scaled by the surface and
+	 * the wetness; the yaw rate is the mode's on the ground, the air's in the air, the swim's otherwise, where the row
+	 * does not apply.
+	 * @param Table           The table
+	 * @param Gait            The gait in force
+	 * @param Mode            The rotation mode in force
+	 * @param bOnGround       Walking (IsMovingOnGround)
+	 * @param bInAir          Falling
+	 * @param Velocity        The velocity, world
+	 * @param InAcceleration  The input acceleration, world (zero: no input)
+	 * @param Forward         The body's forward
+	 * @param Up              Local up
+	 * @param SpeedMultiplier The GAS move speed multiplier
+	 * @param FrictionScale   The surface and wetness scale on the friction
+	 * @param SpeedCeiling    A ceiling on the cap at every angle before the multiplier (ResolveSpeedCeiling), 0 for none
+	 * @return The values
+	 */
+	static FVCGaitValues ComputeGaitValues(const FVCMovementTable& Table, EVCGait Gait, EVCRotationMode Mode, bool bOnGround, bool bInAir,
+		const FVector& Velocity, const FVector& InAcceleration, const FVector& Forward, const FVector& Up, float SpeedMultiplier, float FrictionScale,
+		float SpeedCeiling = 0.f);
+
+	/**
+	 * Pure: the angle the strafe speed map reads: the velocity's angle to the forward about up when moving, the input's
+	 * when starting from rest, 0 with neither.
+	 * @param Velocity       The velocity
+	 * @param InAcceleration The input acceleration
+	 * @param Forward        The body's forward
+	 * @param Up             Local up
+	 * @return Degrees, 0 straight ahead
+	 */
+	static float MovementAngleToFacing(const FVector& Velocity, const FVector& InAcceleration, const FVector& Forward, const FVector& Up);
+
+	/**
+	 * Pure: the angle between two directions about an up axis (the strafe map's input).
+	 * @param Forward The body's forward
+	 * @param Direction The velocity or the input
+	 * @param Up Local up
+	 * @return Degrees in [-180, 180], positive to the right; 0 when either lies along Up
+	 */
+	static float AngleAboutUp(const FVector& Forward, const FVector& Direction, const FVector& Up);
+
+	// --- The face-aim flip, eased (C4) ---
+	// A bow's draw turns the body toward the view (AVCCharacterBase::SetFacesAim): the capsule's rotation mode flips from
+	// orient to strafe. Flipped in one frame with an instant yaw rate, the capsule snapped up to 180 degrees under the
+	// mesh. Now the flip is a short turn: the capsule turns toward the new mode's target (the view, or where it moves)
+	// at AimTurnRate, and the flags change once the body is within AimTurnTolerance of it or AimTurnMaxTime has passed,
+	// so the mode the graph sees changes when the body already faces the new way.
+
+	/**
+	 * Start turning the body toward the view (a draw) or back toward where it moves (the release): the eased flip above.
+	 * Called by the character on the machine that draws and on the server. Nothing in first person (the yaw follows the
+	 * controller there).
+	 * @param bFaceAim Whether the body is to face the view
+	 */
+	void SetFacesAim(bool bFaceAim);
+
+	/** @return True while the eased flip turns the body and the flags are still the old mode's */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement|Gait")
+	bool IsAimTurnPending() const { return bAimTurnPending; }
+
+	/** @return The mode the body is turning to (or has): true toward the view */
+	bool WantsToFaceAim() const { return bFacesAimTarget; }
+
+	/** Degrees from the new mode's target within which the flip completes. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Gait", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float AimTurnTolerance = 15.f;
+
+	/** Seconds after which the flip completes whatever the angle left. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Gait", meta = (ClampMin = "0.0"))
+	float AimTurnMaxTime = 0.5f;
+
+	/** The yaw rate of the eased turn (degrees a second). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement|Gait", meta = (ClampMin = "1.0"))
+	float AimTurnRate = 540.f;
+
 	// --- Debug flight (spherical Phase 6, WM-BP2, decision D20: QA tooling, not gameplay) ---
 
 	/**
@@ -396,6 +1035,26 @@ public:
 	virtual FNetworkPredictionData_Client* GetPredictionData_Client() const override;
 
 protected:
+	/** A locally controlled client's move: the air from this machine's read, quantized, before the move is saved (G220). */
+	virtual void ReplicateMoveToServer(float DeltaTime, const FVector& NewAcceleration) override;
+
+	/** The server's simulation of a client's move: the air the client sent with it, checked (ClampClientWindAir, G220). */
+	virtual void MoveAutonomous(float ClientTimeStamp, float DeltaTime, uint8 CompressedFlags, const FVector& NewAccel) override;
+
+	/** A correction: the wind's drift and airborne time from the acknowledged move's end, before the replay (G220). */
+	using Super::OnClientCorrectionReceived;
+	virtual void OnClientCorrectionReceived(class FNetworkPredictionData_Client_Character& ClientData, float TimeStamp, FVector NewLocation, FVector NewVelocity,
+		FMovementBaseInterfaceData* NewMovementBaseInterfaceData, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode,
+		FVector ServerGravityDirection) override;
+
+	/**
+	 * One [VCMove] line for a networked move (vc.Net.TraceMoves): the pawn after it and the inputs this machine read for it.
+	 * @param Side "C" for the client that sent the move, "S" for the server that simulated it
+	 * @param TimeStamp the move's client time stamp (the server's correction lines name the same)
+	 * @param DeltaTime the move's time as this machine simulated it
+	 */
+	void TraceMove(const TCHAR* Side, float TimeStamp, float DeltaTime) const;
+
 	/** Cached terrain data, refreshed every TerrainCacheDuration seconds. */
 	FVCTerrainContext CachedTerrainContext;
 
@@ -409,9 +1068,35 @@ protected:
 	/** Base MaxWalkSpeed before GAS multiplier. Captured on BeginPlay. */
 	float BaseMaxWalkSpeed = 0.f;
 
+	/** The held set's gait caps (SetClipGaitCaps). */
+	FVCGaitCaps ClipGaitCaps;
+
 	/** The voxel world's bounds (WM-I5), cached once the chunk manager is found; unbounded until then. */
 	FVoxelWorldBounds CachedWorldBounds;
 	bool bHasWorldBounds = false;
+
+	/** The weather at the pawn as UpdateVoxelTerrainContext last read it (P4). */
+	FVector CachedWeatherWind = FVector::ZeroVector;
+	float CachedWeatherExposure = 1.f;
+	float CachedWeatherWetness = 0.f;
+	float CachedWeatherTemperatureC = 15.f;
+	float WeatherWetLevel = 0.f;
+	double LastWeatherReadSeconds = -1.0;
+	/** The wind drift on the velocity since the last CalcVelocity (ComputeWindDrift), taken off before the next one's braking. */
+	FVector WindDrift = FVector::ZeroVector;
+	/** Seconds the pawn has been falling (0 on the ground), advanced once a move (PerformMovement): the full drift past WindAirborneDelay. */
+	float WindAirborneSeconds = 0.f;
+	/** The air the move being simulated pushes with (the wind times the exposure, quantized; G220): the read on a machine that moves the pawn itself, the client's sent air on the server, the saved move's in a replay. */
+	FVector MoveWindAir = FVector::ZeroVector;
+	/** The server's last read of the wind at the pawn without the gust, and the front's gustiness: ClampClientWindAir's envelope (G220). */
+	FVector CachedWeatherMeanWind = FVector::ZeroVector;
+	float CachedWeatherGustiness = 0.f;
+	/** The air this machine's own read gives (CachedWeatherWind x CachedWeatherExposure), quantized. */
+	FVector ReadWindAir() const;
+	/** The packed move data that carries the air to the server (G220); the engine's container is replaced in the constructor. */
+	TUniquePtr<FCharacterNetworkMoveDataContainer> WindMoveDataContainer;
+	/** The server's move responses: a correction names no base a client cannot resolve (G221); the engine's container is replaced in the constructor. */
+	TUniquePtr<FCharacterMoveResponseDataContainer> BaseMoveResponseDataContainer;
 
 	/** Push-back band proximity, 0..1 (see GetWorldEdgeProximity). */
 	float WorldEdgeProximity = 0.f;
@@ -434,8 +1119,14 @@ protected:
 	/** The voxel world is a planet (its bounds are a shell): gravity points at CachedWorldBounds.Center (WM-W1). */
 	bool bPlanetGravity = false;
 
-	/** Planets: gravity from the position before the move (WM-W1), then the engine's movement. */
+	/**
+	 * Planets: gravity from the position before the move (WM-W1), then the gait table's values (C4), whether the move
+	 * takes a montage's root motion (D106), then the engine's movement.
+	 */
 	virtual void PerformMovement(float DeltaTime) override;
+
+	/** Sets the body's anim instance to take montage root motion or ignore it (D106). */
+	void ApplyMontageRootMotionMode(bool bWantsToMove);
 
 	/**
 	 * Planets: a swimmer stays upright in its gravity as well as a walker or a faller. The engine turns pitch and roll at
@@ -447,8 +1138,34 @@ protected:
 	/** Debug flight (SetDebugFlight): the gravity-frame flight with its climb and altitude hold; else the engine's. */
 	virtual void PhysFlying(float DeltaTime, int32 Iterations) override;
 
-	/** Ends debug flight when another mode takes over (a landing, a teleport's settle, death). */
+	/**
+	 * Ends debug flight when another mode takes over (a landing, a teleport's settle, death); restores the ground's
+	 * acceleration on any way out of the water (G154: a flight or a teleport from the water kept the swim's 256).
+	 */
 	virtual void OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode) override;
+
+public:
+	/** The eased face-aim flip's turn while it is pending (C4), else the engine's rotation. Public as the engine's is. */
+	virtual void PhysicsRotation(float DeltaTime) override;
+
+protected:
+	/**
+	 * One frame of the eased flip: turns the capsule toward the new mode's target at AimTurnRate about local up and
+	 * completes the flip (the flags) within AimTurnTolerance or after AimTurnMaxTime.
+	 * @return True when it turned the body this frame (the engine's rotation is skipped), false once the flip is complete
+	 */
+	bool AdvanceAimTurn(float DeltaTime);
+
+	/** The mode the eased flip is heading to (SetFacesAim's argument) and whether the flags still hold the old one. */
+	bool bFacesAimTarget = false;
+	bool bAimTurnPending = false;
+	float AimTurnElapsed = 0.f;
+
+	/** The surface and the wetness as a factor on the table's friction (and on the legacy constant 8). */
+	float GroundFrictionScale = 1.f;
+
+	/** BeginPlay: take the table vc.Move.Preset / vc.Move.Set left for this session, so a respawned pawn keeps the A/B's. */
+	void ApplySessionTableOverride();
 
 	/** Debug flight state (SetDebugFlight). */
 	bool bDebugFlight = false;

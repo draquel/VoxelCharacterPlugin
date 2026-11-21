@@ -2,6 +2,7 @@
 
 #include "Camera/VCCameraManager.h"
 #include "Camera/CameraComponent.h"
+#include "Camera/VCAimCameraMode.h"
 #include "Core/VCCharacterBase.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Movement/VCGravityFrame.h"
@@ -11,6 +12,7 @@
 UVCCameraManager::UVCCameraManager()
 {
 	PrimaryComponentTick.bCanEverTick = false; // Ticked manually from character
+	AimModeClass = UVCAimCameraMode::StaticClass();
 }
 
 void UVCCameraManager::BeginPlay()
@@ -39,6 +41,27 @@ void UVCCameraManager::PushCameraMode(TSubclassOf<UVCCameraModeBase> CameraModeC
 	UVCCameraModeBase* NewMode = NewObject<UVCCameraModeBase>(this, CameraModeClass);
 	NewMode->CurrentBlendWeight = 0.f;
 	CameraModeStack.Push(NewMode);
+}
+
+void UVCCameraManager::PopCameraMode(TSubclassOf<UVCCameraModeBase> FallbackClass)
+{
+	// The mode under the top comes back as a fresh instance (a lagged pivot starts from the pawn again, not from where
+	// it was left); the old top blends out and UpdateCamera drops it as any replaced mode. Nothing under the top (it
+	// blended out and went): the fallback.
+	const UVCCameraModeBase* Below = CameraModeStack.Num() >= 2 ? CameraModeStack[CameraModeStack.Num() - 2].Get() : nullptr;
+	if (Below)
+	{
+		PushCameraMode(Below->GetClass());
+	}
+	else if (FallbackClass)
+	{
+		PushCameraMode(FallbackClass);
+	}
+}
+
+UClass* UVCCameraManager::GetTopCameraModeClass() const
+{
+	return CameraModeStack.Num() > 0 && CameraModeStack.Last() ? CameraModeStack.Last()->GetClass() : nullptr;
 }
 
 // ---------------------------------------------------------------------------

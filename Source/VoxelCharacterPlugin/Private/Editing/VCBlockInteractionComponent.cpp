@@ -3,6 +3,7 @@
 #include "Editing/VCBlockInteractionComponent.h"
 #include "Camera/VCCameraManager.h"
 #include "Core/VCCharacterBase.h"
+#include "Animation/VCActionAnimSet.h"
 #include "Core/VCPlayerController.h"
 #include "Movement/VCTerrainQueryHelper.h"
 #include "VoxelCharacterPlugin.h"
@@ -605,6 +606,7 @@ bool UVCBlockInteractionComponent::BeginBreakOnServer(const FIntVector& VoxelCoo
 	ServerMaterial = Voxel.MaterialID;
 	UE_LOG(LogVoxelCharacter, Verbose, TEXT("Block break at %s began: material %d, %.2f s at MiningSpeed %.2f"), *VoxelCoord.ToString(),
 		ServerMaterial, GetBreakSeconds(ServerMaterial, Character->GetMiningSpeed()), Character->GetMiningSpeed());
+	Character->ShareOwnAction(EVCAnimAction::Dig);
 	return true;
 }
 

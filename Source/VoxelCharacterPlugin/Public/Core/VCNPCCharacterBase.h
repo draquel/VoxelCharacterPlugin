@@ -7,12 +7,20 @@
 #include "AbilitySystemInterface.h"
 #include "GameplayTagContainer.h"
 #include "Types/CGFCombatTypes.h"
+#include "Core/VCAnimatedCharacter.h"
+#include "Effects/VCRagdollBuoyancy.h"
 #include "VCNPCCharacterBase.generated.h"
 
 class UAbilitySystemComponent;
 class UVCCharacterAttributeSet;
 class UVCCombatAttributeSet;
 class UVCCombatComponent;
+class UVCActionMontageComponent;
+class UVCAppearanceComponent;
+class UVCCharacterAppearance;
+class UVCLocomotionAnimSet;
+class UPrimaryDataAsset;
+class UStaticMeshComponent;
 class UGameplayAbility;
 class UWidgetComponent;
 class UVCNPCHealthBarWidget;
@@ -30,7 +38,8 @@ class UVCNPCHealthBarWidget;
  * voxel-terrain awareness are added by subclasses / later features.
  */
 UCLASS()
-class VOXELCHARACTERPLUGIN_API AVCNPCCharacterBase : public ACharacter, public IAbilitySystemInterface
+class VOXELCHARACTERPLUGIN_API AVCNPCCharacterBase : public ACharacter, public IAbilitySystemInterface,
+	public IVCAnimatedCharacter
 {
 	GENERATED_BODY()
 
@@ -39,6 +48,12 @@ public:
 
 	// --- IAbilitySystemInterface ---
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
+
+	// --- IVCAnimatedCharacter (character animation P2): an NPC is always drawn in third person ---
+	virtual EVCViewMode GetAnimViewMode() const override { return EVCViewMode::ThirdPerson; }
+	virtual FGameplayTag GetAnimActionSet() const override;
+	virtual const UVCCombatComponent* GetAnimCombatComponent() const override;
+	virtual const UVCLocomotionAnimSet* GetAnimLocomotionSet() const override { return LocomotionAnimSet; }
 
 	// =================================================================
 	// Components
@@ -49,6 +64,18 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Combat")
 	TObjectPtr<UVCCombatComponent> CombatComponent;
+
+	/** Plays the NPC's action montages for every machine (character animation P3). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UVCActionMontageComponent> ActionMontages;
+
+	/** Dresses the mesh in Appearance on every machine (character animation P6). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UVCAppearanceComponent> AppearanceComponent;
+
+	/** The NPC's body (character animation P6); empty: the Blueprint's own mesh. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Appearance")
+	TSoftObjectPtr<UVCCharacterAppearance> Appearance;
 
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|GAS")
 	UVCCharacterAttributeSet* GetCharacterAttributes() const { return CharacterAttributes; }
@@ -81,6 +108,22 @@ public:
 	/** Let the possessing AVCNPCAIController think and move (feature 5). False = a training dummy. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VoxelCharacter|AI")
 	bool bAIEnabled = true;
+
+	/** The action set the NPC animates with (Equipment.AnimSet.*): what it fights with. Unset = HeldItem's, else Unarmed. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation", meta = (Categories = "Equipment.AnimSet"))
+	FGameplayTag ActionSet;
+
+	/**
+	 * The item the NPC holds in its main hand, as the player would hold it (character animation P7): its Equipment
+	 * fragment's mesh on the hand (the fragment's bone, else hand_r, at its attach offset), its stance layer linked and its
+	 * action set (when ActionSet is unset). An ItemInventoryPlugin item definition; without that plugin it holds nothing.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation", meta = (AllowedClasses = "/Script/ItemInventoryPlugin.ItemDefinition"))
+	TSoftObjectPtr<UPrimaryDataAsset> HeldItem;
+
+	/** The body's own locomotion for the creature template AnimBP (an animal's, P7); null for a Mannequin body. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UVCLocomotionAnimSet> LocomotionAnimSet;
 
 	/** Faction applied to the combat component at BeginPlay when set (Faction.Animal for wildlife); unset = the component's default (Monster). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (Categories = "Faction"))
@@ -133,6 +176,18 @@ public:
 	void SetTemperament(EVCNPCTemperament InTemperament);
 
 	/**
+	 * Hold for the weather (the weather plan's P5; forwarded to the AI controller, and read by it when it possesses):
+	 * prey stands where it is in a storm. The surface spawner sets it for the entries that hide in storms.
+	 * @param bHold Whether to hold
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|AI")
+	void SetWeatherHold(bool bHold);
+
+	/** Holding for the weather (set by the surface spawner in a storm, for entries that hide in them). */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "VoxelCharacter|AI")
+	bool bHoldsForWeather = false;
+
+	/**
 	 * Death visual when there is no physics asset to ragdoll (static-mesh placeholders): the body
 	 * topples over ToppleSeconds and sinks a little. 0 disables.
 	 */
@@ -168,14 +223,30 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
 
+	/** The engine's, then a base no client can resolve (the terrain's collision) is not replicated (FVCReplicatedBase, G221). */
+	virtual void PreReplication(IRepChangedPropertyTracker& ChangedPropertyTracker) override;
+
 	/**
 	 * The eyes: BaseEyeHeight along local up (spherical Phase 4, WM-SY12): sight traces and the melee sweep start at the
 	 * head on a planet too. Without custom gravity this is the engine's location.
 	 */
 	virtual FVector GetPawnViewLocation() const override;
 
+	/** Holds HeldItem: its mesh on the hand where something draws it, its stance layer linked, its action set kept. */
+	void ApplyHeldItem();
+
+	/** The held item's mesh, made at BeginPlay. */
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMeshComponent> HeldMeshComponent;
+
+	/** The held item's action set (its Equipment fragment's ActionSetTag). */
+	FGameplayTag HeldActionSet;
+
 	/** A planet's ragdoll pull (AVCCharacterBase::StartRadialRagdoll); zero = none. */
 	FVector RagdollGravityDirection = FVector::ZeroVector;
+
+	/** The ragdoll's buoyancy between ticks on this machine (FVCRagdollBuoyancy: a body in water floats). */
+	FVCRagdollBuoyancyState RagdollBuoyancy;
 
 	/** Death visuals + cleanup; runs on every machine from the combat component's OnDied. */
 	UFUNCTION()

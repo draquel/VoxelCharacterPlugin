@@ -18,6 +18,16 @@
 			"Name": "VoxelCharacterPlugin",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "VoxelCharacterEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "VoxelCharacterAnimation",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
 		}
 	],
 	"Plugins": [
@@ -38,6 +48,18 @@
 			"Enabled": true
 		},
 		{
+			"Name": "PoseSearch",
+			"Enabled": true
+		},
+		{
+			"Name": "AnimationBudgetAllocator",
+			"Enabled": true
+		},
+		{
+			"Name": "Niagara",
+			"Enabled": true
+		},
+		{
 			"Name": "ItemInventoryPlugin",
 			"Enabled": true,
 			"Optional": true
@@ -49,6 +71,11 @@
 		},
 		{
 			"Name": "EquipmentPlugin",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "WorldWeatherPlugin",
 			"Enabled": true,
 			"Optional": true
 		}

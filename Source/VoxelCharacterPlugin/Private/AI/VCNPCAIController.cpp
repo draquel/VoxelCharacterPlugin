@@ -248,6 +248,11 @@ EVCNPCAIState AVCNPCAIController::DecideState(const FVCNPCAIDecisionInput& In, E
 		{
 			return EVCNPCAIState::Flee;
 		}
+		// A storm (the weather plan's P5): it holds where it is, under whatever it found, until the hold is lifted.
+		if (In.bHoldsForWeather)
+		{
+			return EVCNPCAIState::Idle;
+		}
 		if (In.bHasRoute)
 		{
 			return EVCNPCAIState::Patrol;
@@ -310,6 +315,7 @@ void AVCNPCAIController::OnPossess(APawn* InPawn)
 		Temperament = NPC->Temperament;
 		WaryEngageRadius = NPC->WaryEngageRadius;
 		bFearsLight = NPC->bFearsLight;
+		bWeatherHold = NPC->bHoldsForWeather;
 		LightFearRadius = NPC->LightFearRadius;
 		PackId = NPC->PackId;
 	}
@@ -514,6 +520,7 @@ void AVCNPCAIController::Think()
 	In.bAtRoute = In.DistanceFromRoute <= AcceptanceRadius * 2.f;
 	In.bPrey = Behavior == EVCNPCBehavior::Prey;
 	In.bCanWander = WanderRadius > 0.f;
+	In.bHoldsForWeather = bWeatherHold;
 	In.bThreatInFleeRange = T != nullptr && In.DistanceToTarget <= FleeRadius;
 	In.bTargetFeared = T != nullptr && IsTargetFeared(T);
 	In.FearRadius = LightFearRadius;

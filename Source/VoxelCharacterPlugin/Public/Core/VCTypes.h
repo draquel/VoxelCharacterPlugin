@@ -45,21 +45,6 @@ enum class EVCVoxelModificationType : uint8
 	Place,
 };
 
-/** Animation archetype for the currently equipped item.
- *  Selects the upper-body animation layer in the AnimBP. */
-UENUM(BlueprintType)
-enum class EVCEquipmentAnimType : uint8
-{
-	Unarmed,
-	OneHandMelee,
-	TwoHandMelee,
-	Pickaxe,
-	Axe,
-	Bow,
-	Shield,
-	Tool,
-};
-
 /** What a combatant does when Health reaches zero (UVCCombatComponent::OutOfHealthPolicy). */
 UENUM(BlueprintType)
 enum class EVCOutOfHealthPolicy : uint8
@@ -184,6 +169,10 @@ struct VOXELCHARACTERPLUGIN_API FVCSnapshotEquipmentEntry
 
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
 	FString ItemJson;
+
+	/** A sheath's weapon was in the hand (the equipment sheathing plan, D80): restored drawn. */
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Items")
+	bool bDrawn = false;
 };
 
 /**
@@ -291,6 +280,22 @@ struct VOXELCHARACTERPLUGIN_API FVCPlayerSaveState
 
 	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
 	float Stamina = 0.f;
+
+	/** The body the player chose (AVCPlayerState::SetChosenAppearance; character animation P6); empty: the rules decide. */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	FSoftObjectPath ChosenAppearance;
+};
+
+/** A change of the owner's charge the server hears of (a move request of kind EVCMoveKind::Charge; the sword moves plan, D167). */
+UENUM()
+enum class EVCChargeChange : uint8
+{
+	/** The charge begins: the server starts its clock and everyone else sees the windup. */
+	Begin,
+	/** The charge is given up with its lowering (the charge montage's End section). */
+	Lower,
+	/** The charge is given up at once (the guard raised over it). */
+	Stop,
 };
 
 /** The carried light changed (feature 7): lit / dark, fuel seconds left and capacity (0 / 0 when it needs no fuel). */

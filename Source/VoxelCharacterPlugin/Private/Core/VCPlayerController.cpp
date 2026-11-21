@@ -3,6 +3,8 @@
 #include "Core/VCPlayerController.h"
 #include "Core/VCPlayerState.h"
 #include "UI/VCVitalsWidget.h"
+#include "UI/VCCarriedWeaponsWidget.h"
+#include "UI/VCReticleWidget.h"
 #include "Core/VCCharacterBase.h"
 #include "Gathering/VCGatherTable.h"
 #include "Editing/VCBlockInteractionComponent.h"
@@ -497,6 +499,10 @@ void AVCPlayerController::BindVitalsToPawn(APawn* InPawn)
 	{
 		Vitals->InitWithCharacter(Cast<AVCCharacterBase>(InPawn));
 	}
+	if (UVCCarriedWeaponsWidget* Carried = Cast<UVCCarriedWeaponsWidget>(CarriedWeaponsWidget))
+	{
+		Carried->InitWithCharacter(Cast<AVCCharacterBase>(InPawn));
+	}
 }
 
 void AVCPlayerController::CreatePersistentWidgets()
@@ -566,6 +572,20 @@ void AVCPlayerController::CreatePersistentWidgets()
 	}
 #endif
 
+	// The weapons carried on the body, just above the hotbar (display only, Z-order 0)
+#if WITH_EQUIPMENT_PLUGIN
+	{
+		CarriedWeaponsWidget = CreateWidget<UUserWidget>(this, UVCCarriedWeaponsWidget::StaticClass());
+		if (CarriedWeaponsWidget)
+		{
+			CarriedWeaponsWidget->AddToViewport(0);
+			CarriedWeaponsWidget->SetAnchorsInViewport(FAnchors(0.5f, 0.86f, 0.5f, 0.86f));
+			CarriedWeaponsWidget->SetAlignmentInViewport(FVector2D(0.5f, 1.f));
+			CarriedWeaponsWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+		}
+	}
+#endif
+
 	// Vitals (bottom-left, always visible, Z-order 1)
 	{
 		TSubclassOf<UUserWidget> ClassToUse = VitalsWidgetClass;
@@ -584,6 +604,24 @@ void AVCPlayerController::CreatePersistentWidgets()
 			VitalsWidget->SetPadding(FMargin(24.f, 0.f, 0.f, 24.f));
 			VitalsWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 			BindVitalsToPawn(GetPawn());
+		}
+	}
+
+	// The aim reticle (centre, Z-order 1; C3): it shows itself while the pawn aims.
+	{
+		TSubclassOf<UUserWidget> ClassToUse = ReticleWidgetClass;
+		if (!ClassToUse)
+		{
+			ClassToUse = UVCReticleWidget::StaticClass();
+		}
+		ReticleWidget = CreateWidget<UUserWidget>(this, ClassToUse);
+		if (ReticleWidget)
+		{
+			ReticleWidget->AddToViewport(1);
+			// The size first: SetDesiredSizeInViewport after the anchors left them at the top-left corner (the dot drew there).
+			ReticleWidget->SetDesiredSizeInViewport(FVector2D(64.f, 64.f));
+			ReticleWidget->SetAnchorsInViewport(FAnchors(0.5f, 0.5f, 0.5f, 0.5f));
+			ReticleWidget->SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
 		}
 	}
 

@@ -6,9 +6,13 @@
 #include "GameFramework/Character.h"
 #include "AbilitySystemInterface.h"
 #include "Core/VCTypes.h"
+#include "Core/VCAnimatedCharacter.h"
 #include "Types/CGFItemTypes.h"
 #include "Interfaces/CGFInventoryInterface.h"
 #include "Interfaces/CGFLightBearerInterface.h"
+#include "Effects/VCRagdollBuoyancy.h"
+#include "Animation/VCActionMontageComponent.h"
+#include "Engine/NetSerialization.h"
 #include "VCCharacterBase.generated.h"
 
 class UVCCameraManager;
@@ -20,6 +24,15 @@ class UVoxelCollisionManager;
 class UVoxelWorldConfiguration;
 class UVCCombatComponent;
 class UVCBlockInteractionComponent;
+class UVCActionMontageComponent;
+class UVCAppearanceComponent;
+class UVCCharacterAppearance;
+class UVCUnderwaterPostProcess;
+class UVCWaterEffectsComponent;
+class UStaticMesh;
+class UStaticMeshComponent;
+enum class EVCAnimAction : uint8;
+enum class EVCReloadFrom : uint8;
 struct FInputActionValue;
 struct FVoxelWorldBounds;
 
@@ -36,6 +49,24 @@ class UInventoryComponent;
 #endif
 
 /**
+ * One physics body of a frozen corpse, in world space (G204): the server's pose, which every client copies so the body
+ * lies where the server's does (and where its query collision is).
+ */
+USTRUCT()
+struct VOXELCHARACTERPLUGIN_API FVCCorpseBodyPose
+{
+	GENERATED_BODY()
+
+	/** The body's world location (a tenth of a unit). */
+	UPROPERTY()
+	FVector_NetQuantize10 Location = FVector::ZeroVector;
+
+	/** The body's world rotation. */
+	UPROPERTY()
+	FRotator Rotation = FRotator::ZeroRotator;
+};
+
+/**
  * Base character class for the voxel character controller.
  *
  * Assembles movement, camera, and integration components.
@@ -46,7 +77,8 @@ UCLASS()
 class VOXELCHARACTERPLUGIN_API AVCCharacterBase : public ACharacter,
 	public IAbilitySystemInterface,
 	public ICGFInventoryInterface,
-	public ICGFLightBearerInterface
+	public ICGFLightBearerInterface,
+	public IVCAnimatedCharacter
 {
 	GENERATED_BODY()
 
@@ -63,6 +95,30 @@ public:
 	// --- ICGFLightBearerInterface (feature 7: the equipped torch is the light) ---
 	virtual float GetCarriedLightLevel_Implementation() const override;
 	virtual bool ConsumeCarriedLightFuel_Implementation(float Seconds) override;
+
+	// --- IVCAnimatedCharacter (character animation P2) ---
+	virtual EVCViewMode GetAnimViewMode() const override;
+	virtual FGameplayTag GetAnimActionSet() const override { return ActiveActionSet; }
+	virtual const UVCCombatComponent* GetAnimCombatComponent() const override;
+	virtual bool IsAnimAiming() const override { return IsAiming(); }
+
+	/**
+	 * The action set for what a character holds in its main hand: the item's own set when it names one under
+	 * Equipment.AnimSet, Tool for any other held item, Unarmed for none.
+	 * @param bHoldsItem     Whether the main hand holds an item
+	 * @param ItemActionSet  The item's Equipment fragment ActionSetTag (may be empty)
+	 * @return An Equipment.AnimSet.* tag
+	 */
+	static FGameplayTag PickActionSet(bool bHoldsItem, const FGameplayTag& ItemActionSet);
+
+	/**
+	 * Gives the mesh the locomotion vc.Anim.Locomotion names: 1 the motion-matching AnimBP of
+	 * UVCSettings::PlayerLocomotionAnimClass (character animation P5), 2 the state machine of PlayerStateMachineAnimClass
+	 * (the locomotion state machine plan), the worn appearance's AnimClass over either; 0, or a class that does not load,
+	 * the Blueprint's own anim class. A dedicated server and the automation tests keep the Blueprint's. Re-links the
+	 * equipped items' layers after a change.
+	 */
+	void ApplyLocomotionAnimClass();
 
 	/**
 	 * Fuel of the carried light (the equipped light item's durability).
@@ -170,6 +226,14 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Combat")
 	TObjectPtr<UVCCombatComponent> CombatComponent;
 
+	/** Plays the action montages: the owning player's at input, everyone else's by multicast (character animation P3). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UVCActionMontageComponent> ActionMontages;
+
+	/** Dresses the mesh in the player state's appearance (character animation P6). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VoxelCharacter|Animation")
+	TObjectPtr<UVCAppearanceComponent> AppearanceComponent;
+
 	/**
 	 * Cubic worlds (world modes review §22): the block highlight, the placement preview and timed block breaking (the
 	 * primary action held on a block breaks it after its material's hardness / MiningSpeed, decided on the server).
@@ -219,9 +283,25 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
 	bool IsCorpse() const { return bIsCorpse; }
 
+	/**
+	 * Where the server's corpse froze, each physics body's world transform (G204).
+	 * @return The pose, empty until the server's ragdoll has settled
+	 */
+	const TArray<FVCCorpseBodyPose>& GetCorpsePose() const { return CorpsePose; }
+
 	/** A corpse whose ragdoll never settles freezes after this long. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "1"))
 	float CorpseFreezeAfterSeconds = 10.f;
+
+	/**
+	 * ... and after this long while it is still rising through water (FVCRagdollBuoyancy): a body that died deep takes
+	 * longer to reach the surface than one takes to fall over.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "1"))
+	float CorpseFreezeAfterSecondsInWater = 40.f;
+
+	/** The ragdoll's buoyancy between ticks on this machine: in water or not, its depth, the column it rises in. */
+	FVCRagdollBuoyancyState RagdollBuoyancy;
 
 	/** A planet's ragdoll falls toward the centre: its bodies' world gravity off, this pull applied every tick (zero = none). */
 	FVector RagdollGravityDirection = FVector::ZeroVector;
@@ -239,6 +319,160 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Combat")
 	bool TryStartMeleeAttack();
+
+	/**
+	 * Press the primary action, as IA_PrimaryAction's press does: the whole chain (draw a bow, attack, chop, dig; G174's
+	 * swing at the air with a melee weapon). For scripts and QA on the local player's pawn (Claudius call_actor_function,
+	 * where injected Enhanced Input does not reach a PIE player).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
+	void PressPrimaryAction();
+
+	/** Release the primary action, as IA_PrimaryAction's release does: a bow's draw looses, a timed break stops. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
+	void ReleasePrimaryAction();
+
+	/**
+	 * Dodge, as IA_Dodge's press does (the sword moves plan, D170): with movement input a roll toward it (the capsule turned
+	 * to the input first), with none a step back, with the facing locked to the view a step toward the input's side. The
+	 * owner plays it at once and asks the server (Server_RequestMove), which spends the stamina, holds the immunity and
+	 * plays it for everyone else. Nothing when the held set has no dodge, in the air, short of stamina, or during another
+	 * dodge or roll before its recovery. For scripts and QA as PressPrimaryAction.
+	 * @return True when the move started (on the owner)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
+	bool TryStartDodge();
+
+	/**
+	 * Press the secondary action, as IA_SecondaryAction's press does: a bow aims, a shield raises its guard (D94), edit mode
+	 * places. For scripts and QA, as PressPrimaryAction.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
+	void PressSecondaryAction();
+
+	/** Release the secondary action: the aim ends, the guard comes down. */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
+	void ReleaseSecondaryAction();
+
+	/**
+	 * Press the secondary attack, as IA_SecondaryAttack's press does (the sword moves plan, D166): with a melee weapon whose
+	 * set has a secondary branch, the branch's attack by the combo's rule; nothing otherwise, and nothing behind a raised
+	 * guard. For scripts and QA, as PressPrimaryAction.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Input")
+	void PressSecondaryAttack();
+
+	/** Whether this machine's player holds its guard up (the owner's input state; the server's is State.Blocking). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
+	bool IsBlocking() const { return bBlocking; }
+
+	/**
+	 * Start drawing the main hand's ranged weapon (ranged combat plan B3): the owner's check that there is an arrow
+	 * (UVCRangedAttackAbility::CanStartDraw; a toast says none), its own draw montage, and the ability's activation on the
+	 * server. Step 0 of the primary-action chain: a ranged weapon in hand takes the press, arrows or not; also callable
+	 * from Blueprint / debug commands and scripts (a client's own pawn in a networked PIE).
+	 * @return True when the main hand holds a ranged weapon (the chain stops)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Combat")
+	bool TryStartRangedAttack();
+
+	/**
+	 * Release a draw started by TryStartRangedAttack: the owner's release montage when the draw was long enough to shoot
+	 * (its draw stops otherwise), and the release sent to the server, which decides the shot. Nothing without a draw.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Combat")
+	void ReleaseRangedAttack();
+
+	/** @return True between TryStartRangedAttack and ReleaseRangedAttack on this machine */
+	bool IsDrawingRangedWeapon() const { return bDrawingRangedWeapon; }
+
+	// ==================== Aiming (the character refinement plan's C3, D73) ====================
+
+	/**
+	 * Whether the character aims a ranged weapon: the owner holds the secondary action with one in the main hand, or a
+	 * draw is on. The server decides (bIsAiming, replicated, the ASC's State.Aiming); the owner counts its own input and
+	 * draw at once, so the camera and the reticle do not wait a round trip. While aiming the body faces the view and
+	 * strafes (SetFacesAim), the motion matching plays its aim set, the third-person camera moves in (UVCAimCameraMode)
+	 * and the reticle shows.
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
+	bool IsAiming() const;
+
+	/** The local view mode (third person on every machine but the owner's: it is not replicated, G87). */
+	EVCViewMode GetViewMode() const { return CurrentViewMode; }
+
+	/**
+	 * The owner's secondary action with a ranged weapon in hand (pressed or released): aims at once on this machine and
+	 * asks the server. Nothing without a ranged weapon. Callable so a Blueprint or a script can aim as the input does.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Combat")
+	void SetWantsToAim(bool bWantsToAim);
+
+	/** The server's ranged attack says a draw began or ended (the ability's activation and end): a draw aims. */
+	void SetDrawingOnServer(bool bDrawing);
+
+	/**
+	 * The power the owner's draw has now (UItemFragment_RangedWeapon::GetDrawPower from its own start time), 0 without a
+	 * draw: the reticle's ring closes with it.
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
+	float GetOwnDrawPower() const;
+
+	// ==================== Reload (the bow reload plan, D98-D101) ====================
+
+	/**
+	 * Whether an arrow is nocked on the ranged weapon in the main hand (D98): the server sets it at a reload's nock and
+	 * clears it at the shot, when the weapon leaves the hand and when the archer goes down; replicated. A draw needs it
+	 * (UVCRangedAttackAbility::CanStartDraw, the owner's check and the server's).
+	 * @return True when an arrow is nocked
+	 */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Combat")
+	bool IsArrowNocked() const { return bArrowNocked; }
+
+	/** @return True while the server runs a reload, from its start to its nock or its end */
+	bool IsReloading() const { return bReloading; }
+
+	/**
+	 * Where a reload takes its arrow from (D99): a worn quiver (Equipment.Slot.Quiver), else the bag at the hip.
+	 * @return The reload's variant
+	 */
+	EVCReloadFrom GetReloadFrom() const;
+
+	/**
+	 * Whether a reload may start now (the server's check, each tick while the weapon is empty): a ranged weapon that
+	 * shoots ammo in the main hand, its ammo in the bag, nothing nocked, no reload, draw or sheath sequence running, not
+	 * down, and the last shot's loose or a hit's flinch played out.
+	 * @return True when a reload may start
+	 */
+	bool CanReload() const;
+
+	/** The server's shot left the string (UVCRangedAttackAbility): the weapon is empty and reloads after the loose. */
+	void HandleArrowLoosed();
+
+	/** Whether the aim ray (UVCCombatStatics::ComputeAimRay) meets a hostile within AimRange: the reticle reddens. */
+	bool IsAimOnHostile(float Range = 20000.f) const;
+
+	/**
+	 * Turns the body toward the view while a bow is drawn (ranged combat plan B4): in third person the movement turns
+	 * the body toward the control rotation at its rotation rate instead of toward where it moves, in the gravity frame;
+	 * first person faces the view already. The owner calls it at its draw and its release, the ranged attack on the
+	 * server at its start and its end, so both turn the body alike.
+	 * @param bFaceAim Whether the body follows the view
+	 */
+	void SetFacesAim(bool bFaceAim);
+
+	/**
+	 * Plays an action's montage at once on this machine: the owning player's own dig, chop or place, at input.
+	 * Cosmetic; the server's path decides what happens.
+	 * @param Action The action
+	 */
+	void PlayOwnAction(EVCAnimAction Action);
+
+	/**
+	 * Authority: plays an action the owning player started for every other machine (it played its own at input).
+	 * @param Action The action
+	 */
+	void ShareOwnAction(EVCAnimAction Action);
 
 	// --- Optional Integration Components ---
 	// Not UPROPERTY — UHT forbids UPROPERTY inside #if blocks.
@@ -271,11 +505,19 @@ public:
 
 	/**
 	 * Switch between first and third person on this machine: the camera, the rotation rule, mesh visibility, equipment
-	 * attachment, the interaction range, then OnViewModeChanged. No request goes to the server (nothing there reads it).
+	 * attachment, the interaction range, then OnViewModeChanged. The rotation rule goes to the server too
+	 * (Server_SetFacesView, G256): the body turns with the view there as on the owner; the rest is the owner's alone.
 	 * @param NewMode The perspective to switch to
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Camera")
 	void SetViewMode(EVCViewMode NewMode);
+
+	/**
+	 * The farthest near clip plane the blend into first person can use, in uu: the camera passes through the body, and
+	 * a plane farther out cuts it open. A project whose plane is already this near (this one's is 1 uu) is unchanged by
+	 * the blend; one at the engine's 10 uu gets this for the blend and its own back after it (G192).
+	 */
+	static constexpr float FirstPersonBlendNearPlane = 1.f;
 
 	/** Fired when view mode changes. */
 	UPROPERTY(BlueprintAssignable, Category = "VoxelCharacter|Camera")
@@ -285,9 +527,12 @@ public:
 	// Equipment / Inventory State
 	// =================================================================
 
-	/** Animation archetype of the currently equipped main-hand item. Read by AnimInstance. */
+	/**
+	 * The action set of the main-hand item (Equipment.AnimSet.*), read by UVCAnimInstance. Set from the equipment's
+	 * change event, which fires on every machine (the replicated slots), so a remote player's set is right too.
+	 */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Equipment")
-	EVCEquipmentAnimType ActiveItemAnimType = EVCEquipmentAnimType::Unarmed;
+	FGameplayTag ActiveActionSet;
 
 	/** Currently selected hotbar slot index. */
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelCharacter|Inventory")
@@ -300,6 +545,41 @@ public:
 	/** FP/TP socket mappings for equipment attachment. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Equipment")
 	TArray<FVCEquipmentSocketMapping> EquipmentSocketMappings;
+
+	/**
+	 * QA: a live offset on a slot's visual, in its bone's space after the item's fit and the body's correction (vc.Equip.Nudge,
+	 * character refinement plan C1), keyed by the slot tag's name; vc.Equip.PrintFit prints the fit it adds up to. Never saved.
+	 */
+	TMap<FName, FTransform> EquipFitNudges;
+
+	/** GetDrawnGripWeight at the last UpdateDrawnGrip, so the fit is restored once when the draw ends. */
+	float LastDrawnGripWeight = 0.f;
+
+	/**
+	 * Where a slot's visual sits on its bone: the item's fit (its Equipment fragment's AttachOffset, or that times the slot's
+	 * correction on the slot's own bone), then the body's correction for the bone (UVCCharacterAppearance::AttachCorrections,
+	 * D71), then a QA nudge. Each is a transform in the bone's space applied after the one before.
+	 * @param Fit The item's fit as EquipmentPlugin computes it
+	 * @param BodyCorrection The appearance's correction for the bone
+	 * @param Nudge vc.Equip.Nudge's offset (identity outside QA)
+	 * @return The visual's relative transform on the bone
+	 */
+	static FTransform ComposeAttachTransform(const FTransform& Fit, const FTransform& BodyCorrection, const FTransform& Nudge);
+
+	/** The body's correction for the bone a slot's visual sits on (identity without an appearance or an entry). */
+	FTransform GetBodyAttachCorrection(FName Bone) const;
+
+	/**
+	 * How far the main hand's item sits at its set's DrawnGrip instead of its fit: the weight of the montage in the
+	 * UpperBody slot (the draw and the release) while the held set has one, else 0.
+	 */
+	float GetDrawnGripWeight() const;
+
+	/**
+	 * Each tick while a drawn grip applies (and once more when it stops): re-place the main hand's visual between its fit and
+	 * the set's DrawnGrip by GetDrawnGripWeight (UVCActionAnimSet::bHasDrawnGrip).
+	 */
+	void UpdateDrawnGrip();
 
 	// =================================================================
 	// Item actions (client-safe: route through the owning component's server RPCs)
@@ -316,6 +596,49 @@ public:
 	/** Unequip an equipment slot back into the inventory. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
 	bool UnequipSlotToInventory(FGameplayTag SlotTag);
+
+	// --- Sheaths (the equipment sheathing plan, D77-D82; VCCharacterBase_Sheath.cpp) ---
+
+	/**
+	 * Draw a carried weapon from its sheath: the weapon drawn now is sheathed first (its montage), then this one's
+	 * unsheathe plays and the server puts it in the hand at the montage's hand-off (D79, D82). The owner plays the
+	 * montages at once; the server checks again.
+	 * @param SheathSlotTag The sheath (Equipment.Slot.Sheath.*)
+	 * @return True when the request was issued
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
+	bool RequestDrawWeapon(FGameplayTag SheathSlotTag);
+
+	/**
+	 * Put the drawn weapon back in its sheath (its montage; the weapon leaves the hand's use at once).
+	 * @return True when the request was issued (a weapon was drawn)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
+	bool RequestSheatheWeapon();
+
+	/** R: sheathe the drawn weapon, or with none drawn draw the last one drawn (else the first carried). @return Issued */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
+	bool RequestToggleSheathe();
+
+	/** X: sheathe the drawn weapon and draw the next carried one (the sheaths' order: belt, hip, back). @return Issued */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Equipment")
+	bool RequestCycleWeapon();
+
+	/** The main hand's sheaths holding a weapon, in the cycle's order (every machine, from the replicated slots). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Equipment")
+	TArray<FGameplayTag> GetCarriedWeaponSlots() const;
+
+	/** The sheath whose weapon is in the main hand; invalid when none is drawn. */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Equipment")
+	FGameplayTag GetDrawnSheath() const;
+
+	/**
+	 * The draw's and the sheathe's predicate on the owner and the server (D-CR16): alive and not downed, and for a draw an
+	 * occupied sheath not drawn yet, for a sheathe (an invalid tag) a weapon drawn.
+	 * @param SheathSlotTag The sheath to draw; invalid to ask about a sheathe
+	 * @return True when the request may go ahead
+	 */
+	bool CanSheathAction(FGameplayTag SheathSlotTag) const;
 
 	/** Use the active hotbar item (F): consume it, place it, or equip it. Client: sends the server request. */
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Inventory")
@@ -506,6 +829,43 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Movement")
 	bool IsNearWorldEdge() const { return bNearWorldEdge; }
 
+	// --- Weather (the weather plan's P5) ---
+
+	/** The wet level (UVCMovementComponent::GetWeatherWetLevel) at which State.Weather.Wet goes on. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Weather", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float WetOnLevel = 0.6f;
+
+	/** The wet level under which State.Weather.Wet goes off again (under WetOnLevel: no flicker at the edge). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Weather", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float WetOffLevel = 0.2f;
+
+	/** The air temperature (C) at and under which State.Weather.Cold goes on, with UVCWeatherColdEffect's speed penalty. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Weather")
+	float ColdBelowC = 0.f;
+
+	/** Degrees over ColdBelowC the air must warm to before the cold goes off again. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Weather", meta = (ClampMin = "0.0"))
+	float ColdHysteresisC = 2.f;
+
+	/** Soaked (State.Weather.Wet on the ability system; every machine once replicated). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Weather")
+	bool IsWet() const;
+
+	/** In the cold (State.Weather.Cold on the ability system; every machine once replicated). */
+	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Weather")
+	bool IsCold() const;
+
+	/**
+	 * Pure: whether a state with hysteresis is on after a reading.
+	 * @param bWasOn  The state before
+	 * @param Value   The reading
+	 * @param OnAt    The reading at which it goes on (and over, when bHighIsOn)
+	 * @param OffAt   The reading at which it goes off again (short of OnAt)
+	 * @param bHighIsOn High readings turn it on (the wet level); false: low readings do (the temperature)
+	 * @return The state after
+	 */
+	static bool HysteresisOn(bool bWasOn, float Value, float OnAt, float OffAt, bool bHighIsOn);
+
 	// =================================================================
 	// Debug
 	// =================================================================
@@ -536,17 +896,54 @@ public:
 	virtual float GetInteractionRange() const;
 
 	virtual void UpdateEquipmentAttachments();
+
+	/**
+	 * Hide the body's equipment visuals from their own player in first person with the body (no arms mesh draws them, D57:
+	 * a bow floating at a hidden hand); a slot drawn on the arms mesh keeps its visual. The lights stay.
+	 */
+	void UpdateEquipmentVisualVisibility();
 	virtual USkeletalMeshComponent* GetTargetMeshForSlot(const FGameplayTag& SlotTag) const;
 
 	virtual void OnEquipmentAbilitiesChanged(const FGameplayTag& SlotTag);
 
 protected:
+	/** Server, every half second: the weather's state tags and the cold's effect from the movement component's weather read. */
+	void UpdateWeatherEffects();
+	float WeatherEffectsTimer = 0.f;
+
 	// --- Lifecycle ---
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	/** The engine's, then a base no client can resolve (the terrain's collision) is not replicated (FVCReplicatedBase, G221). */
+	virtual void PreReplication(IRepChangedPropertyTracker& ChangedPropertyTracker) override;
 	virtual void PossessedBy(AController* NewController) override;
+	virtual void NotifyControllerChanged() override;
+
+	/**
+	 * The engine's restart of a possessed pawn (the server's possession, the owning client's PawnClientRestart) sets the
+	 * default movement mode; a pawn whose terrain wait holds it stays frozen (G205: it fell through the ground it waited
+	 * for, its collision off).
+	 */
+	virtual void Restart() override;
+
+	/**
+	 * The underwater view tint, on the pawn a local player controller views through and nowhere else (G133): its
+	 * volume is unbound and would tint the local view for a swimming remote player or NPC. Null on every other pawn.
+	 */
+	UPROPERTY(Transient)
+	TObjectPtr<UVCUnderwaterPostProcess> UnderwaterPostProcess;
+
+	/** Create or destroy UnderwaterPostProcess so it exists exactly while a local player controller views through this pawn. */
+	void UpdateUnderwaterPostProcess();
+
+	/**
+	 * The effects at the water's surface (a splash, a wake, their sounds; the water plan's W1), made from this pawn's own
+	 * movement mode on every machine but a dedicated server (UVCWaterEffectsComponent::PlaysIn). Null on a dedicated server.
+	 */
+	UPROPERTY(Transient)
+	TObjectPtr<UVCWaterEffectsComponent> WaterEffects;
 
 	/** Replicated corpse flag: clients apply the corpse state when it arrives. */
 	UPROPERTY(ReplicatedUsing = OnRep_IsCorpse)
@@ -555,11 +952,239 @@ protected:
 	UFUNCTION()
 	void OnRep_IsCorpse();
 
+	/**
+	 * Where the server's corpse froze (G204): each physics body's world transform, in the physics asset's order; empty
+	 * until the server's ragdoll settles. A client places its copy there, frozen, instead of keeping its own simulation.
+	 */
+	UPROPERTY(ReplicatedUsing = OnRep_CorpsePose)
+	TArray<FVCCorpseBodyPose> CorpsePose;
+
+	UFUNCTION()
+	void OnRep_CorpsePose();
+
+	/**
+	 * The appearance the corpse wears (G204). A kept corpse has no player state to be dressed from, so a client it becomes
+	 * relevant to after the death takes it from here: it wore the class's own body, which the server's pose does not fit.
+	 */
+	UPROPERTY(ReplicatedUsing = OnRep_CorpseAppearance)
+	TSoftObjectPtr<UVCCharacterAppearance> CorpseAppearance;
+
+	UFUNCTION()
+	void OnRep_CorpseAppearance();
+
+	/** Seconds after a shot before the reload starts, the release's loose played first (D101). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0"))
+	float ReloadAfterShotSeconds = 0.35f;
+
+	/** Seconds after a hit broke a reload off before the next one starts, the flinch played first (D101). */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat", meta = (ClampMin = "0"))
+	float ReloadAfterHitSeconds = 0.6f;
+
+	/**
+	 * The arrows standing in a worn quiver while the bag holds the ranged weapon's ammo (D100), in the quiver's mesh space
+	 * (its opening up +Z): a cosmetic cluster with the ammo's mesh, not one per arrow. Empty: none shown.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Combat")
+	TArray<FTransform> QuiverArrowLayout;
+
+	/** The server's nock (D98); every machine shows the arrow from it and the owner's waiting draw starts. */
+	UPROPERTY(ReplicatedUsing = OnRep_ArrowNocked)
+	bool bArrowNocked = false;
+
+	UFUNCTION()
+	void OnRep_ArrowNocked();
+
+	/**
+	 * The arrows' look (D100): the ammo mesh the server finds in the bag (the held weapon's ammo, else any), null with
+	 * none; replicated, since the bag is the owner's alone. The arrow in the hand and those in a worn quiver show it.
+	 */
+	UPROPERTY(ReplicatedUsing = OnRep_ArrowMesh)
+	TObjectPtr<UStaticMesh> ArrowMesh;
+
+	UFUNCTION()
+	void OnRep_ArrowMesh();
+
+	/** The server runs a reload (StartReload until FinishReload or CancelReload). */
+	bool bReloading = false;
+
+	/** World time before which no reload starts (the shot's loose, a hit's flinch). */
+	double NextReloadTime = 0.0;
+
+	/** The server's nock at the reload montage's nock time (its UVCAnimNotify_ActionHit). */
+	FTimerHandle ReloadNockTimer;
+
+	/** The owner pressed to draw while the weapon was being loaded: the draw starts at the nock if still held. */
+	bool bDrawWaitsForNock = false;
+
+	/** A ranged weapon is in the main hand (refreshed at every equipment change, every machine): the reload's gate. */
+	bool bRangedWeaponInHand = false;
+
+	/** The arrow in the drawing hand (D100), created on first use; cosmetic, every machine. */
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMeshComponent> HeldArrowComponent;
+
+	/** The arrows standing in the quiver (QuiverArrowLayout), cosmetic, every machine. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> QuiverArrowComponents;
+
+	/** Server, each tick: start a reload when CanReload says so. */
+	void UpdateBowReload();
+
+	/** Server: play the reload to everyone and nock at its nock time (D101). */
+	void StartReload();
+
+	/** Server: the reload's nock (the weapon still in the hand, the archer up). */
+	void FinishReload();
+
+	/**
+	 * Server: break a running reload off (its montage stopped everywhere); the next starts no sooner than RetryDelay.
+	 * @param RetryDelay Seconds before a reload may start again
+	 */
+	void CancelReload(float RetryDelay);
+
+	/** Server: set the nock and act on it as a client's OnRep does. */
+	void SetArrowNocked(bool bNocked);
+
+	/** Every machine, at a change of the nock: the owner's waiting draw starts. */
+	void HandleNockChanged();
+
+	/** Every machine, each tick: show the arrow in the hand from a reload's grab to the loose. */
+	void UpdateHeldArrow();
+
+	/** Every machine: the arrows standing in a worn quiver (ArrowMesh on QuiverArrowLayout). */
+	void UpdateQuiverArrows();
+
+	/** Server: ArrowMesh from the bag. */
+	void RefreshArrowMesh();
+
+	/** A hit landed (server): a reload is broken off (D101). */
+	UFUNCTION()
+	void HandleDamagedForReload(const FCGFDamageContext& Context);
+
+	/** The bag changed (server): the quiver's arrows and a reload waiting for ammo. */
+	UFUNCTION()
+	void HandleInventoryChangedForReload();
+
+	/** The server's aim state (C3): the owner's request or a draw on the server; clients apply it as it arrives. */
+	UPROPERTY(ReplicatedUsing = OnRep_IsAiming)
+	bool bIsAiming = false;
+
+	UFUNCTION()
+	void OnRep_IsAiming();
+
+	/** The owner's request to aim, as the server knows it (Server_SetWantsToAim). */
+	bool bServerWantsToAim = false;
+
+	/** A draw on the server (SetDrawingOnServer). */
+	bool bServerDrawing = false;
+
+	/** The owner's own request (SetWantsToAim), counted before the server answers. */
+	bool bLocalWantsToAim = false;
+
+	/** What ApplyAimState last applied, so the camera is pushed and popped once per change. */
+	bool bAimStateApplied = false;
+
+	UFUNCTION(Server, Reliable)
+	void Server_SetWantsToAim(bool bWantsToAim);
+
+	/**
+	 * The rule this machine turns the body by (G256): with the view (first person) or toward where it moves. The owner's
+	 * from its view mode (SetViewMode); the server's from the owner's request (Server_SetFacesView); false elsewhere.
+	 */
+	bool bFacesView = false;
+
+	/**
+	 * Apply the view's rotation rule on this machine: the body's yaw with the controller's, or toward the movement.
+	 * @param bInFacesView True for the first-person rule
+	 */
+	void ApplyViewFacing(bool bInFacesView);
+
+	/**
+	 * The owner's view rule on the server (G256), sent at each view toggle (SetViewMode), so the server turns the body as
+	 * the owner does and whatever reads the facing (the gait's strafe speed, an attack's lunge) agrees.
+	 * @param bInFacesView True while the owner is in first person
+	 */
+	UFUNCTION(Server, Reliable)
+	void Server_SetFacesView(bool bInFacesView);
+
+	/** The server's rule: bIsAiming from the request and the draw; applies it here and replicates it. */
+	void UpdateServerAiming();
+
+	/**
+	 * Apply what IsAiming says on this machine: the body facing the view (SetFacesAim, third person), the ASC's
+	 * State.Aiming (authority), and for the local player the aim camera pushed or popped. Called on every change of input,
+	 * draw, replication or view mode.
+	 */
+	void ApplyAimState();
+
 	/** Corpse state on this machine: no capsule or movement, keep the ragdoll, watch for it to settle. */
 	void ApplyCorpseState();
 
 	/** Freeze the ragdoll once it has settled (or after CorpseFreezeAfterSeconds). */
 	void CheckCorpseSettled();
+
+	/** Stop simulating and keep the bones where the bodies are: the frozen corpse, with query collision for item recovery. */
+	void FreezeCorpse();
+
+	/**
+	 * Start the death's ragdoll on this machine (G204): the server's frozen pose when it has replicated, else the
+	 * simulation once the terrain's collision under the body is cooked here (a body that became relevant to a client
+	 * far from where it streamed would fall through the ground); nothing without a physics asset.
+	 */
+	void StartDeathRagdoll();
+
+	/**
+	 * Whether this machine has the terrain's collision under the body: the spawn wait's chunks (FVCTerrainQueryHelper::
+	 * GetTerrainWaitChunks, TerrainWaitChunkRadius: the grid around it and the chunk half a chunk under it), since a body
+	 * lying on a chunk's border rests on both. Requests the missing chunks' collision.
+	 * @param OutMissing The chunks with no collision yet
+	 * @return True when there is none missing, or no voxel world
+	 */
+	bool HasRagdollGround(TSet<FIntVector>& OutMissing);
+
+	/** A held ragdoll's chunk got its collision: start the ragdoll once none is missing. */
+	void OnRagdollChunkCollisionReady(const FIntVector& ChunkCoord);
+
+	/** Stop holding the ragdoll for the terrain (unbinds from the collision manager). */
+	void ReleaseRagdollHold();
+
+	/** Put a client's body in the server's frozen pose (CorpsePose) and freeze it there a few frames later. */
+	void PlaceCorpsePose();
+
+	/**
+	 * Hold a simulating body still (no gravity, pull, lift or velocity) for two frames, then freeze it: the bones then lie
+	 * where the bodies do. Freezes at once a body that does not simulate.
+	 * @param Pose Where to put the bodies first (the server's pose, on a client), or null to hold them where they are
+	 */
+	void HoldInPose(const TArray<FVCCorpseBodyPose>* Pose);
+
+	/**
+	 * Wear CorpseAppearance when it is set and not yet worn (a client's late copy of a corpse).
+	 * @return True when the body changed
+	 */
+	bool ApplyCorpseAppearance();
+
+	/** The chunks a held ragdoll waits for; empty when none is held. */
+	TSet<FIntVector> RagdollHoldChunks;
+
+	/** The held ragdoll's binding to the collision manager. */
+	FDelegateHandle RagdollHoldHandle;
+	TWeakObjectPtr<UVoxelCollisionManager> RagdollHoldManager;
+
+	/** The body is held still in its pose (on a client the server's), gravity and the water's lift off, until it freezes. */
+	bool bPlacingCorpsePose = false;
+
+	/** This machine has put its copy in the server's pose (once: the pose replicates once). */
+	bool bCorpsePosePlaced = false;
+
+	/** The server's pose did not fit this machine's mesh (another body count): the body keeps its own ragdoll. */
+	bool bCorpsePoseRejected = false;
+
+	/** The frame the pose was put in: the freeze waits for the physics step after it. */
+	uint64 CorpsePlacedFrame = 0;
+
+	/** How often the hold began again before the freeze: the bodies rebuilt off the pose, or the bones behind them. */
+	int32 CorpsePlaceRetries = 0;
 
 	FTimerHandle CorpseSettleTimer;
 	int32 CorpseCalmChecks = 0;
@@ -573,10 +1198,55 @@ protected:
 	/** When true, mesh hide is deferred until the FP camera blend is nearly complete. */
 	bool bPendingFPMeshHide = false;
 
+	/**
+	 * Hold the process's near clip plane at FirstPersonBlendNearPlane or nearer for the blend into first person
+	 * (FVCNearClipOverride: the plane found is remembered, and lowered only if it is farther). Once per blend.
+	 */
+	void HoldBlendNearClip();
+
+	/**
+	 * End this pawn's hold: the near plane goes back as it was found. Called on every way out of the blend (the body
+	 * hidden, the switch reversed, EndPlay); does nothing without a hold.
+	 */
+	void ReleaseBlendNearClip();
+
+	/** True while this pawn holds the near plane for the blend into first person. */
+	bool bHoldsBlendNearClip = false;
+
 	// --- Terrain Ready Spawn ---
 
 	/** Elapsed time waiting for terrain (seconds). Used for timeout fallback. */
 	float TerrainWaitElapsed = 0.f;
+
+	/**
+	 * Server: the owning client reported its own terrain wait done (Server_ReportTerrainReady). A remote player's pawn is
+	 * released on the server only once the client has collision under it too, or the release would move the client's
+	 * pawn, still waiting with its collision off, onto ground the client has not cooked (G205).
+	 */
+	bool bOwningClientTerrainReady = false;
+
+	/** Server: the wait for the owning client's terrain was logged (once a wait). */
+	bool bLoggedOwningClientWait = false;
+
+	/**
+	 * Server: whether this wait still holds the pawn for its owning client's terrain: a remote player's pawn whose
+	 * client has not reported (Server_ReportTerrainReady), before the wait's timeout. Never for a local or AI pawn.
+	 * @return True while the server keeps the pawn frozen for the client
+	 */
+	bool IsWaitingForOwningClientTerrain() const;
+
+	/**
+	 * The owning client's terrain wait placed its pawn (G205): the server releases its own copy once its wait is done as
+	 * well.
+	 */
+	UFUNCTION(Server, Reliable)
+	void Server_ReportTerrainReady();
+
+	/** Client: this pawn's report was sent (once a pawn). */
+	bool bReportedTerrainReady = false;
+
+	/** Client: send Server_ReportTerrainReady once the owning client's own pawn is placed (its wait done). */
+	void ReportTerrainReadyToServer();
 
 	/** Max seconds to wait for terrain before falling back to line trace placement. */
 	UPROPERTY(EditDefaultsOnly, Category = "VoxelCharacter|Spawn")
@@ -600,6 +1270,15 @@ protected:
 
 	/** Freeze character movement and collision until terrain is ready. */
 	void FreezeForTerrainWait();
+
+	/** Dead or a kept corpse: no terrain wait, no placement (G204). */
+	bool IsDeadBody() const;
+
+	/**
+	 * End a terrain wait without placing the pawn: a body that died, or became a corpse, while the wait held it. Its
+	 * collision comes back, and a client's copy goes back to the server's place.
+	 */
+	void StopTerrainWaitForBody();
 
 	/** Begin event-driven wait for surrounding chunks to have collision. */
 	void InitiateChunkBasedWait();
@@ -664,7 +1343,7 @@ protected:
 	UFUNCTION()
 	void HandleInteractableLost(AActor* InteractableActor);
 
-	/** Equipment changed — update animation type and visuals. */
+	/** An item was equipped: re-attach the visuals for the current view mode. */
 	UFUNCTION()
 	void HandleItemEquipped(const FItemInstance& Item, FGameplayTag SlotTag);
 
@@ -691,12 +1370,145 @@ protected:
 	UFUNCTION()
 	void HandleItemUnequipped(const FItemInstance& Item, FGameplayTag SlotTag);
 
+	/** Equipment changed on this machine (an equip, or the replicated slots arriving): refresh the action set. */
+	UFUNCTION()
+	void HandleEquipmentChanged();
+
+	/** Sets ActiveActionSet from the main-hand slot. */
+	void RefreshActionSet();
+
+	/**
+	 * Gives the movement the gait caps of the clips the state machine plays for the held set (its clip set's, else the
+	 * base set's; the locomotion plan's L2, D91). Held items are replicated state, so every machine sets the same caps.
+	 */
+	void UpdateClipGaitCaps();
+
+	/** Links the equipped items' anim layers again (after the mesh's anim class changed). */
+	void RelinkEquipmentAnimLayers();
+
+	/**
+	 * Wears the player state's appearance (character animation P6), then the anim class it plays, the items' layers again
+	 * and the first-person visibility. Nothing to do when it already wears it.
+	 */
+	void ApplyPlayerAppearance();
+
+	/** Wear an appearance (null: the class's own body) and refit what depends on the body: anim class, layers, attachments. */
+	void WearAppearance(const UVCCharacterAppearance* Wanted);
+
+	/** The player state's appearance changed (resolved on the server, replicated to clients). */
+	UFUNCTION()
+	void HandleAppearanceChanged();
+
+	/** Whether ApplyPlayerAppearance has dressed the mesh once (the first time applies even the class's own body). */
+	bool bAppearanceApplied = false;
+
+	/** The mesh's anim class from the Blueprint, before ApplyLocomotionAnimClass first ran (vc.Anim.Locomotion 0 plays it). */
+	UPROPERTY(Transient)
+	TSubclassOf<UAnimInstance> BlueprintAnimClass;
+
 	/** Equipment manager reports a carried-light change: forward to OnCarriedLightChanged. */
 	UFUNCTION()
 	void HandleCarriedLightChanged(FGameplayTag SlotTag, bool bLit, float FuelSeconds, float MaxFuel);
 
 	/** Last reported carried-light lit state (prompt text depends on it; fuel ticks alone do not refresh). */
 	bool bLastCarriedLightLit = false;
+
+	/**
+	 * Swing: by the combo's rule (the sword attack flow plan, D104) the owner's montage at once, or the press kept until
+	 * the current attack's recovery, or nothing in its wind-up; then the melee ability's activation with the owner's combo
+	 * index, which sweeps on the server at the hit time. TryStartMeleeAttack's swing at a target and the primary action's
+	 * swing at the air with a melee weapon in hand (G174), and the secondary attack's (D166). A primary press from rest
+	 * with a set that charges starts the charge instead (the sword moves plan, D167): the first attack comes at the release.
+	 * A primary press while sprinting fast plays the set's run attack (D168).
+	 * @param bSecondary  The secondary attack's press: the combo's secondary branch
+	 * @param bFreshPress A press made now, which may start a charge or the run attack (false for a kept press played at
+	 *                    the recovery and for a charge's release)
+	 * @return True if the press was taken (a swing requested, a charge begun, or kept); false for the secondary without a branch
+	 */
+	bool StartMeleeSwing(bool bSecondary = false, bool bFreshPress = true);
+
+	/** The owner: the charged strike, held long enough (D167): its montage at once, the request to the server. */
+	void StartChargedSwing();
+
+	/**
+	 * The owner: the charge given up (D167): with its lowering, or at once (a guard raised over it); the server hears of it.
+	 * @param bLower Play the charge's lowering (its End section), else stop it
+	 */
+	void CancelCharge(bool bLower);
+
+	/**
+	 * The owner's charge while the primary is held (D167): ended when something stopped its montage, lowered when a sprint
+	 * or a jump begins, the strike when due.
+	 */
+	void UpdateCharge();
+
+	/**
+	 * The owner tells the server its charge changed (D167): a move request of kind Charge (D165), or on a machine that is
+	 * owner and server ApplyChargeChange directly.
+	 * @param Change Begin, Lower or Stop
+	 */
+	void SendChargeChange(EVCChargeChange Change);
+
+	/**
+	 * Authority: the owner's charge changed (D167): the server starts its own clock at a begin (when its rule allows the
+	 * charge) and shows the windup to everyone else, or ends its clock and shows the lowering or the stop.
+	 * @param Change Begin, Lower or Stop
+	 */
+	void ApplyChargeChange(EVCChargeChange Change);
+
+	/**
+	 * Authority: the melee ability's activation for a swing, with the owner's combo index for the ability to take (G179).
+	 * @param ComboIndex The owner's combo index, -1 for none
+	 * @return True if the ability activated
+	 */
+	bool ActivateMeleeSwing(int32 ComboIndex);
+
+	/**
+	 * The owner's move (the sword moves plan, D165): one request for every move it plays at its input. An attack activates
+	 * the melee ability with the owner's combo index (D104); a dodge or a roll the dodge ability (D170). The server checks
+	 * each with the predicate the owner checked.
+	 * @param Request The move's kind, its index, and a roll's direction
+	 */
+	UFUNCTION(Server, Reliable)
+	void Server_RequestMove(const FVCMoveRequest& Request);
+
+	/**
+	 * Authority: activates the ability of a move (D165): the melee ability for an attack, the dodge ability for a dodge or
+	 * a roll, with the request kept for it to take.
+	 * @param Request The owner's move
+	 * @return True if the ability activated
+	 */
+	bool ActivateMove(const FVCMoveRequest& Request);
+
+	/** Whether the body's facing follows the view (a bow drawn in third person, the first-person view): the dodge steps (D170). */
+	bool IsFacingLockedToView() const;
+
+	/** No jump before a dodge's or a roll's recovery (D170), on the owner and on the server alike. */
+	virtual bool CanJumpInternal_Implementation() const override;
+
+	/**
+	 * Raise the guard (D94): with a shield in the off hand (UVCBlockAbility::CanStartBlock), the owner's guard at once and
+	 * the block ability's activation, which the server holds while the secondary action is held. During an attack's swing
+	 * the owner keeps the press and raises the guard at the attack's recovery (D172).
+	 * @return True when the guard went up (or was up), or the press was kept for the recovery
+	 */
+	bool StartBlock();
+
+	/**
+	 * Whether the owner's guard is up or kept for an attack's recovery (D172): nothing else is pressed behind it (D94).
+	 * @return True while StartBlock's guard is up or kept
+	 */
+	bool IsGuardHeld() const;
+
+	/** Lower the guard: the owner's lowering (when its guard still plays) and the ability's release on the server. */
+	void StopBlock();
+
+	/** The owner holds its guard up (StartBlock until StopBlock). */
+	bool bBlocking = false;
+
+	/** A draw this machine started (TryStartRangedAttack) and its world time, for the owner's release montage. */
+	bool bDrawingRangedWeapon = false;
+	double OwnDrawStartTime = -1.0;
 
 	/** Equipment manager removed a worn-out item (authority): a burnt-out torch tells the owner. */
 	UFUNCTION()
@@ -721,9 +1533,15 @@ protected:
 	void Input_Interact(const FInputActionValue& Value);
 	void Input_ToggleView(const FInputActionValue& Value);
 	void Input_PrimaryAction(const FInputActionValue& Value);
+	/** IA_Dodge: TryStartDodge (D170). */
+	void Input_Dodge(const FInputActionValue& Value);
 	/** The primary action is released (or cancelled): a timed block break stops (WM-C15). */
 	void Input_StopPrimaryAction(const FInputActionValue& Value);
 	void Input_SecondaryAction(const FInputActionValue& Value);
+	/** The secondary action is released (or cancelled): the aim ends (C3). */
+	void Input_StopSecondaryAction(const FInputActionValue& Value);
+	/** The secondary attack's press (D166: the middle mouse button). */
+	void Input_SecondaryAttack(const FInputActionValue& Value);
 	void Input_OpenInventory(const FInputActionValue& Value);
 	void Input_OpenMap(const FInputActionValue& Value);
 	void Input_Pause(const FInputActionValue& Value);
@@ -735,6 +1553,45 @@ protected:
 
 	UFUNCTION(Server, Reliable)
 	void Server_UseItemInSlot(int32 SlotIndex);
+
+	void Input_Sheathe(const FInputActionValue& Value);
+	void Input_CycleWeapon(const FInputActionValue& Value);
+
+	/** The owner's draw (a sheath) or sheathe (an invalid tag): the server checks and runs the same sequence. */
+	UFUNCTION(Server, Reliable)
+	void Server_SheathSequence(FGameplayTag DrawSheath);
+
+	/**
+	 * The sheathe of the drawn weapon (when another or none is wanted), then the unsheathe of DrawSheath after it. On the
+	 * owning client: its montages only. On the server: the montages to everyone (the owner skipping what it played when
+	 * bOwnerPlayedIt), the sheathe at once and the draw at the unsheathe's hand-off (D82).
+	 * @param DrawSheath     The sheath to draw; invalid to sheathe only
+	 * @param bOwnerPlayedIt The owning client played the montages itself
+	 */
+	void RunSheathSequence(FGameplayTag DrawSheath, bool bOwnerPlayedIt);
+
+	/** One montage of a sequence (and on the server, its state change). */
+	void PlaySheathStep(EVCAnimAction Action, FGameplayTag Sheath, bool bOwnerPlayedIt);
+
+	/** The action set of the weapon in a sheath (its Equipment fragment's ActionSetTag through PickActionSet). */
+	FGameplayTag GetSheathActionSet(FGameplayTag Sheath) const;
+
+	/** The unsheathe after a sequence's sheathe, and the server's draw at an unsheathe's hand-off. */
+	FTimerHandle SheathStepTimer;
+	FTimerHandle SheathHandOffTimer;
+
+	/** The sheath drawn last on this machine (R draws it again). */
+	FGameplayTag LastDrawnSheath;
+
+	/** Whether a sheath's hand-off was pending at the last tick, so the visual is re-seated once more when it passes. */
+	bool bSheathHandOffWasPending = false;
+
+	/** Each tick while an unsheathe or a sheathe plays: re-seat the visuals so the weapon changes bone at the hand-off. */
+	void UpdateSheathHandOff();
+
+	/** A sheath's weapon was drawn or put back (every machine): re-seat the visuals, remember the drawn sheath. */
+	UFUNCTION()
+	void HandleEquipmentDrawnChanged(FGameplayTag SlotTag, bool bDrawn);
 
 	UFUNCTION(Server, Reliable)
 	void Server_DropItemInSlot(int32 SlotIndex, int32 Count);

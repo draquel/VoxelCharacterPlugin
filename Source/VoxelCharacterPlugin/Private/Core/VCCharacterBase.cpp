@@ -7,27 +7,46 @@
 #include "Core/VCCharacterAttributeSet.h"
 #include "Core/VCPlayerController.h"
 #include "Core/VCGameModeBase.h"
+#include "Core/VCSettings.h"
 #include "Combat/VCCombatComponent.h"
+#include "Combat/VCMeleeAttackAbility.h"
+#include "Combat/VCRangedAttackAbility.h"
+#include "Combat/VCBlockAbility.h"
+#include "Animation/VCActionAnimSet.h"
+#include "Animation/VCActionMontageComponent.h"
+#include "Animation/VCAppearanceComponent.h"
+#include "Animation/VCCharacterAppearance.h"
+#include "Animation/VCLocomotionClipSet.h"
+#include "Core/VCLocomotionAnimInstance.h"
 #include "Editing/VCBlockInteractionComponent.h"
 #include "Utilities/CGFCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
+#include "Core/VCGameplayTags.h"
 #include "Interfaces/CGFRestPointInterface.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Camera/VCCameraManager.h"
+#include "Camera/VCNearClipOverride.h"
 #include "Camera/VCFirstPersonCameraMode.h"
 #include "Camera/VCThirdPersonCameraMode.h"
 #include "Movement/VCMovementComponent.h"
 #include "Movement/VCTerrainQueryHelper.h"
 #include "Movement/VCGravityFrame.h"
+#include "Movement/VCReplicatedBase.h"
 #include "Camera/VCUnderwaterPostProcess.h"
+#include "Effects/VCWaterEffectsComponent.h"
 #include "Input/VCInputConfig.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "PhysicsEngine/BodyInstance.h"
+#include "PhysicsEngine/BodySetup.h"
 #include "TimerManager.h"
 #include "AbilitySystemComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Net/UnrealNetwork.h"
+#include "Core/VCGameplayTags.h"
+#include "Core/VCWeatherEffects.h"
 #include "VoxelCoordinates.h"
 #include "VoxelWorldConfiguration.h"
 #include "VoxelChunkManager.h"
@@ -37,6 +56,7 @@
 #include "VoxelCollisionManager.h"
 #include "VoxelCharacterPlugin.h"
 #include "Engine/Engine.h"
+#include "EngineUtils.h"
 #include "GameFramework/DamageType.h"
 #include "GameFramework/GameModeBase.h"
 #include "Combat/VCCombatStatics.h"
@@ -98,6 +118,43 @@ namespace
 		const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(World);
 		return ChunkMgr && UVCBlockInteractionComponent::ShowsBlockFeedback(ChunkMgr->GetConfiguration());
 	}
+
+	/** vc.Anim.Locomotion changed: every player in play takes the locomotion it now names. */
+	void OnLocomotionChanged(IConsoleVariable* Variable)
+	{
+		if (!GEngine)
+		{
+			return;
+		}
+		for (const FWorldContext& Context : GEngine->GetWorldContexts())
+		{
+			if (UWorld* World = Context.World(); World && World->IsGameWorld())
+			{
+				for (TActorIterator<AVCCharacterBase> It(World); It; ++It)
+				{
+					It->ApplyLocomotionAnimClass();
+				}
+			}
+		}
+	}
+
+	TAutoConsoleVariable<int32> CVarAnimLocomotion(
+		TEXT("vc.Anim.Locomotion"), 2,
+		TEXT("The player's locomotion: 0 the player Blueprint's own anim class (ABP_VoxelCharacter), 1 motion matching (UVCSettings::PlayerLocomotionAnimClass, character animation P5, kept for comparison), 2 the state machine over the packs' clips (UVCSettings::PlayerStateMachineAnimClass, the locomotion state machine plan; the default since its L4, D86 reversing D44); a class that does not load plays the Blueprint's. Applies at once to every player in play."),
+		FConsoleVariableDelegate::CreateStatic(&OnLocomotionChanged),
+		ECVF_Default);
+
+	/** vc.Anim.MotionMatching, the switch's name before the state machine: sets vc.Anim.Locomotion to its value. */
+	void OnMotionMatchingAliasChanged(IConsoleVariable* Variable)
+	{
+		CVarAnimLocomotion->Set(Variable->GetInt(), ECVF_SetByConsole);
+	}
+
+	TAutoConsoleVariable<int32> CVarAnimMotionMatching(
+		TEXT("vc.Anim.MotionMatching"), 2,
+		TEXT("The old name of vc.Anim.Locomotion (0 the Blueprint's anim class, 1 motion matching, 2 the state machine): setting it sets that switch. Read vc.Anim.Locomotion for the locomotion in force."),
+		FConsoleVariableDelegate::CreateStatic(&OnMotionMatchingAliasChanged),
+		ECVF_Default);
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +226,41 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 		Chest.AttachOffset = FTransform(FRotator(-23.f, 83.f, -90.f), FVector(16.f, -3.f, 0.f)); // up onto the chest
 		Chest.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Armor")));
 		EquipmentManager->AvailableSlots.Add(Chest);
+
+		// The quiver, worn on the back with its opening over the right shoulder blade (the bow pack's reload from the back,
+		// D97). It shares the back's place with the back's sheath: only a bow can be there with it (its fragment's
+		// SharesPlaceWith*), so a shield or a two-hander sends it to the bag. The item's AttachOffset fits it on the bone.
+		FEquipmentSlotDefinition Quiver;
+		Quiver.SlotTag = CGFGameplayTags::Equipment_Slot_Quiver;
+		Quiver.SlotDisplayName = NSLOCTEXT("VoxelCharacter", "Quiver", "Quiver");
+		Quiver.AttachSocket = FName("spine_05");
+		Quiver.AcceptedItemTags.AddTag(CGFGameplayTags::Item_Category_Quiver);
+		EquipmentManager->AvailableSlots.Add(Quiver);
+		// The arrows standing in it (D100), for the pack's quiver (its opening up +Z, the rim at 18 cm, the tube 6.7 cm out
+		// along +Y): heads down inside, the nocks 12 cm above the rim, fanned a little.
+		const FVector4f Fan[] = { FVector4f(-3.f, 5.f, -4.f, 3.f), FVector4f(3.f, 5.5f, 4.f, 2.f), FVector4f(-1.5f, 9.f, -2.f, -4.f), FVector4f(2.f, 8.5f, 3.f, -3.f) };
+		for (const FVector4f& Arrow : Fan)
+		{
+			QuiverArrowLayout.Add(FTransform(FRotator(Arrow.W, 0.f, 180.f + Arrow.Z), FVector(Arrow.X, Arrow.Y, 30.f)));
+		}
+
+		// The sheaths (the equipment sheathing plan, D78), in the cycle's order: a weapon carried on the body, drawn into
+		// the main hand. Each item's SheathOffset fits it on the bone; the slot's correction stays the identity. Each is
+		// one place on the body and holds one item (the sheath loadout plan, D95): the back carries a bow, a two-hander
+		// or a shield, and draws a shield into the off hand (its item's hand) with the one-handed weapon (D96).
+		auto AddSheath = [this](const FGameplayTag& Tag, const FText& Name, FName Bone)
+		{
+			FEquipmentSlotDefinition Sheath;
+			Sheath.SlotTag = Tag;
+			Sheath.SlotDisplayName = Name;
+			Sheath.AttachSocket = Bone;
+			Sheath.DrawSlotTag = CGFGameplayTags::Equipment_Slot_MainHand;
+			Sheath.AcceptedItemTags.AddTag(FGameplayTag::RequestGameplayTag(FName("Item.Category.Weapon")));
+			EquipmentManager->AvailableSlots.Add(Sheath);
+		};
+		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_Belt, NSLOCTEXT("VoxelCharacter", "SheathBelt", "Belt"), FName("pelvis"));
+		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_HipLeft, NSLOCTEXT("VoxelCharacter", "SheathHipLeft", "Left Hip"), FName("pelvis"));
+		AddSheath(CGFGameplayTags::Equipment_Slot_Sheath_Back, NSLOCTEXT("VoxelCharacter", "SheathBack", "Back"), FName("spine_05"));
 	}
 #endif
 
@@ -178,6 +270,8 @@ AVCCharacterBase::AVCCharacterBase(const FObjectInitializer& ObjectInitializer)
 
 	// --- Combat ---
 	CombatComponent = CreateDefaultSubobject<UVCCombatComponent>(TEXT("CombatComponent"));
+	ActionMontages = CreateDefaultSubobject<UVCActionMontageComponent>(TEXT("ActionMontages"));
+	AppearanceComponent = CreateDefaultSubobject<UVCAppearanceComponent>(TEXT("Appearance"));
 	CombatComponent->FactionTag = CGFGameplayTags::Faction_Player;
 
 	// --- Block feedback and timed breaking (cubic worlds) ---
@@ -204,6 +298,31 @@ UAbilitySystemComponent* AVCCharacterBase::GetAbilitySystemComponent() const
 		return PS->GetAbilitySystemComponent();
 	}
 	return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// IVCAnimatedCharacter
+// ---------------------------------------------------------------------------
+
+EVCViewMode AVCCharacterBase::GetAnimViewMode() const
+{
+	// The view mode is the owning player's alone (G87): every other machine draws the pawn in third person.
+	return IsLocallyControlled() ? CurrentViewMode : EVCViewMode::ThirdPerson;
+}
+
+const UVCCombatComponent* AVCCharacterBase::GetAnimCombatComponent() const
+{
+	return CombatComponent;
+}
+
+FGameplayTag AVCCharacterBase::PickActionSet(bool bHoldsItem, const FGameplayTag& ItemActionSet)
+{
+	if (!bHoldsItem)
+	{
+		return VCGameplayTags::Equipment_AnimSet_Unarmed.GetTag();
+	}
+	const FGameplayTag Root = VCGameplayTags::Equipment_AnimSet.GetTag();
+	return ItemActionSet.MatchesTag(Root) && ItemActionSet != Root ? ItemActionSet : VCGameplayTags::Equipment_AnimSet_Tool.GetTag();
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +358,18 @@ void AVCCharacterBase::BeginPlay()
 {
 	Super::BeginPlay();
 	UpdateMeshVisibility();
+	ApplyLocomotionAnimClass();
+
+	// The body, once the voxel world is up (a pawn possessed before play began; a later one does it at possession)
+	if (AVCPlayerState* VCPS = GetPlayerState<AVCPlayerState>())
+	{
+		VCPS->OnAppearanceChanged.AddUniqueDynamic(this, &AVCCharacterBase::HandleAppearanceChanged);
+		if (HasAuthority())
+		{
+			VCPS->ResolveAppearance();
+		}
+		ApplyPlayerAppearance();
+	}
 
 	// --- Bind integration delegates ---
 
@@ -258,26 +389,58 @@ void AVCCharacterBase::BeginPlay()
 		EquipmentManager->OnCarriedLightChanged.AddDynamic(this, &AVCCharacterBase::HandleCarriedLightChanged);
 		EquipmentManager->OnItemBroken.AddDynamic(this, &AVCCharacterBase::HandleItemBroken);
 		EquipmentManager->OnVisualAttached.AddDynamic(this, &AVCCharacterBase::HandleEquipmentVisualAttached);
+		EquipmentManager->OnEquipmentChanged.AddDynamic(this, &AVCCharacterBase::HandleEquipmentChanged);
+		EquipmentManager->OnDrawnChanged.AddDynamic(this, &AVCCharacterBase::HandleEquipmentDrawnChanged);
 	}
 #endif
+#if WITH_INVENTORY_PLUGIN
+	if (InventoryComponent)
+	{
+		InventoryComponent->OnInventoryChanged.AddDynamic(this, &AVCCharacterBase::HandleInventoryChangedForReload);
+	}
+#endif
+	RefreshActionSet();
+
+	// The player's montage sets come from the project settings unless the Blueprint lists its own.
+	if (ActionMontages && ActionMontages->ActionAnimSets.IsEmpty())
+	{
+		for (const TSoftObjectPtr<UVCActionAnimSet>& Set : UVCSettings::Get().PlayerActionAnimSets)
+		{
+			if (UVCActionAnimSet* Loaded = Set.LoadSynchronous())
+			{
+				ActionMontages->ActionAnimSets.Add(Loaded);
+			}
+			else if (!Set.IsNull())
+			{
+				UE_LOG(LogVoxelCharacter, Warning, TEXT("%s: the action set %s does not load (Scripts/setup_character_layers.py builds it)"),
+					*GetName(), *Set.ToString());
+			}
+		}
+	}
 
 	if (CombatComponent)
 	{
 		CombatComponent->OnDied.AddDynamic(this, &AVCCharacterBase::HandleDied);
 		CombatComponent->OnDowned.AddDynamic(this, &AVCCharacterBase::HandleDowned);
+		CombatComponent->OnDamaged.AddDynamic(this, &AVCCharacterBase::HandleDamagedForReload);
 	}
 
-	// --- Underwater Post-Process ---
+	// --- Underwater Post-Process (the local player's view only; again on each controller change, G133) ---
+	UpdateUnderwaterPostProcess();
+
+	// --- Water effects (the water plan's W1): the splash, the wake and their sounds are cosmetic and made from this
+	// pawn's own movement mode, so they exist wherever someone can see or hear them: not on a dedicated server ---
+	if (!WaterEffects && UVCWaterEffectsComponent::PlaysIn(GetNetMode()))
 	{
-		UVCUnderwaterPostProcess* UnderwaterPP = NewObject<UVCUnderwaterPostProcess>(this, TEXT("UnderwaterPostProcess"));
-		if (UnderwaterPP)
-		{
-			UnderwaterPP->RegisterComponent();
-		}
+		WaterEffects = NewObject<UVCWaterEffectsComponent>(this, TEXT("WaterEffects"));
+		WaterEffects->RegisterComponent();
 	}
 
 	// --- Terrain Ready Spawn ---
-	if (bWaitForTerrain)
+	// Not for a dead body: one that becomes relevant to a client after the death arrives as a new actor, and the wait
+	// moved it to a spawn place, turned its collision off (its ragdoll's too: it fell through the ground) and placed it
+	// walking on the terrain later (G204).
+	if (bWaitForTerrain && !IsDeadBody())
 	{
 		FreezeForTerrainWait();
 		InitiateChunkBasedWait();
@@ -297,8 +460,91 @@ void AVCCharacterBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 	CachedCollisionManager.Reset();
 	PendingTerrainChunks.Empty();
+	ReleaseRagdollHold();
+
+	// A pawn destroyed, or a PIE stopped, during the blend into first person: the near plane goes back as it was
+	// found, so the process (the editor, the next PIE) does not keep this pawn's value (G192).
+	ReleaseBlendNearClip();
 
 	Super::EndPlay(EndPlayReason);
+}
+
+static TAutoConsoleVariable<int32> CVarWeatherLog(
+	TEXT("vc.Weather.Log"), 0,
+	TEXT("Log each player's wet level, air temperature and weather states every half second (the weather plan's P5)"),
+	ECVF_Default);
+
+bool AVCCharacterBase::IsWet() const
+{
+	const UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	return ASC && ASC->HasMatchingGameplayTag(VCGameplayTags::State_Weather_Wet);
+}
+
+bool AVCCharacterBase::IsCold() const
+{
+	const UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	return ASC && ASC->HasMatchingGameplayTag(VCGameplayTags::State_Weather_Cold);
+}
+
+bool AVCCharacterBase::HysteresisOn(bool bWasOn, float Value, float OnAt, float OffAt, bool bHighIsOn)
+{
+	if (bHighIsOn)
+	{
+		return bWasOn ? Value > OffAt : Value >= OnAt;
+	}
+	return bWasOn ? Value < OffAt : Value <= OnAt;
+}
+
+void AVCCharacterBase::UpdateWeatherEffects()
+{
+	UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	const UVCMovementComponent* Movement = Cast<UVCMovementComponent>(GetCharacterMovement());
+	if (!ASC || !Movement)
+	{
+		return;
+	}
+	using namespace VCGameplayTags;
+	// The states are read back from the ability system, not kept here: a player's lives on the player state and
+	// outlives this avatar, so a respawn finds the old tags and clears them if the new body is dry and warm.
+	const bool bAlive = !bIsCorpse && !IsIncapacitated();
+	const bool bWasWet = ASC->HasMatchingGameplayTag(State_Weather_Wet);
+	const bool bWasCold = ASC->HasMatchingGameplayTag(State_Weather_Cold);
+	const bool bWet = bAlive && HysteresisOn(bWasWet, Movement->GetWeatherWetLevel(), WetOnLevel, WetOffLevel, true);
+	const bool bCold = bAlive && HysteresisOn(bWasCold, Movement->GetWeatherTemperatureC(), ColdBelowC, ColdBelowC + ColdHysteresisC, false);
+	if (bWet != bWasWet || bCold != bWasCold || (CVarWeatherLog.GetValueOnGameThread() != 0 && IsPlayerControlled()))
+	{
+		UE_LOG(LogVoxelCharacter, Log, TEXT("%s weather: %s, %s (wet level %.2f, %.1f C%s)"), *GetName(),
+			bWet ? TEXT("soaked") : TEXT("dry"), bCold ? TEXT("cold") : TEXT("warm"), Movement->GetWeatherWetLevel(), Movement->GetWeatherTemperatureC(),
+			Movement->IsSwimming() ? TEXT(", swimming") : TEXT(""));
+	}
+	if (bWet != bWasWet)
+	{
+		// Loose tags replicated as tags (no count): the owning client's widget and the simulated proxies see them.
+		if (bWet)
+		{
+			ASC->AddLooseGameplayTag(State_Weather_Wet, 1, EGameplayTagReplicationState::TagOnly);
+		}
+		else
+		{
+			ASC->SetLooseGameplayTagCount(State_Weather_Wet, 0, EGameplayTagReplicationState::TagOnly);
+		}
+	}
+	if (bCold != bWasCold)
+	{
+		if (bCold)
+		{
+			ASC->AddLooseGameplayTag(State_Weather_Cold, 1, EGameplayTagReplicationState::TagOnly);
+			FGameplayEffectContextHandle Context = ASC->MakeEffectContext();
+			Context.AddSourceObject(this);
+			ASC->ApplyGameplayEffectToSelf(GetDefault<UVCWeatherColdEffect>(), 1.f, Context);
+		}
+		else
+		{
+			ASC->SetLooseGameplayTagCount(State_Weather_Cold, 0, EGameplayTagReplicationState::TagOnly);
+			// By class, not a handle: a respawned player's effect was applied to the same ability system by the last body.
+			ASC->RemoveActiveGameplayEffectBySourceEffect(UVCWeatherColdEffect::StaticClass(), nullptr);
+		}
+	}
 }
 
 void AVCCharacterBase::Tick(float DeltaSeconds)
@@ -310,8 +556,42 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 	{
 		TickRadialRagdoll(GetMesh(), RagdollGravityDirection);
 	}
+	// A ragdoll in water floats: it rises to the surface and rests there (the water plan's W2B). Every machine runs
+	// its own, as it runs its own ragdoll, until the server's corpse freezes and a client takes its pose (G204).
+	if (USkeletalMeshComponent* Body = GetMesh(); Body && Body->IsSimulatingPhysics() && !bPlacingCorpsePose)
+	{
+		FVCRagdollBuoyancy::Get().Apply(Body, RagdollBuoyancy);
+	}
 
 	TickWorldSafety(DeltaSeconds);
+	// A guard pressed during an attack's swing rises at the attack's recovery (D172), the button still held (its release
+	// dropped it).
+	if (ActionMontages && IsLocallyControlled() && ActionMontages->TakeDueBufferedGuard())
+	{
+		StartBlock();
+	}
+	// A press kept during an attack's swing plays the next attack at its recovery (D104).
+	if (ActionMontages && IsLocallyControlled() && ActionMontages->TakeDueBufferedAttack())
+	{
+		// A kept press never starts a charge (its button may have come up long ago, D167) nor the run attack (D168).
+		StartMeleeSwing(ActionMontages->IsBufferedAttackSecondary(), /*bFreshPress*/ false);
+	}
+	UpdateCharge();
+	UpdateDrawnGrip();
+	UpdateSheathHandOff();
+	UpdateBowReload();
+	UpdateHeldArrow();
+
+	// The weather on the character (the weather plan's P5): the server sets the wet and cold states every half second.
+	if (HasAuthority())
+	{
+		WeatherEffectsTimer += DeltaSeconds;
+		if (WeatherEffectsTimer >= 0.5f)
+		{
+			WeatherEffectsTimer = 0.f;
+			UpdateWeatherEffects();
+		}
+	}
 
 	// --- Terrain Ready Spawn ---
 	// Primary: OnChunkCollisionReady delegate. Fallback: periodic poll + timeout.
@@ -396,8 +676,8 @@ void AVCCharacterBase::Tick(float DeltaSeconds)
 		{
 			bPendingFPMeshHide = false;
 			UpdateMeshVisibility();
-			// Restore default near clip plane now that the body mesh is hidden
-			GNearClippingPlane = 10.f;
+			// The body is hidden: the near plane goes back as the blend found it (the project's, G192).
+			ReleaseBlendNearClip();
 		}
 	}
 
@@ -417,6 +697,18 @@ void AVCCharacterBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(AVCCharacterBase, bIsCorpse);
+	DOREPLIFETIME(AVCCharacterBase, CorpsePose);
+	DOREPLIFETIME(AVCCharacterBase, CorpseAppearance);
+	DOREPLIFETIME(AVCCharacterBase, bIsAiming);
+	DOREPLIFETIME(AVCCharacterBase, bArrowNocked);
+	DOREPLIFETIME(AVCCharacterBase, ArrowMesh);
+}
+
+void AVCCharacterBase::PreReplication(IRepChangedPropertyTracker& ChangedPropertyTracker)
+{
+	Super::PreReplication(ChangedPropertyTracker);
+	// The engine has copied the base into what simulated proxies receive; on the terrain no client can resolve it.
+	FVCReplicatedBase::ApplyBeforeReplication(*this, GetReplicatedBasedMovement_Mutable());
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +764,48 @@ void AVCCharacterBase::PossessedBy(AController* NewController)
 			}
 		}
 	}
+
+	// The body: the server resolves the player's appearance (it replicates to the clients) and wears it. A pawn possessed
+	// before play begins (the first spawn of a PIE session) waits for BeginPlay: the voxel world's meshing mode is known then.
+	if (AVCPlayerState* VCPS = GetPlayerState<AVCPlayerState>())
+	{
+		VCPS->OnAppearanceChanged.AddUniqueDynamic(this, &AVCCharacterBase::HandleAppearanceChanged);
+		if (HasActorBegunPlay())
+		{
+			VCPS->ResolveAppearance();
+			ApplyPlayerAppearance();
+		}
+	}
+}
+
+void AVCCharacterBase::NotifyControllerChanged()
+{
+	Super::NotifyControllerChanged();
+
+	// Possessed, unpossessed, or the controller arrived by replication (the owning client's OnRep_Controller): the
+	// view tint follows the local player controller. Before BeginPlay, BeginPlay does it.
+	if (HasActorBegunPlay())
+	{
+		UpdateUnderwaterPostProcess();
+	}
+}
+
+void AVCCharacterBase::UpdateUnderwaterPostProcess()
+{
+	// The tint is a view effect (G133): it exists only on the machine whose player views through this pawn. A pawn with
+	// no local player controller (another player's character on a client, an NPC, every pawn on a dedicated server) has
+	// no view to tint, and its unbound volume would tint the local player's; several such pawns stacked theirs.
+	const bool bWanted = UVCUnderwaterPostProcess::IsLocalPlayerView(this);
+	if (bWanted && !UnderwaterPostProcess)
+	{
+		UnderwaterPostProcess = NewObject<UVCUnderwaterPostProcess>(this, TEXT("UnderwaterPostProcess"));
+		UnderwaterPostProcess->RegisterComponent();
+	}
+	else if (!bWanted && UnderwaterPostProcess)
+	{
+		UnderwaterPostProcess->DestroyComponent();
+		UnderwaterPostProcess = nullptr;
+	}
 }
 
 void AVCCharacterBase::OnRep_PlayerState()
@@ -490,7 +824,50 @@ void AVCCharacterBase::OnRep_PlayerState()
 				CombatComponent->InitializeWithAbilitySystem(ASC);
 			}
 		}
+
+		// The body the server resolved, now and whenever it changes
+		PS->OnAppearanceChanged.AddUniqueDynamic(this, &AVCCharacterBase::HandleAppearanceChanged);
+		ApplyPlayerAppearance();
 	}
+}
+
+void AVCCharacterBase::HandleAppearanceChanged()
+{
+	ApplyPlayerAppearance();
+}
+
+void AVCCharacterBase::ApplyPlayerAppearance()
+{
+	const AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
+	if (!PS || !AppearanceComponent)
+	{
+		return;
+	}
+	const UVCCharacterAppearance* Wanted = PS->GetAppearance().LoadSynchronous();
+	if (bAppearanceApplied && AppearanceComponent->GetAppearance() == Wanted)
+	{
+		return;
+	}
+	if (!PS->GetAppearance().IsNull() && !Wanted)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("%s: the appearance %s does not load (Scripts/setup_character_appearances.py builds it)"),
+			*GetName(), *PS->GetAppearance().ToString());
+	}
+	WearAppearance(Wanted);
+}
+
+void AVCCharacterBase::WearAppearance(const UVCCharacterAppearance* Wanted)
+{
+	if (!AppearanceComponent)
+	{
+		return;
+	}
+	AppearanceComponent->ApplyAppearance(Wanted);
+	bAppearanceApplied = true;
+	ApplyLocomotionAnimClass();
+	RelinkEquipmentAnimLayers();
+	UpdateEquipmentAttachments(); // the new body's corrections (D71); the visuals rode the mesh swap by bone name
+	UpdateMeshVisibility();
 }
 
 void AVCCharacterBase::BindAttributeChangeDelegates(UAbilitySystemComponent* ASC)
@@ -533,6 +910,18 @@ void AVCCharacterBase::GrantDefaultAbilities(UAbilitySystemComponent* ASC)
 	if (PS->MeleeAttackAbilityClass)
 	{
 		ASC->GiveAbility(FGameplayAbilitySpec(PS->MeleeAttackAbilityClass, 1, INDEX_NONE, this));
+	}
+	if (PS->RangedAttackAbilityClass)
+	{
+		ASC->GiveAbility(FGameplayAbilitySpec(PS->RangedAttackAbilityClass, 1, INDEX_NONE, this));
+	}
+	if (PS->BlockAbilityClass)
+	{
+		ASC->GiveAbility(FGameplayAbilitySpec(PS->BlockAbilityClass, 1, INDEX_NONE, this));
+	}
+	if (PS->DodgeAbilityClass)
+	{
+		ASC->GiveAbility(FGameplayAbilitySpec(PS->DodgeAbilityClass, 1, INDEX_NONE, this));
 	}
 }
 
@@ -581,20 +970,495 @@ bool AVCCharacterBase::TryStartMeleeAttack()
 	{
 		return false;
 	}
+	return StartMeleeSwing();
+}
 
+bool AVCCharacterBase::StartMeleeSwing(bool bSecondary, bool bFreshPress)
+{
+	if (!CombatComponent || IsIncapacitated())
+	{
+		return false;
+	}
 	UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
 	if (!ASC)
 	{
 		return false;
 	}
 
-	// The ability is ServerOnly: on a client this sends the activation request to the server,
-	// which does its own sweep, so a client cannot fabricate a hit.
+	// The owner swings at once (D49); the server's swing plays for everyone else and lands the hit at the montage's hit
+	// time. A press goes by the combo's rule (D104), as the server's acceptance does: nothing in the wind-up, kept from the
+	// strike until the recovery (Tick plays it then), the next attack from the recovery on.
+	int32 Variant = -1;
+	const UVCActionAnimSet* Set = ActionMontages ? ActionMontages->GetCurrentActionAnimSet() : nullptr;
+	// In the air with a set that has an air attack for the button (D169): the air attack or the plunge, once a fall,
+	// when the attack before has reached its recovery; the fall goes on as it was.
+	if (ActionMontages && ActionMontages->IsFalling() && ActionMontages->HasAirAttack(bSecondary))
+	{
+		const EVCAttackPress Press = ActionMontages->ClassifyAttackPress();
+		if (Press == EVCAttackPress::Ignore || Press == EVCAttackPress::Buffer || !ActionMontages->CanAirAttack(bSecondary))
+		{
+			return true;
+		}
+		ActionMontages->EndCharge();
+		const AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
+		const UVCMeleeAttackAbility* Melee = PS && PS->MeleeAttackAbilityClass
+			? Cast<UVCMeleeAttackAbility>(PS->MeleeAttackAbilityClass->GetDefaultObject()) : nullptr;
+		float PlayRate = 1.f;
+		Variant = ActionMontages->ChooseAirAttack(bSecondary, Melee ? Melee->GetAttackSpeed(this) : 1.f, PlayRate);
+		ActionMontages->PlayActionLocal(EVCAnimAction::Attack, Variant, PlayRate);
+		if (HasAuthority())
+		{
+			return ActivateMeleeSwing(Variant);
+		}
+		Server_RequestMove(FVCMoveRequest(EVCMoveKind::Attack, Variant));
+		return true;
+	}
+	if (bSecondary && (!Set || Set->GetFirstAttack(true) < 0))
+	{
+		// No secondary branch for what is held (D166): the press does nothing.
+		return false;
+	}
+	// A press during a dodge or a roll is kept and plays the button's first attack at the move's recovery (D170).
+	if (ActionMontages && ActionMontages->IsMoveBeforeRecovery())
+	{
+		ActionMontages->BufferAttack(bSecondary);
+		return true;
+	}
+	if (ActionMontages && ActionMontages->IsCharging())
+	{
+		if (!bSecondary)
+		{
+			// Still charging: the release or the hold decides (D167).
+			return true;
+		}
+		// The secondary attack over a charge: the charge ends, the branch starts from rest; the server's acceptance of
+		// the attack ends its clock.
+		ActionMontages->EndCharge();
+	}
+	// A primary press from rest charges (D167): the windup at once, the first attack at the release.
+	if (!bSecondary && bFreshPress && ActionMontages && ActionMontages->CanStartCharge())
+	{
+		ActionMontages->BeginCharge();
+		ActionMontages->PlayActionLocal(EVCAnimAction::Charge, 0);
+		SendChargeChange(EVCChargeChange::Begin);
+		return true;
+	}
+	if (ActionMontages && ActionMontages->GetMontage(EVCAnimAction::Attack, 0))
+	{
+		switch (ActionMontages->ClassifyAttackPress())
+		{
+		case EVCAttackPress::Ignore:
+			return true;
+		case EVCAttackPress::Buffer:
+			ActionMontages->BufferAttack(bSecondary);
+			return true;
+		default:
+			break;
+		}
+		const AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
+		const UVCMeleeAttackAbility* Melee = PS && PS->MeleeAttackAbilityClass
+			? Cast<UVCMeleeAttackAbility>(PS->MeleeAttackAbilityClass->GetDefaultObject()) : nullptr;
+		float PlayRate = 1.f;
+		// A fresh primary press while sprinting fast plays the run attack (D168).
+		Variant = ActionMontages->ChooseAttack(Melee ? Melee->GetAttackSpeed(this) : 1.f, PlayRate, bSecondary, bFreshPress);
+		if (Variant < 0)
+		{
+			return false;
+		}
+		ActionMontages->PlayActionLocal(EVCAnimAction::Attack, Variant, PlayRate);
+	}
+
+	// The ability is ServerOnly: the server does its own sweep, so a client cannot fabricate a hit. The request carries
+	// the owner's combo index, which the server takes when its own rule allows it (G179).
+	if (HasAuthority())
+	{
+		return ActivateMeleeSwing(Variant);
+	}
+	Server_RequestMove(FVCMoveRequest(EVCMoveKind::Attack, Variant));
+	return true;
+}
+
+bool AVCCharacterBase::ActivateMeleeSwing(int32 ComboIndex)
+{
+	UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	if (!ASC || !CombatComponent || IsIncapacitated())
+	{
+		return false;
+	}
+	if (ActionMontages)
+	{
+		ActionMontages->SetRequestedAttack(ComboIndex);
+	}
 	return ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(CGFGameplayTags::Ability_Attack_Melee));
+}
+
+void AVCCharacterBase::StartChargedSwing()
+{
+	if (!ActionMontages || !CombatComponent || IsIncapacitated())
+	{
+		return;
+	}
+	const AVCPlayerState* PS = GetPlayerState<AVCPlayerState>();
+	const UVCMeleeAttackAbility* Melee = PS && PS->MeleeAttackAbilityClass
+		? Cast<UVCMeleeAttackAbility>(PS->MeleeAttackAbilityClass->GetDefaultObject()) : nullptr;
+	float PlayRate = 1.f;
+	const int32 Variant = ActionMontages->ChooseChargedAttack(Melee ? Melee->GetAttackSpeed(this) : 1.f, PlayRate);
+	if (Variant < 0)
+	{
+		return;
+	}
+	ActionMontages->PlayActionLocal(EVCAnimAction::Attack, Variant, PlayRate);
+	// The server takes the charged strike when its own clock has run the charge (less the allowance), else plays the
+	// first attack (UVCActionMontageComponent::AcceptAttack).
+	if (HasAuthority())
+	{
+		ActivateMeleeSwing(Variant);
+		return;
+	}
+	Server_RequestMove(FVCMoveRequest(EVCMoveKind::Attack, Variant));
+}
+
+void AVCCharacterBase::CancelCharge(bool bLower)
+{
+	if (!ActionMontages || !ActionMontages->IsCharging())
+	{
+		return;
+	}
+	ActionMontages->EndCharge();
+	if (bLower)
+	{
+		ActionMontages->PlayActionLocal(EVCAnimAction::Charge, 1);
+	}
+	else
+	{
+		ActionMontages->StopActionLocal(EVCAnimAction::Charge);
+	}
+	SendChargeChange(bLower ? EVCChargeChange::Lower : EVCChargeChange::Stop);
+}
+
+void AVCCharacterBase::UpdateCharge()
+{
+	if (!ActionMontages || !ActionMontages->IsCharging() || !IsLocallyControlled())
+	{
+		return;
+	}
+	// Something stopped the charge's montage (a flinch, a death, a weapon changed): the charge is over, no strike.
+	if (IsIncapacitated() || !ActionMontages->IsChargePlaying())
+	{
+		ActionMontages->EndCharge();
+		return;
+	}
+	// A charge is from rest only (D167): a sprint or a jump begun during it lowers it.
+	const UVCMovementComponent* Movement = Cast<UVCMovementComponent>(GetCharacterMovement());
+	if (Movement && (Movement->IsSprinting() || Movement->IsFalling()))
+	{
+		CancelCharge(/*bLower*/ true);
+		return;
+	}
+	if (UVCActionMontageComponent::ClassifyChargeRelease(ActionMontages->GetChargeSeconds(), ActionMontages->GetChargeTime()) == EVCChargeRelease::Charged)
+	{
+		StartChargedSwing();
+	}
+}
+
+void AVCCharacterBase::SendChargeChange(EVCChargeChange Change)
+{
+	if (HasAuthority())
+	{
+		ApplyChargeChange(Change);
+		return;
+	}
+	Server_RequestMove(FVCMoveRequest(EVCMoveKind::Charge, static_cast<int32>(Change)));
+}
+
+void AVCCharacterBase::ApplyChargeChange(EVCChargeChange Change)
+{
+	if (!ActionMontages || !HasAuthority())
+	{
+		return;
+	}
+	const bool bOwnerPlayedIt = IsPlayerControlled();
+	switch (Change)
+	{
+	case EVCChargeChange::Begin:
+		// The server's own rule (from rest, not sprinting, not in the air), on its own clock; refused, the owner's charged
+		// request later plays the first attack. On a machine that is owner and server the owner's charge is this one.
+		if (!IsLocallyControlled())
+		{
+			if (IsIncapacitated() || !ActionMontages->CanStartCharge())
+			{
+				UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s: the charge refused on the server"), *GetName());
+				return;
+			}
+			ActionMontages->BeginCharge();
+		}
+		ActionMontages->PlayActionForEveryone(EVCAnimAction::Charge, 0, 1.f, bOwnerPlayedIt);
+		break;
+	case EVCChargeChange::Lower:
+		ActionMontages->EndCharge();
+		ActionMontages->PlayActionForEveryone(EVCAnimAction::Charge, 1, 1.f, bOwnerPlayedIt);
+		break;
+	case EVCChargeChange::Stop:
+		ActionMontages->EndCharge();
+		ActionMontages->StopActionForEveryone(EVCAnimAction::Charge, bOwnerPlayedIt);
+		break;
+	}
+}
+
+bool AVCCharacterBase::TryStartRangedAttack()
+{
+	if (!UVCRangedAttackAbility::HoldsRangedWeapon(this))
+	{
+		return false;
+	}
+	if (bDrawingRangedWeapon || !CombatComponent || IsIncapacitated())
+	{
+		return true;
+	}
+	// The owner's check; the server's activation runs the same one.
+	if (!UVCRangedAttackAbility::CanStartDraw(this))
+	{
+		// Arrows but none nocked yet: the draw starts at the nock if the press is still held (D98).
+		if (UVCRangedAttackAbility::HasAmmoToLoad(this))
+		{
+			bDrawWaitsForNock = true;
+			return true;
+		}
+		if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+		{
+			PC->ShowToast(NSLOCTEXT("VCHud", "NoArrows", "No arrows"), 2.0f);
+		}
+		return true;
+	}
+	UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	// ServerOnly, as the melee attack: on a client this asks the server, which times the draw from its activation.
+	if (!ASC || !ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(VCGameplayTags::Ability_Attack_Ranged)))
+	{
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s: the ranged attack did not start"), *GetName());
+		return true;
+	}
+	bDrawingRangedWeapon = true;
+	OwnDrawStartTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	ApplyAimState(); // a draw aims (C3): the facing, the camera and the reticle at once on the owner
+	PlayOwnAction(EVCAnimAction::Draw);
+	return true;
+}
+
+void AVCCharacterBase::ReleaseRangedAttack()
+{
+	// Let go before the nock: no draw waits any more.
+	bDrawWaitsForNock = false;
+	if (!bDrawingRangedWeapon)
+	{
+		return;
+	}
+	bDrawingRangedWeapon = false;
+	ApplyAimState(); // the draw ended: the aim stays only while the secondary action is held (C3)
+	// The owner's look follows its own clock; the server's measure decides the shot.
+	if (ActionMontages && IsLocallyControlled())
+	{
+		const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : OwnDrawStartTime;
+		if (UVCRangedAttackAbility::GetDrawPower(this, static_cast<float>(Now - OwnDrawStartTime)) > 0.f)
+		{
+			ActionMontages->PlayActionLocal(EVCAnimAction::Release);
+		}
+		else
+		{
+			ActionMontages->StopActionLocal(EVCAnimAction::Draw);
+		}
+	}
+	UVCRangedAttackAbility::ReleaseDraw(GetAbilitySystemComponent());
+}
+
+void AVCCharacterBase::SetFacesAim(bool bFaceAim)
+{
+	UCharacterMovementComponent* Move = GetCharacterMovement();
+	// The first-person rule turns the body with the view already (the owner's view mode, the server's request: G256).
+	if (!Move || bFacesView)
+	{
+		return;
+	}
+	// The voxel movement eases the flip (C4): the capsule turns toward the view (or back toward where it moves) first,
+	// and the mode changes once the body is nearly there, so the mesh is not left 180 degrees behind an instant yaw.
+	if (UVCMovementComponent* VoxelMove = Cast<UVCMovementComponent>(Move))
+	{
+		VoxelMove->SetFacesAim(bFaceAim);
+		return;
+	}
+	// The engine's turn toward the controller's rotation keeps the body upright in a custom gravity frame.
+	Move->bOrientRotationToMovement = !bFaceAim;
+	Move->bUseControllerDesiredRotation = bFaceAim;
+}
+
+// ---------------------------------------------------------------------------
+// Aiming (the character refinement plan's C3, D73)
+// ---------------------------------------------------------------------------
+
+bool AVCCharacterBase::IsAiming() const
+{
+	if (bIsAiming)
+	{
+		return true;
+	}
+	// The owner counts its own request and draw before the server answers; the server its own draw before it replicates.
+	if (IsLocallyControlled() && (bLocalWantsToAim || bDrawingRangedWeapon))
+	{
+		return true;
+	}
+	return HasAuthority() && (bServerWantsToAim || bServerDrawing);
+}
+
+void AVCCharacterBase::SetWantsToAim(bool bWantsToAim)
+{
+	if (!IsLocallyControlled())
+	{
+		return;
+	}
+	// Nothing to aim without a ranged weapon; a release always lands (the weapon may have gone meanwhile).
+	if (bWantsToAim && (IsIncapacitated() || !UVCRangedAttackAbility::HoldsRangedWeapon(this)))
+	{
+		bWantsToAim = false;
+	}
+	if (bLocalWantsToAim == bWantsToAim)
+	{
+		return;
+	}
+	bLocalWantsToAim = bWantsToAim;
+	if (HasAuthority())
+	{
+		bServerWantsToAim = bWantsToAim;
+		UpdateServerAiming();
+	}
+	else
+	{
+		Server_SetWantsToAim(bWantsToAim);
+		ApplyAimState();
+	}
+}
+
+void AVCCharacterBase::Server_SetWantsToAim_Implementation(bool bWantsToAim)
+{
+	// The server's own check: a ranged weapon in hand, the character able.
+	bServerWantsToAim = bWantsToAim && !IsIncapacitated() && UVCRangedAttackAbility::HoldsRangedWeapon(this);
+	UpdateServerAiming();
+}
+
+void AVCCharacterBase::SetDrawingOnServer(bool bDrawing)
+{
+	if (!HasAuthority() || bServerDrawing == bDrawing)
+	{
+		return;
+	}
+	bServerDrawing = bDrawing;
+	UpdateServerAiming();
+}
+
+void AVCCharacterBase::UpdateServerAiming()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	const bool bNow = bServerWantsToAim || bServerDrawing;
+	if (bIsAiming != bNow)
+	{
+		bIsAiming = bNow;
+		if (UAbilitySystemComponent* ASC = GetAbilitySystemComponent())
+		{
+			ASC->SetLooseGameplayTagCount(VCGameplayTags::State_Aiming, bNow ? 1 : 0, EGameplayTagReplicationState::TagOnly);
+		}
+	}
+	ApplyAimState();
+}
+
+void AVCCharacterBase::OnRep_IsAiming()
+{
+	ApplyAimState();
+}
+
+void AVCCharacterBase::ApplyAimState()
+{
+	const bool bAiming = IsAiming();
+	// The held set's aim ceiling (in first person too: the server does not know the owner's view mode).
+	if (UVCMovementComponent* VCMovement = Cast<UVCMovementComponent>(GetCharacterMovement()))
+	{
+		VCMovement->bAimingForGait = bAiming;
+	}
+	// The body toward the view while aiming (third person; the movement eases the flip), back to its heading after.
+	SetFacesAim(bAiming);
+	if (bAimStateApplied == bAiming)
+	{
+		return;
+	}
+	bAimStateApplied = bAiming;
+	// The local player's camera: in over the shoulder while aiming in third person, back when it ends. First person keeps
+	// its camera (nothing to move in; the reticle shows there too).
+	if (IsLocallyControlled() && CameraManager && CurrentViewMode != EVCViewMode::FirstPerson && CameraManager->AimModeClass)
+	{
+		const bool bAimCameraOn = CameraManager->GetTopCameraModeClass() == CameraManager->AimModeClass;
+		if (bAiming && !bAimCameraOn)
+		{
+			CameraManager->PushCameraMode(CameraManager->AimModeClass);
+		}
+		else if (!bAiming && bAimCameraOn)
+		{
+			CameraManager->PopCameraMode(CameraManager->ThirdPersonModeClass);
+		}
+	}
+}
+
+float AVCCharacterBase::GetOwnDrawPower() const
+{
+	if (!bDrawingRangedWeapon || !GetWorld())
+	{
+		return 0.f;
+	}
+	return UVCRangedAttackAbility::GetDrawPower(this, static_cast<float>(GetWorld()->GetTimeSeconds() - OwnDrawStartTime));
+}
+
+bool AVCCharacterBase::IsAimOnHostile(float Range) const
+{
+	UWorld* World = GetWorld();
+	FVector Origin, Direction;
+	if (!World || !UVCCombatStatics::ComputeAimRay(this, Origin, Direction))
+	{
+		return false;
+	}
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(VCAimOnHostile), /*bTraceComplex*/ false, this);
+	FHitResult Hit;
+	if (!World->SweepSingleByChannel(Hit, Origin, Origin + Direction * Range, FQuat::Identity, ECC_Pawn, FCollisionShape::MakeSphere(4.f), Params))
+	{
+		return false;
+	}
+	const UVCCombatComponent* Target = Hit.GetActor() ? UVCCombatStatics::FindCombatComponent(Hit.GetActor()) : nullptr;
+	return Target && CombatComponent && UCGFCombatStatics::AreHostileFactions(CombatComponent->FactionTag, Target->FactionTag)
+		&& !Target->IsDead_Implementation();
+}
+
+void AVCCharacterBase::PlayOwnAction(EVCAnimAction Action)
+{
+	if (ActionMontages && IsLocallyControlled())
+	{
+		ActionMontages->PlayActionLocal(Action);
+	}
+}
+
+void AVCCharacterBase::ShareOwnAction(EVCAnimAction Action)
+{
+	if (ActionMontages && HasAuthority())
+	{
+		ActionMontages->PlayActionForEveryone(Action, 0, 1.f, /*bOwnerPlayedIt*/ true);
+	}
 }
 
 void AVCCharacterBase::Incapacitate()
 {
+	// Down or dead: the string is empty and no reload runs (D101).
+	if (HasAuthority())
+	{
+		CancelReload(0.f);
+		SetArrowNocked(false);
+	}
 	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
 	{
 		Movement->StopMovementImmediately();
@@ -624,6 +1488,9 @@ void AVCCharacterBase::BecomeCorpse()
 		return;
 	}
 	bIsCorpse = true;
+	// The body it wears, for a client it becomes relevant to later: the controller has let it go, and its player state
+	// with it (G204).
+	CorpseAppearance = TSoftObjectPtr<UVCCharacterAppearance>(FSoftObjectPath(AppearanceComponent ? AppearanceComponent->GetAppearance() : nullptr));
 	ApplyCorpseState();
 	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: kept as the player's corpse at %s."), *GetName(), *GetActorLocation().ToCompactString());
 }
@@ -636,9 +1503,81 @@ void AVCCharacterBase::OnRep_IsCorpse()
 	}
 }
 
+void AVCCharacterBase::OnRep_CorpsePose()
+{
+	// The server's corpse froze: this machine's copy goes where it lies (G204), whether it was still simulating, had
+	// frozen on its own, or was held for the terrain.
+	if (CorpsePose.Num() > 0)
+	{
+		PlaceCorpsePose();
+	}
+}
+
+bool AVCCharacterBase::IsDeadBody() const
+{
+	return bIsCorpse || (CombatComponent && ICGFDamageableInterface::Execute_IsDead(CombatComponent));
+}
+
+void AVCCharacterBase::StopTerrainWaitForBody()
+{
+	if (!bIsWaitingForTerrain)
+	{
+		return;
+	}
+	if (UVoxelCollisionManager* ColMgr = CachedCollisionManager.Get(); ColMgr && CollisionReadyDelegateHandle.IsValid())
+	{
+		ColMgr->OnCollisionReady.Remove(CollisionReadyDelegateHandle);
+	}
+	CollisionReadyDelegateHandle.Reset();
+	PendingTerrainChunks.Empty();
+	bIsWaitingForTerrain = false;
+	// The wait had turned the actor's collision off and may have moved it to a spawn place: a client's copy goes back
+	// to where the server's actor is.
+	SetActorEnableCollision(true);
+	if (GetLocalRole() == ROLE_SimulatedProxy)
+	{
+		SetActorLocation(FRepMovement::RebaseOntoLocalOrigin(GetReplicatedMovement().Location, this), false, nullptr, ETeleportType::TeleportPhysics);
+	}
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: a dead body's terrain wait ended unplaced, at %s."), *GetName(), *GetActorLocation().ToCompactString());
+}
+
+void AVCCharacterBase::OnRep_CorpseAppearance()
+{
+	// A body put in the server's pose before its appearance came, or that kept its own ragdoll because the pose did not
+	// fit the class's own body: dressed now, it takes the pose again.
+	if (ApplyCorpseAppearance() && CorpsePose.Num() > 0)
+	{
+		bCorpsePoseRejected = false;
+		bCorpsePosePlaced = false;
+		PlaceCorpsePose();
+	}
+}
+
+bool AVCCharacterBase::ApplyCorpseAppearance()
+{
+	if (HasAuthority() || CorpseAppearance.IsNull() || !AppearanceComponent || GetPlayerState())
+	{
+		return false; // the server dressed it; a pawn with a player state is dressed from it
+	}
+	const UVCCharacterAppearance* Wanted = CorpseAppearance.LoadSynchronous();
+	if (!Wanted || AppearanceComponent->GetAppearance() == Wanted)
+	{
+		return false;
+	}
+	USkeletalMeshComponent* Body = GetMesh();
+	if (Body && Body->IsSimulatingPhysics())
+	{
+		Body->SetSimulatePhysics(false); // the new body's physics state is made for it
+	}
+	WearAppearance(Wanted);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: the corpse wears %s."), *GetName(), *Wanted->GetName());
+	return true;
+}
+
 void AVCCharacterBase::ApplyCorpseState()
 {
 	Tags.AddUnique(TEXT("Corpse"));
+	StopTerrainWaitForBody();
 	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
 	{
 		Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -648,13 +1587,12 @@ void AVCCharacterBase::ApplyCorpseState()
 		Movement->DisableMovement();
 		Movement->SetComponentTickEnabled(false);
 	}
-	// A client that only now learns of the body (joined late) starts the ragdoll here.
-	USkeletalMeshComponent* Body = GetMesh();
-	if (Body && Body->GetPhysicsAsset() && !Body->IsSimulatingPhysics())
+	// A client that only now learns of the body (it became relevant after the death) starts the ragdoll here: in the
+	// server's pose when that came with it, else once the terrain's collision under it is cooked here (G204).
+	StartDeathRagdoll();
+	if (bPlacingCorpsePose || bCorpsePosePlaced)
 	{
-		Body->SetCollisionProfileName(TEXT("Ragdoll"));
-		Body->SetSimulatePhysics(true);
-		StartRadialRagdoll(Body, GetCharacterMovement(), RagdollGravityDirection);
+		return; // the placement freezes it (CheckCorpseSettled), or has
 	}
 	if (UWorld* World = GetWorld())
 	{
@@ -672,37 +1610,288 @@ void AVCCharacterBase::CheckCorpseSettled()
 	{
 		return;
 	}
+	if (bPlacingCorpsePose)
+	{
+		// The bones take the bodies' places in the physics step after the hold began; frozen sooner, the body would keep
+		// the pose it had before (a timer can fire in the frame it was set in when that frame is long).
+		if (GFrameCounter < CorpsePlacedFrame + 2)
+		{
+			return;
+		}
+		// A client's copy: something rebuilt the bodies after they were put in the pose (the corpse's appearance swaps
+		// the mesh, whose physics state is made again from the bones): put them there again.
+		const FBodyInstance* Root = Body->GetBodyInstance();
+		const FVector RootAt = Root ? Root->GetUnrealWorldTransform().GetLocation() : FVector::ZeroVector;
+		const bool bBodiesOff = bCorpsePosePlaced && !HasAuthority() && CorpsePose.Num() > 0 && Root
+			&& (!Body->IsSimulatingPhysics() || FVector::Dist(RootAt, FVector(CorpsePose[0].Location)) > 1.0);
+		// The bones not yet where the bodies are: a mesh just swapped blends physics into the bones it requires, and
+		// it works those out at its next pose update, which a body nobody has drawn yet may not have had.
+		const FName RootBone = Root && Root->GetBodySetup() ? Root->GetBodySetup()->BoneName : NAME_None;
+		const bool bBonesOff = !RootBone.IsNone() && FVector::Dist(Body->GetBoneLocation(RootBone, EBoneSpaces::WorldSpace), RootAt) > 1.0;
+		// At most 30 holds, about a second: then frozen as it is, with a warning.
+		if ((bBodiesOff || bBonesOff) && ++CorpsePlaceRetries <= 30)
+		{
+			UE_LOG(LogVoxelCharacter, Log, TEXT("%s: the corpse's %s not in its pose before the freeze; held again (%d)."), *GetName(),
+				bBodiesOff ? TEXT("bodies are") : TEXT("bones are"), CorpsePlaceRetries);
+			if (!Body->bRequiredBonesUpToDate)
+			{
+				Body->RecalcRequiredBones(Body->GetPredictedLODLevel());
+			}
+			if (bBodiesOff)
+			{
+				Body->SetSimulatePhysics(true);
+				HoldInPose(&CorpsePose);
+			}
+			else
+			{
+				CorpsePlacedFrame = GFrameCounter;
+			}
+			return;
+		}
+		if (bBodiesOff || bBonesOff)
+		{
+			UE_LOG(LogVoxelCharacter, Warning, TEXT("%s: the corpse's %s would not come to its pose; frozen as they are."), *GetName(),
+				bBodiesOff ? TEXT("bodies") : TEXT("bones"));
+		}
+		FreezeCorpse();
+		return;
+	}
+	if (RagdollHoldChunks.Num() > 0)
+	{
+		return; // held for the terrain: nothing to settle yet
+	}
 	if (Body->IsSimulatingPhysics())
 	{
 		const bool bCalm = Body->GetPhysicsLinearVelocity().Size() < 10.f;
 		CorpseCalmChecks = bCalm ? CorpseCalmChecks + 1 : 0;
-		if (CorpseCalmChecks < 4 && World->GetTimeSeconds() - CorpseStartTime < CorpseFreezeAfterSeconds)
+		// A body still under the depth it floats at is on its way up: it gets the longer wait, so it is not frozen
+		// halfway to the surface.
+		const FVCRagdollBuoyancy& Buoyancy = FVCRagdollBuoyancy::Get();
+		const bool bRising = RagdollBuoyancy.bInWater && RagdollBuoyancy.RootDepth > Buoyancy.GetRestDepth() + Buoyancy.SubmergeDepth;
+		if (CorpseCalmChecks < 4 && World->GetTimeSeconds() - CorpseStartTime < (bRising ? CorpseFreezeAfterSecondsInWater : CorpseFreezeAfterSeconds))
 		{
 			return;
 		}
+		// Still where it is for two frames, so the bones catch up with the bodies before the freeze keeps them (a body
+		// frozen on the timeout while it slid kept bones a physics step behind its bodies).
+		HoldInPose(nullptr);
+		return;
+	}
+	FreezeCorpse();
+}
+
+void AVCCharacterBase::FreezeCorpse()
+{
+	USkeletalMeshComponent* Body = GetMesh();
+	UWorld* World = GetWorld();
+	if (!Body || !World)
+	{
+		return;
+	}
+	World->GetTimerManager().ClearTimer(CorpseSettleTimer);
+	const bool bPlaced = bCorpsePosePlaced;
+	// The server's pose, read before the simulation stops, for the clients to put their copies in (G204): each machine
+	// simulated its own ragdoll and they came to rest apart (a metre on flat ground, more on a slope), while the query
+	// collision kept for item recovery is the server's.
+	if (HasAuthority() && bIsCorpse && Body->IsSimulatingPhysics())
+	{
+		CorpsePose.Reset(Body->Bodies.Num());
+		for (const FBodyInstance* Instance : Body->Bodies)
+		{
+			const FTransform Transform = Instance ? Instance->GetUnrealWorldTransform() : Body->GetComponentTransform();
+			FVCCorpseBodyPose& Pose = CorpsePose.AddDefaulted_GetRef();
+			Pose.Location = Transform.GetLocation();
+			Pose.Rotation = Transform.Rotator();
+		}
+		ForceNetUpdate();
 	}
 	// Freeze: stop updating the skeleton first so the bones keep the ragdoll pose, then stop simulating. The body
 	// then stays put even if the terrain under it unloads; it keeps query collision for later item recovery.
-	World->GetTimerManager().ClearTimer(CorpseSettleTimer);
 	Body->bNoSkeletonUpdate = true;
 	Body->SetSimulatePhysics(false);
 	Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: corpse settled and frozen."), *GetName());
+	RagdollGravityDirection = FVector::ZeroVector;
+	bPlacingCorpsePose = false;
+	const FBodyInstance* Root = Body->GetBodyInstance();
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: corpse %s and frozen, its root at %s."), *GetName(),
+		bPlaced ? TEXT("put in the server's pose") : HasAuthority() ? TEXT("settled (its pose recorded)") : TEXT("settled"),
+		Root ? *Root->GetUnrealWorldTransform().GetLocation().ToCompactString() : TEXT("(no body)"));
+}
+
+void AVCCharacterBase::StartDeathRagdoll()
+{
+	USkeletalMeshComponent* Body = GetMesh();
+	if (!Body || !Body->GetPhysicsAsset())
+	{
+		return;
+	}
+	// The server's corpse has frozen and its pose is here: no simulation of this machine's own.
+	if (CorpsePose.Num() > 0 && !HasAuthority() && !bCorpsePoseRejected)
+	{
+		if (!bCorpsePosePlaced)
+		{
+			PlaceCorpsePose();
+		}
+		return;
+	}
+	if (Body->IsSimulatingPhysics() || Body->bNoSkeletonUpdate)
+	{
+		return; // already simulating, or frozen
+	}
+	// Hold the ragdoll until this machine has the terrain's collision under it (G204): a body that became relevant to a
+	// client where its terrain was not cooked fell through the ground and the sea's bed.
+	TSet<FIntVector> Missing;
+	if (!HasRagdollGround(Missing))
+	{
+		const bool bAlreadyHeld = RagdollHoldChunks.Num() > 0;
+		RagdollHoldChunks = MoveTemp(Missing);
+		if (!bAlreadyHeld)
+		{
+			UE_LOG(LogVoxelCharacter, Log, TEXT("%s: ragdoll held at %s until %d chunk(s) under it have collision."),
+				*GetName(), *GetActorLocation().ToCompactString(), RagdollHoldChunks.Num());
+		}
+		return;
+	}
+	ReleaseRagdollHold();
+	Body->SetCollisionProfileName(TEXT("Ragdoll"));
+	Body->SetSimulatePhysics(true);
+	StartRadialRagdoll(Body, GetCharacterMovement(), RagdollGravityDirection);
+	// A corpse's settle wait counts from here, not from a hold before it.
+	if (const UWorld* World = GetWorld())
+	{
+		CorpseStartTime = World->GetTimeSeconds();
+		CorpseCalmChecks = 0;
+	}
+}
+
+bool AVCCharacterBase::HasRagdollGround(TSet<FIntVector>& OutMissing)
+{
+	OutMissing.Reset();
+	UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
+	UVoxelCollisionManager* ColMgr = ChunkMgr ? ChunkMgr->GetCollisionManager() : nullptr;
+	if (!ColMgr)
+	{
+		return true; // no voxel world: the ground is the level's own
+	}
+	// The spawn wait's grid: a body lying on a chunk's border falls through the neighbour's ground, not its own.
+	for (const FIntVector& ChunkCoord : FVCTerrainQueryHelper::GetTerrainWaitChunks(*ChunkMgr, GetActorLocation(), TerrainWaitChunkRadius))
+	{
+		if (!ColMgr->HasCollision(ChunkCoord))
+		{
+			OutMissing.Add(ChunkCoord);
+			ColMgr->RequestCollision(ChunkCoord, 2000.f);
+		}
+	}
+	if (OutMissing.Num() > 0 && !RagdollHoldHandle.IsValid())
+	{
+		RagdollHoldManager = ColMgr;
+		RagdollHoldHandle = ColMgr->OnCollisionReady.AddUObject(this, &AVCCharacterBase::OnRagdollChunkCollisionReady);
+	}
+	return OutMissing.Num() == 0;
+}
+
+void AVCCharacterBase::OnRagdollChunkCollisionReady(const FIntVector& ChunkCoord)
+{
+	if (RagdollHoldChunks.Remove(ChunkCoord) > 0 && RagdollHoldChunks.Num() == 0)
+	{
+		UE_LOG(LogVoxelCharacter, Log, TEXT("%s: the terrain under the held ragdoll has collision; the ragdoll starts."), *GetName());
+		StartDeathRagdoll();
+	}
+}
+
+void AVCCharacterBase::ReleaseRagdollHold()
+{
+	if (UVoxelCollisionManager* ColMgr = RagdollHoldManager.Get(); ColMgr && RagdollHoldHandle.IsValid())
+	{
+		ColMgr->OnCollisionReady.Remove(RagdollHoldHandle);
+	}
+	RagdollHoldHandle.Reset();
+	RagdollHoldManager.Reset();
+	RagdollHoldChunks.Reset();
+}
+
+void AVCCharacterBase::PlaceCorpsePose()
+{
+	USkeletalMeshComponent* Body = GetMesh();
+	UWorld* World = GetWorld();
+	if (HasAuthority() || bCorpsePoseRejected || !Body || !World || !Body->GetPhysicsAsset() || CorpsePose.Num() == 0)
+	{
+		return;
+	}
+	ReleaseRagdollHold();
+	World->GetTimerManager().ClearTimer(CorpseSettleTimer);
+	// The pose fits the body the server's corpse wears.
+	ApplyCorpseAppearance();
+
+	// Simulating with the ragdoll's collision (the mesh has its bodies only with collision on), the skeleton updated from
+	// them again if this machine had frozen its own.
+	Body->bNoSkeletonUpdate = false;
+	Body->SetCollisionProfileName(TEXT("Ragdoll"));
+	if (Body->Bodies.Num() != CorpsePose.Num())
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("%s: the server's corpse pose has %d bodies, this machine's mesh %d; the body keeps its own ragdoll."),
+			*GetName(), CorpsePose.Num(), Body->Bodies.Num());
+		bCorpsePoseRejected = true;
+		StartDeathRagdoll();
+		if (bIsCorpse)
+		{
+			ApplyCorpseState();
+		}
+		return;
+	}
+	Body->SetSimulatePhysics(true);
+	bCorpsePosePlaced = true;
+	bPlacingCorpsePose = false;
+	HoldInPose(&CorpsePose);
+	// A body awash at the surface draws custom depth, as one that floated there does (the water plan's W2B).
+	FVCRagdollBuoyancy::Get().ApplyPlaced(Body, RagdollBuoyancy);
+}
+
+void AVCCharacterBase::HoldInPose(const TArray<FVCCorpseBodyPose>* Pose)
+{
+	USkeletalMeshComponent* Body = GetMesh();
+	UWorld* World = GetWorld();
+	if (!Body || !World || !Body->IsSimulatingPhysics())
+	{
+		FreezeCorpse();
+		return;
+	}
+	// No gravity, no planet's pull, no water's lift (Tick), no motion left: the bodies stay where they are put. The pose
+	// updates whether or not the body is drawn (a dedicated server, a corpse behind the camera), so the bones it keeps
+	// when it freezes are the bodies' (the freeze stops the updates: bNoSkeletonUpdate).
+	Body->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+	Body->SetEnableGravity(false);
+	RagdollGravityDirection = FVector::ZeroVector;
+	for (int32 Index = 0; Index < Body->Bodies.Num(); ++Index)
+	{
+		FBodyInstance* Instance = Body->Bodies[Index];
+		if (!Instance)
+		{
+			continue;
+		}
+		if (Pose && Pose->IsValidIndex(Index))
+		{
+			Instance->SetBodyTransform(FTransform((*Pose)[Index].Rotation, (*Pose)[Index].Location), ETeleportType::TeleportPhysics);
+		}
+		Instance->SetLinearVelocity(FVector::ZeroVector, /*bAddToCurrent=*/false);
+		Instance->SetAngularVelocityInRadians(FVector::ZeroVector, /*bAddToCurrent=*/false);
+	}
+	if (!bPlacingCorpsePose)
+	{
+		CorpsePlaceRetries = 0;
+	}
+	bPlacingCorpsePose = true;
+	CorpsePlacedFrame = GFrameCounter;
+	World->GetTimerManager().SetTimer(CorpseSettleTimer, this, &AVCCharacterBase::CheckCorpseSettled, 0.05f, true);
 }
 
 void AVCCharacterBase::HandleDied(const FCGFDamageContext& Context)
 {
 	Incapacitate();
+	StopTerrainWaitForBody();
 
-	if (USkeletalMeshComponent* Body = GetMesh())
-	{
-		if (Body->GetPhysicsAsset())
-		{
-			Body->SetCollisionProfileName(TEXT("Ragdoll"));
-			Body->SetSimulatePhysics(true);
-			StartRadialRagdoll(Body, GetCharacterMovement(), RagdollGravityDirection);
-		}
-	}
+	// The ragdoll, on every machine; held where this machine has no terrain collision under the body yet (G204).
+	StartDeathRagdoll();
 
 	BP_OnDied(Context);
 
@@ -748,35 +1937,39 @@ void AVCCharacterBase::SetViewMode(EVCViewMode NewMode)
 		}
 	}
 
-	// 2. Rotation behavior
-	if (UCharacterMovementComponent* MovComp = GetCharacterMovement())
+	// 2. Rotation behavior: first person turns the body with the view, third person faces where it moves. The server
+	// applies the same rule from the owner's request (G256), so whatever reads the facing (the gait's strafe speed, an
+	// attack's lunge) agrees on both machines. The moves made before the toggle go first, so the server replays them
+	// under the rule they were made with (as a dodge's request, D170).
+	const bool bNewFacesView = NewMode == EVCViewMode::FirstPerson;
+	ApplyViewFacing(bNewFacesView);
+	if (IsLocallyControlled() && !HasAuthority())
 	{
-		if (NewMode == EVCViewMode::FirstPerson)
+		if (UCharacterMovementComponent* MovComp = GetCharacterMovement())
 		{
-			// FP: character yaw locked to camera
-			bUseControllerRotationYaw = true;
-			MovComp->bOrientRotationToMovement = false;
+			MovComp->FlushServerMoves();
 		}
-		else
-		{
-			// TP: character faces movement direction
-			bUseControllerRotationYaw = false;
-			MovComp->bOrientRotationToMovement = true;
-		}
+		Server_SetFacesView(bNewFacesView);
 	}
+	// A view toggle mid-aim keeps the body on the view and moves the camera with the mode (G155, C3).
+	bAimStateApplied = false;
+	ApplyAimState();
 
 	// 3. Mesh visibility — defer hide when entering FP so the camera
 	//    blend can "zoom in" on the character before hiding the body.
 	if (NewMode == EVCViewMode::FirstPerson && IsLocallyControlled())
 	{
 		bPendingFPMeshHide = true;
-		// Temporarily shrink near clip plane so the mesh doesn't get clipped
-		// as the camera zooms through it during the blend.
-		GNearClippingPlane = 1.f;
+		// The camera passes through the body during the blend: a near plane no farther than
+		// FirstPersonBlendNearPlane for that long, so the body is not cut open on the way in. It goes back as it was
+		// found when the body is hidden (Tick), when the switch is reversed (below) or when the pawn ends play.
+		HoldBlendNearClip();
 	}
 	else
 	{
 		bPendingFPMeshHide = false;
+		// Back to third person before the blend finished: the near plane goes back here.
+		ReleaseBlendNearClip();
 		UpdateMeshVisibility();
 	}
 
@@ -795,6 +1988,47 @@ void AVCCharacterBase::SetViewMode(EVCViewMode NewMode)
 	OnViewModeChanged.Broadcast(OldMode, NewMode);
 }
 
+void AVCCharacterBase::ApplyViewFacing(bool bInFacesView)
+{
+	bFacesView = bInFacesView;
+	bUseControllerRotationYaw = bInFacesView;
+	if (UCharacterMovementComponent* MovComp = GetCharacterMovement())
+	{
+		MovComp->bOrientRotationToMovement = !bInFacesView;
+	}
+}
+
+void AVCCharacterBase::Server_SetFacesView_Implementation(bool bInFacesView)
+{
+	// The owner's view rule (G256), any value valid: a locally controlled pawn (a listen server's) applies its own.
+	if (IsLocallyControlled() || bFacesView == bInFacesView)
+	{
+		return;
+	}
+	ApplyViewFacing(bInFacesView);
+	// Back in third person while aiming, the body faces the view again by the aim's rule (as SetViewMode's toggle).
+	ApplyAimState();
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s: the body %s the view on the server"), *GetName(), bInFacesView ? TEXT("follows") : TEXT("no longer follows"));
+}
+
+void AVCCharacterBase::HoldBlendNearClip()
+{
+	if (!bHoldsBlendNearClip)
+	{
+		bHoldsBlendNearClip = true;
+		FVCNearClipOverride::Acquire(FirstPersonBlendNearPlane);
+	}
+}
+
+void AVCCharacterBase::ReleaseBlendNearClip()
+{
+	if (bHoldsBlendNearClip)
+	{
+		bHoldsBlendNearClip = false;
+		FVCNearClipOverride::Release();
+	}
+}
+
 void AVCCharacterBase::UpdateMeshVisibility()
 {
 	const bool bIsLocalFP = IsLocallyControlled() && CurrentViewMode == EVCViewMode::FirstPerson;
@@ -804,11 +2038,17 @@ void AVCCharacterBase::UpdateMeshVisibility()
 		GetMesh()->SetOwnerNoSee(bIsLocalFP);
 		GetMesh()->bCastHiddenShadow = bIsLocalFP;
 	}
+	if (AppearanceComponent)
+	{
+		AppearanceComponent->SetPartsOwnerNoSee(bIsLocalFP, bIsLocalFP);
+		AppearanceComponent->SetBodyHiddenFromView(bIsLocalFP); // no correctives for a body its player cannot see (G148)
+	}
 
 	if (FirstPersonArmsMesh)
 	{
 		FirstPersonArmsMesh->SetVisibility(bIsLocalFP);
 	}
+	UpdateEquipmentVisualVisibility();
 }
 
 // ---------------------------------------------------------------------------
@@ -1004,17 +2244,33 @@ void AVCCharacterBase::UpdateEquipmentAttachments()
 			continue;
 		}
 
-		USkeletalMeshComponent* TargetMesh = GetTargetMeshForSlot(Slot.SlotTag);
+		// A sheath's weapon sits where this machine's unsheathe or sheathe montage has it until the montage's hand-off (at
+		// the sheath while an unsheathe reaches for it, in the hand while a sheathe carries it back), else where its state
+		// says (the equipment sheathing plan, D79). In the hand it takes the hand slot's view mapping.
+		const bool bSheath = Slot.DrawSlotTag.IsValid();
+		bool bInHand = Slot.IsInHand();
+		EVCAnimAction PendingAction;
+		if (bSheath && ActionMontages && ActionMontages->IsSheathHandOffPending(Slot.SlotTag, PendingAction))
+		{
+			bInHand = PendingAction == EVCAnimAction::Sheathe;
+		}
+		const FGameplayTag ViewSlot = bSheath && bInHand ? Slot.DrawSlotTag : Slot.SlotTag;
+
+		USkeletalMeshComponent* TargetMesh = GetTargetMeshForSlot(ViewSlot);
 		if (!TargetMesh)
 		{
 			continue;
 		}
 
-		// Determine the correct socket for the current view mode
-		FName SocketName = Slot.AttachSocket;
+		// Determine the correct socket for the current view mode; an item that chooses its own bone (a bow on the left
+		// hand) keeps it in both views.
+		const FName StateSocket = EquipmentManager->GetVisualAttachSocketForState(Slot.SlotTag, bInHand);
+		const FName SlotSocket = bSheath && bInHand ? EquipmentManager->GetVisualAttachSocketForState(Slot.DrawSlotTag, true) : Slot.AttachSocket;
+		const bool bOwnBone = StateSocket != SlotSocket;
+		FName SocketName = StateSocket;
 		for (const FVCEquipmentSocketMapping& Mapping : EquipmentSocketMappings)
 		{
-			if (Mapping.SlotTag == Slot.SlotTag)
+			if (Mapping.SlotTag == ViewSlot && !bOwnBone)
 			{
 				if (CurrentViewMode == EVCViewMode::FirstPerson && !Mapping.ArmsSocket.IsNone())
 				{
@@ -1033,8 +2289,84 @@ void AVCCharacterBase::UpdateEquipmentAttachments()
 			FAttachmentTransformRules::SnapToTargetNotIncludingScale,
 			SocketName
 		);
-		// The snap wipes the visual's offset: re-apply the slot / item fit.
-		Slot.AttachedVisualComponent->SetRelativeTransform(EquipmentManager->GetVisualAttachOffset(Slot.SlotTag));
+		// The snap wipes the visual's offset: re-apply the slot / item fit (or the set's drawn grip, as far as the draw
+		// plays), the body's correction for the bone (D71) and any QA nudge.
+		const FTransform* Nudge = EquipFitNudges.Find(Slot.SlotTag.GetTagName());
+		FTransform Fit = EquipmentManager->GetVisualAttachOffsetForState(Slot.SlotTag, bInHand);
+		if (bInHand && ViewSlot == CGFGameplayTags::Equipment_Slot_MainHand.GetTag())
+		{
+			const float DrawWeight = GetDrawnGripWeight();
+			if (DrawWeight > 0.f)
+			{
+				const UVCActionAnimSet* Set = ActionMontages ? ActionMontages->GetCurrentActionAnimSet() : nullptr;
+				FTransform Blended;
+				Blended.Blend(Fit, Set->DrawnGrip, DrawWeight);
+				Fit = Blended;
+			}
+		}
+		Slot.AttachedVisualComponent->SetRelativeTransform(ComposeAttachTransform(
+			Fit,
+			TargetMesh == GetMesh() ? GetBodyAttachCorrection(SocketName) : FTransform::Identity,
+			Nudge ? *Nudge : FTransform::Identity));
+	}
+	UpdateEquipmentVisualVisibility();
+#endif
+}
+
+float AVCCharacterBase::GetDrawnGripWeight() const
+{
+	const UVCActionAnimSet* Set = ActionMontages ? ActionMontages->GetCurrentActionAnimSet() : nullptr;
+	if (!Set || !Set->bHasDrawnGrip || !GetMesh())
+	{
+		return 0.f;
+	}
+	const UAnimInstance* Anim = GetMesh()->GetAnimInstance();
+	return Anim ? FMath::Clamp(Anim->GetSlotMontageGlobalWeight(TEXT("UpperBody")), 0.f, 1.f) : 0.f;
+}
+
+void AVCCharacterBase::UpdateDrawnGrip()
+{
+	const float Weight = GetDrawnGripWeight();
+	if (Weight > 0.f || LastDrawnGripWeight > 0.f)
+	{
+		UpdateEquipmentAttachments();
+	}
+	LastDrawnGripWeight = Weight;
+}
+
+FTransform AVCCharacterBase::ComposeAttachTransform(const FTransform& Fit, const FTransform& BodyCorrection, const FTransform& Nudge)
+{
+	// A * B applies A then B: the fit in the bone's space, the correction moving the fitted item, the nudge last.
+	return Fit * BodyCorrection * Nudge;
+}
+
+FTransform AVCCharacterBase::GetBodyAttachCorrection(FName Bone) const
+{
+	const UVCCharacterAppearance* Appearance = AppearanceComponent ? AppearanceComponent->GetAppearance() : nullptr;
+	return Appearance ? Appearance->GetAttachCorrection(Bone) : FTransform::Identity;
+}
+
+void AVCCharacterBase::UpdateEquipmentVisualVisibility()
+{
+#if WITH_EQUIPMENT_PLUGIN
+	if (!EquipmentManager)
+	{
+		return;
+	}
+	const bool bIsLocalFP = IsLocallyControlled() && CurrentViewMode == EVCViewMode::FirstPerson;
+	for (FEquipmentSlot& Slot : EquipmentManager->EquipmentSlots)
+	{
+		if (!Slot.AttachedVisualComponent)
+		{
+			continue;
+		}
+		if (UPrimitiveComponent* Visual = Cast<UPrimitiveComponent>(Slot.AttachedVisualComponent.Get()))
+		{
+			// Hidden with the body it hangs on; a visual on the arms mesh is the first-person view's own.
+			const bool bOnBody = Visual->GetAttachParent() == GetMesh();
+			Visual->SetOwnerNoSee(bIsLocalFP && bOnBody);
+			Visual->bCastHiddenShadow = bIsLocalFP && bOnBody;
+		}
 	}
 #endif
 }
@@ -1099,15 +2431,6 @@ void AVCCharacterBase::HandleItemEquipped(const FItemInstance& Item, FGameplayTa
 #if WITH_EQUIPMENT_PLUGIN
 	UE_LOG(LogVoxelCharacter, Log, TEXT("Item equipped in slot %s"), *SlotTag.ToString());
 
-	// Update equipment anim type for the main hand
-	// (Game-specific: read from item data asset or equipment fragment)
-	// Default: any equipped item in a hand slot sets Tool anim type
-	static const FGameplayTag MainHandTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.MainHand"), false);
-	if (SlotTag == MainHandTag)
-	{
-		ActiveItemAnimType = EVCEquipmentAnimType::Tool;
-	}
-
 	// Re-attach to correct mesh for current view mode
 	UpdateEquipmentAttachments();
 #endif
@@ -1117,11 +2440,168 @@ void AVCCharacterBase::HandleItemUnequipped(const FItemInstance& Item, FGameplay
 {
 #if WITH_EQUIPMENT_PLUGIN
 	UE_LOG(LogVoxelCharacter, Log, TEXT("Item unequipped from slot %s"), *SlotTag.ToString());
+#endif
+}
 
-	static const FGameplayTag MainHandTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.MainHand"), false);
-	if (SlotTag == MainHandTag)
+void AVCCharacterBase::HandleEquipmentChanged()
+{
+	RefreshActionSet();
+
+	// The reload's gate (D98): a ranged weapon in the hand. Leaving the hand (sheathed, swapped, dropped) empties the
+	// string; coming into it, the unsheathe's end plays before the reload starts.
+	const bool bWasInHand = bRangedWeaponInHand;
+	bRangedWeaponInHand = UVCRangedAttackAbility::HoldsRangedWeapon(this);
+	if (HasAuthority())
 	{
-		ActiveItemAnimType = EVCEquipmentAnimType::Unarmed;
+		if (!bRangedWeaponInHand)
+		{
+			CancelReload(0.f);
+			SetArrowNocked(false);
+		}
+		else if (!bWasInHand && GetWorld())
+		{
+			NextReloadTime = FMath::Max(NextReloadTime, GetWorld()->GetTimeSeconds() + ReloadAfterShotSeconds);
+		}
+		RefreshArrowMesh();
+	}
+	UpdateQuiverArrows();
+}
+
+void AVCCharacterBase::RefreshActionSet()
+{
+	bool bHoldsItem = false;
+	FGameplayTag ItemActionSet;
+#if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
+	// What is in the hand: the hand slot's own item or the weapon drawn from a sheath; all sheathed is Unarmed (D80).
+	const FItemInstance Item = EquipmentManager ? EquipmentManager->GetHeldItem(CGFGameplayTags::Equipment_Slot_MainHand) : FItemInstance();
+	if (Item.IsValid())
+	{
+		bHoldsItem = true;
+		const UGameInstance* GI = GetGameInstance();
+		const UItemDatabaseSubsystem* ItemDB = GI ? GI->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
+		const UItemDefinition* Def = ItemDB ? ItemDB->GetDefinition(Item.ItemDefinitionId) : nullptr;
+		if (const UItemFragment_Equipment* EquipFrag = Def ? Def->FindFragment<UItemFragment_Equipment>() : nullptr)
+		{
+			ItemActionSet = EquipFrag->ActionSetTag;
+		}
+	}
+#endif
+	ActiveActionSet = PickActionSet(bHoldsItem, ItemActionSet);
+	UpdateClipGaitCaps();
+}
+
+void AVCCharacterBase::UpdateClipGaitCaps()
+{
+	UVCMovementComponent* VCMovement = Cast<UVCMovementComponent>(GetCharacterMovement());
+	if (!VCMovement || !ActionMontages)
+	{
+		return;
+	}
+	// The set whose loops play: the held set's own locomotion, else the base set's (UVCLocomotionAnimInstance::ResolveClips).
+	const UVCActionAnimSet* Held = ActionMontages->GetCurrentActionAnimSet();
+	const UVCActionAnimSet* Base = ActionMontages->FindActionAnimSet(VCGameplayTags::Equipment_AnimSet_Unarmed.GetTag());
+	const UVCLocomotionClipSet* Clips = Held && Held->LocomotionClips && Held->LocomotionClips->HasOwnLocomotion()
+		? Held->LocomotionClips.Get() : (Base ? Base->LocomotionClips.Get() : nullptr);
+	FVCGaitCaps Caps;
+	if (Clips)
+	{
+		Caps.Walk = Clips->WalkSpeed;
+		Caps.Run = Clips->RunSpeed;
+		Caps.Sprint = Clips->SprintSpeed;
+		// The crouch's from the set whose crouch plays (its own or the one it borrows, L3); none: the table's row.
+		if (const UVCLocomotionClipSet* Crouch = Clips->GetCrouchSet())
+		{
+			Caps.Crouch = Crouch->CrouchSpeed;
+		}
+		// The held set's aim ceiling: aiming walks it in its aim walk alone (the bow's hold C).
+		Caps.Aim = Clips->PacesAim() ? Clips->AimSpeed : 0.f;
+	}
+	VCMovement->SetClipGaitCaps(Caps);
+}
+
+void AVCCharacterBase::ApplyLocomotionAnimClass()
+{
+	USkeletalMeshComponent* MeshComponent = GetMesh();
+	UWorld* World = GetWorld();
+	if (!MeshComponent || !World)
+	{
+		return;
+	}
+	if (!BlueprintAnimClass)
+	{
+		BlueprintAnimClass = MeshComponent->GetAnimClass();
+	}
+
+	// The appearance's anim class, else the class vc.Anim.Locomotion names (1 motion matching, character animation P6;
+	// 2 the state machine, the locomotion state machine plan), on every machine that draws the player; a dedicated server
+	// and the automation tests keep the Blueprint's state machine (nothing there reads a pose, and the databases are
+	// large to load)
+	TSubclassOf<UAnimInstance> Wanted = BlueprintAnimClass;
+	const int32 Mode = CVarAnimLocomotion.GetValueOnGameThread();
+	TSoftClassPtr<UAnimInstance> Named = Mode == 2 ? UVCSettings::Get().PlayerStateMachineAnimClass
+		: (Mode == 1 ? UVCSettings::Get().PlayerLocomotionAnimClass : TSoftClassPtr<UAnimInstance>());
+	if (const UVCCharacterAppearance* Worn = AppearanceComponent ? AppearanceComponent->GetAppearance() : nullptr;
+		Worn && !Worn->AnimClass.IsNull() && !Named.IsNull())
+	{
+		Named = Worn->AnimClass;
+	}
+	if (!Named.IsNull() && GetNetMode() != NM_DedicatedServer && !GIsAutomationTesting)
+	{
+		if (UClass* Loaded = Named.LoadSynchronous())
+		{
+			Wanted = Loaded;
+		}
+		else
+		{
+			static TSet<int32> WarnedModes;
+			UE_CLOG(!WarnedModes.Contains(Mode), LogVoxelCharacter, Warning,
+				TEXT("The player's locomotion AnimBP %s (vc.Anim.Locomotion %d) does not load (Scripts/setup_character_locomotion.py or setup_character_state_machine.py builds it): the Blueprint's own plays"),
+				*Named.ToString(), Mode);
+			WarnedModes.Add(Mode);
+		}
+	}
+	// The state machine's gait caps (D91) apply while this machine plays it; a server takes a remote player's from its
+	// saved moves (FLAG_Custom_3), so a dedicated server's Blueprint graph does not decide them
+	if (UVCMovementComponent* VCMovement = Cast<UVCMovementComponent>(GetCharacterMovement()))
+	{
+		VCMovement->bWantsClipGaitCaps = Wanted && Wanted->IsChildOf(UVCLocomotionAnimInstance::StaticClass());
+	}
+	UpdateClipGaitCaps();
+	if (!Wanted || MeshComponent->GetAnimClass() == Wanted)
+	{
+		return;
+	}
+	MeshComponent->SetAnimInstanceClass(Wanted);
+	RelinkEquipmentAnimLayers();
+	if (AppearanceComponent)
+	{
+		AppearanceComponent->RefreshSimulations(); // the new instances' rigid-body nodes fall along the movement's gravity
+	}
+}
+
+void AVCCharacterBase::RelinkEquipmentAnimLayers()
+{
+#if WITH_EQUIPMENT_PLUGIN && WITH_INVENTORY_PLUGIN
+	// A new anim instance links no layers: the held items' stances come back (EquipmentPlugin links them on equip)
+	USkeletalMeshComponent* MeshComponent = GetMesh();
+	const UGameInstance* GI = GetGameInstance();
+	const UItemDatabaseSubsystem* ItemDB = GI ? GI->GetSubsystem<UItemDatabaseSubsystem>() : nullptr;
+	if (!EquipmentManager || !MeshComponent || !ItemDB)
+	{
+		return;
+	}
+	for (const FGameplayTag& SlotTag : EquipmentManager->GetOccupiedSlotTags())
+	{
+		if (EquipmentManager->IsSheathSlot(SlotTag) && !EquipmentManager->IsDrawn(SlotTag))
+		{
+			continue; // a sheathed weapon links no stance (D77)
+		}
+		const UItemDefinition* Def = ItemDB->GetDefinition(EquipmentManager->GetEquippedItem(SlotTag).ItemDefinitionId);
+		const UItemFragment_Equipment* EquipFrag = Def ? Def->FindFragment<UItemFragment_Equipment>() : nullptr;
+		if (EquipFrag && EquipFrag->AnimLayerClass)
+		{
+			MeshComponent->LinkAnimClassLayers(EquipFrag->AnimLayerClass);
+		}
 	}
 #endif
 }
@@ -1259,6 +2739,17 @@ void AVCCharacterBase::DrawVoxelDebugInfo()
 		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Yellow,
 			FString::Printf(TEXT("GroundFriction: %.2f  Grip: %.2f"),
 				MovComp->GroundFriction, MovComp->VoxelSurfaceGripMultiplier));
+		// The gait table (C4): the gait and the rotation mode in force, and the row the values come from.
+		const UEnum* GaitEnum = StaticEnum<EVCGait>();
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Yellow,
+			FString::Printf(TEXT("Gait: %s  Rotation: %s%s  Table: %s"),
+				GaitEnum ? *GaitEnum->GetNameStringByValue(static_cast<int64>(MovComp->GetGait())) : TEXT("?"),
+				MovComp->GetRotationMode() == EVCRotationMode::Strafe ? TEXT("Strafe") : TEXT("Orient"),
+				MovComp->IsAimTurnPending() ? TEXT(" (turning)") : TEXT(""),
+				MovComp->bUseGaitTable ? TEXT("on") : TEXT("off")));
+		GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Yellow,
+			FString::Printf(TEXT("Row: %s  Accel: %.0f  Brake: %.0f  RotRate: %.0f"),
+				*MovComp->GetGaitRow().ToString(), MovComp->MaxAcceleration, MovComp->BrakingDecelerationWalking, MovComp->RotationRate.Yaw));
 	}
 
 	// --- Camera ---
@@ -1290,10 +2781,8 @@ void AVCCharacterBase::DrawVoxelDebugInfo()
 	}
 
 	// --- Hotbar / Equipment ---
-	const UEnum* AnimEnum = StaticEnum<EVCEquipmentAnimType>();
-	const FString AnimName = AnimEnum ? AnimEnum->GetNameStringByValue(static_cast<int64>(ActiveItemAnimType)) : TEXT("?");
 	GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::White,
-		FString::Printf(TEXT("Hotbar: %d  AnimType: %s"), ActiveHotbarSlot, *AnimName));
+		FString::Printf(TEXT("Hotbar: %d  ActionSet: %s"), ActiveHotbarSlot, *ActiveActionSet.ToString()));
 }
 #endif
 
@@ -1349,6 +2838,10 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 		EIC->BindAction(Config->IA_Crouch, ETriggerEvent::Started, this, &AVCCharacterBase::Input_StartCrouch);
 		EIC->BindAction(Config->IA_Crouch, ETriggerEvent::Completed, this, &AVCCharacterBase::Input_StopCrouch);
 	}
+	if (Config->IA_Dodge)
+	{
+		EIC->BindAction(Config->IA_Dodge, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Dodge);
+	}
 
 	if (Config->IA_Interact)
 	{
@@ -1365,9 +2858,16 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 		EIC->BindAction(Config->IA_PrimaryAction, ETriggerEvent::Completed, this, &AVCCharacterBase::Input_StopPrimaryAction);
 		EIC->BindAction(Config->IA_PrimaryAction, ETriggerEvent::Canceled, this, &AVCCharacterBase::Input_StopPrimaryAction);
 	}
+	if (Config->IA_SecondaryAttack)
+	{
+		EIC->BindAction(Config->IA_SecondaryAttack, ETriggerEvent::Started, this, &AVCCharacterBase::Input_SecondaryAttack);
+	}
 	if (Config->IA_SecondaryAction)
 	{
 		EIC->BindAction(Config->IA_SecondaryAction, ETriggerEvent::Started, this, &AVCCharacterBase::Input_SecondaryAction);
+		// Holding it aims a ranged weapon (C3): the release ends the aim.
+		EIC->BindAction(Config->IA_SecondaryAction, ETriggerEvent::Completed, this, &AVCCharacterBase::Input_StopSecondaryAction);
+		EIC->BindAction(Config->IA_SecondaryAction, ETriggerEvent::Canceled, this, &AVCCharacterBase::Input_StopSecondaryAction);
 	}
 
 	// UI / Hotbar
@@ -1394,6 +2894,14 @@ void AVCCharacterBase::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	if (Config->IA_Craft)
 	{
 		EIC->BindAction(Config->IA_Craft, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Craft);
+	}
+	if (Config->IA_Sheathe)
+	{
+		EIC->BindAction(Config->IA_Sheathe, ETriggerEvent::Started, this, &AVCCharacterBase::Input_Sheathe);
+	}
+	if (Config->IA_CycleWeapon)
+	{
+		EIC->BindAction(Config->IA_CycleWeapon, ETriggerEvent::Started, this, &AVCCharacterBase::Input_CycleWeapon);
 	}
 	if (Config->IA_ToggleEditMode)
 	{
@@ -1519,8 +3027,25 @@ void AVCCharacterBase::Input_ToggleView(const FInputActionValue& Value)
 
 void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 {
+	PressPrimaryAction();
+}
+
+void AVCCharacterBase::PressPrimaryAction()
+{
 	// Priority chain: GAS ability -> [edit mode only] equipped item action -> voxel dig -> fallback
-	if (IsIncapacitated())
+	// Behind a raised guard nothing else happens (D94), nor behind one kept for the attack's recovery (D172): lower it first.
+	if (IsIncapacitated() || IsGuardHeld())
+	{
+		return;
+	}
+	// The hands are busy while a weapon comes out or goes back (the equipment sheathing plan, D79).
+	if (ActionMontages && ActionMontages->IsSheathActionPlaying())
+	{
+		return;
+	}
+
+	// Step 0: a ranged weapon in the main hand draws while the button is held and shoots on release.
+	if (TryStartRangedAttack())
 	{
 		return;
 	}
@@ -1548,6 +3073,12 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 	// interacting with neither must never touch voxels.
 	if (!bEditModeEnabled && !HasDiggingTool())
 	{
+		// Step 1d: a melee weapon in hand swings with nothing hostile under the crosshair too, and the server's sweep
+		// lands on whatever is there at the hit time (G174: before, a sword did nothing until an enemy was in reach).
+		if (UVCMeleeAttackAbility::HoldsMeleeWeapon(this))
+		{
+			StartMeleeSwing();
+		}
 		return;
 	}
 
@@ -1557,6 +3088,7 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 	const UVoxelChunkManager* ChunkMgr = UVoxelChunkManager::Find(GetWorld());
 	if (BlockInteraction && ChunkMgr && UVCBlockInteractionComponent::UsesTimedBreaks(ChunkMgr->GetConfiguration()))
 	{
+		PlayOwnAction(EVCAnimAction::Dig);
 		BlockInteraction->StartHold();
 		return;
 	}
@@ -1565,12 +3097,33 @@ void AVCCharacterBase::Input_PrimaryAction(const FInputActionValue& Value)
 	AVCPlayerController* PC = Cast<AVCPlayerController>(GetController());
 	if (PC && FindEditTarget(Hit, DigVoxel, PlaceVoxel))
 	{
+		PlayOwnAction(EVCAnimAction::Dig);
 		PC->Server_RequestVoxelModification(DigVoxel, EVCVoxelModificationType::Destroy, 0);
 	}
 }
 
 void AVCCharacterBase::Input_StopPrimaryAction(const FInputActionValue& Value)
 {
+	ReleasePrimaryAction();
+}
+
+void AVCCharacterBase::ReleasePrimaryAction()
+{
+	// A charge released before its strike plays the first attack from the windup's pose (D167); the charged strike
+	// fired by itself already.
+	if (ActionMontages && ActionMontages->IsCharging() && IsLocallyControlled())
+	{
+		if (UVCActionMontageComponent::ClassifyChargeRelease(ActionMontages->GetChargeSeconds(), ActionMontages->GetChargeTime()) == EVCChargeRelease::Charged)
+		{
+			StartChargedSwing();
+		}
+		else
+		{
+			ActionMontages->EndCharge();
+			StartMeleeSwing(/*bSecondary*/ false, /*bFreshPress*/ false);
+		}
+	}
+	ReleaseRangedAttack();
 	if (BlockInteraction)
 	{
 		BlockInteraction->StopHold();
@@ -1579,8 +3132,24 @@ void AVCCharacterBase::Input_StopPrimaryAction(const FInputActionValue& Value)
 
 void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 {
-	// Priority chain: GAS ability -> [edit mode only] equipped item alt -> voxel place -> fallback
+	PressSecondaryAction();
+}
+
+void AVCCharacterBase::PressSecondaryAction()
+{
+	// Priority chain: aim a ranged weapon (held) -> raise a shield (held) -> [edit mode only] voxel place
 	if (IsIncapacitated())
+	{
+		return;
+	}
+	// A ranged weapon in hand aims while the button is held (C3, D73); edit mode keeps placing (a held bow is no placing tool).
+	if (!bEditModeEnabled && UVCRangedAttackAbility::HoldsRangedWeapon(this))
+	{
+		SetWantsToAim(true);
+		return;
+	}
+	// A shield in the off hand raises the guard while the button is held (D94); edit mode keeps placing.
+	if (!bEditModeEnabled && StartBlock())
 	{
 		return;
 	}
@@ -1598,8 +3167,125 @@ void AVCCharacterBase::Input_SecondaryAction(const FInputActionValue& Value)
 	AVCPlayerController* PC = Cast<AVCPlayerController>(GetController());
 	if (PC && FindEditTarget(Hit, DigVoxel, PlaceVoxel))
 	{
+		PlayOwnAction(EVCAnimAction::Place);
 		PC->Server_RequestVoxelModification(PlaceVoxel, EVCVoxelModificationType::Place, 2); // Stone
 	}
+}
+
+void AVCCharacterBase::Input_StopSecondaryAction(const FInputActionValue& Value)
+{
+	ReleaseSecondaryAction();
+}
+
+void AVCCharacterBase::Input_SecondaryAttack(const FInputActionValue& Value)
+{
+	PressSecondaryAttack();
+}
+
+void AVCCharacterBase::PressSecondaryAttack()
+{
+	// As the primary's swing (PressPrimaryAction): nothing behind a raised guard (D94: RMB keeps it), while a weapon comes
+	// out or goes back, or in edit mode; a melee weapon with a secondary branch swings it (D166), at a target or the air.
+	if (IsIncapacitated() || IsGuardHeld() || bEditModeEnabled)
+	{
+		return;
+	}
+	if (ActionMontages && ActionMontages->IsSheathActionPlaying())
+	{
+		return;
+	}
+	if (UVCMeleeAttackAbility::HoldsMeleeWeapon(this))
+	{
+		StartMeleeSwing(/*bSecondary*/ true);
+	}
+}
+
+void AVCCharacterBase::ReleaseSecondaryAction()
+{
+	SetWantsToAim(false);
+	// A guard kept for the attack's recovery is dropped (D172).
+	if (ActionMontages)
+	{
+		ActionMontages->ClearBufferedGuard();
+	}
+	StopBlock();
+}
+
+bool AVCCharacterBase::IsGuardHeld() const
+{
+	return bBlocking || (ActionMontages && ActionMontages->HasBufferedGuard());
+}
+
+bool AVCCharacterBase::StartBlock()
+{
+	if (bBlocking)
+	{
+		return true;
+	}
+	// The hands are busy while a weapon comes out or goes back (D79).
+	if (ActionMontages && ActionMontages->IsSheathActionPlaying())
+	{
+		return false;
+	}
+	// A press during an attack's swing is kept and the guard rises at the attack's recovery (G252, D172), as a press
+	// during a dodge waits for its recovery (D170): the server plays no guard over an attack (only montages with root
+	// motion), so both machines play the attack to its recovery and take its root motion alike. A charge is no attack
+	// in its swing: the guard goes up over it at once (D167, below).
+	if (ActionMontages && IsLocallyControlled() && ActionMontages->IsAttackBeforeRecovery())
+	{
+		FVCShieldStats Shield;
+		if (!UVCBlockAbility::GetHeldShield(this, Shield))
+		{
+			return false;
+		}
+		ActionMontages->BufferGuard();
+		return true;
+	}
+	if (!UVCBlockAbility::CanStartBlock(this))
+	{
+		return false;
+	}
+	UAbilitySystemComponent* ASC = GetAbilitySystemComponent();
+	if (!ASC)
+	{
+		return false;
+	}
+	// A charge under way is given up at once (D167): the guard goes up over it.
+	CancelCharge(/*bLower*/ false);
+	// The owner raises its guard at once; the server's activation plays it for everyone else and holds State.Blocking.
+	// An attack still in its recovery ends here as on the server (D172), so both take the same root motion.
+	if (ActionMontages && IsLocallyControlled())
+	{
+		ActionMontages->StopAttackForGuard();
+	}
+	PlayOwnAction(EVCAnimAction::Block);
+	if (!ASC->TryActivateAbilitiesByTag(FGameplayTagContainer(VCGameplayTags::Ability_Block)))
+	{
+		if (ActionMontages && IsLocallyControlled())
+		{
+			ActionMontages->StopActionLocal(EVCAnimAction::Block);
+		}
+		UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s: the guard did not go up"), *GetName());
+		return false;
+	}
+	bBlocking = true;
+	return true;
+}
+
+void AVCCharacterBase::StopBlock()
+{
+	if (!bBlocking)
+	{
+		return;
+	}
+	bBlocking = false;
+	// The guard still up on this machine comes down; one a hit broke staggers already.
+	if (ActionMontages && IsLocallyControlled()
+		&& (ActionMontages->IsActionPlaying(EVCAnimAction::Block) || ActionMontages->IsActionPlaying(EVCAnimAction::BlockHit)))
+	{
+		ActionMontages->PlayActionLocal(EVCAnimAction::BlockEnd);
+	}
+	UVCBlockAbility::ReleaseBlock(GetAbilitySystemComponent());
 }
 
 void AVCCharacterBase::Input_OpenInventory(const FInputActionValue& Value)
@@ -1722,6 +3408,12 @@ bool AVCCharacterBase::EquipHotbarItem(int32 HotbarSlot)
 		return false;
 	}
 
+	// A carried weapon goes through the use path: into its sheath and drawn with its montage, on the server (D79).
+	if (EquipFrag->SheathSlotTag.IsValid())
+	{
+		RequestUseItemInSlot(Slot);
+		return true;
+	}
 	// The manager routes to its server RPC when called on a client.
 	const EEquipmentResult Result = EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, EquipFrag->EquipmentSlotTag);
 	UE_LOG(LogVoxelCharacter, Log, TEXT("EquipHotbarItem: %s -> %s: %s"), *Item.ItemDefinitionId.PrimaryAssetName.ToString(),
@@ -1738,6 +3430,12 @@ bool AVCCharacterBase::UnequipSlotToInventory(FGameplayTag SlotTag)
 	if (!InventoryComponent || !EquipmentManager || !SlotTag.IsValid())
 	{
 		return false;
+	}
+	// A hand names what is in it: a weapon drawn from a sheath leaves from its sheath (the equipment sheathing plan).
+	const FGameplayTag Held = EquipmentManager->GetHeldSlotTag(SlotTag);
+	if (Held.IsValid())
+	{
+		SlotTag = Held;
 	}
 	const EEquipmentResult Result = EquipmentManager->TryUnequipToInventory(SlotTag, InventoryComponent);
 	UE_LOG(LogVoxelCharacter, Log, TEXT("UnequipSlotToInventory: %s: %s"), *SlotTag.ToString(), *UEnum::GetValueAsString(Result));
@@ -1772,6 +3470,8 @@ void AVCCharacterBase::HandleEquipmentVisualAttached(FGameplayTag SlotTag)
 {
 	// The manager attaches to the body; first-person arms take their slots once the mesh exists.
 	UpdateEquipmentAttachments();
+	// A quiver's mesh landed: the arrows standing in it ride its visual (D100).
+	UpdateQuiverArrows();
 }
 
 void AVCCharacterBase::Server_UseItemInSlot_Implementation(int32 SlotIndex)
@@ -1798,7 +3498,13 @@ bool AVCCharacterBase::UseItemInSlot(int32 SlotIndex)
 	UItemDefinition* Def = ItemDB ? ItemDB->GetDefinition(Item.ItemDefinitionId) : nullptr;
 	if (const UItemFragment_Placeable* Placeable = Def ? Def->FindFragment<UItemFragment_Placeable>() : nullptr)
 	{
-		return TryPlaceItem(SlotIndex, Item, *Placeable);
+		// The owner learns of a placement or a use from the server (it may be refused), so everyone plays it from here.
+		const bool bPlaced = TryPlaceItem(SlotIndex, Item, *Placeable);
+		if (bPlaced && ActionMontages)
+		{
+			ActionMontages->PlayActionForEveryone(EVCAnimAction::Place);
+		}
+		return bPlaced;
 	}
 	const UItemFragment_Consumable* Consumable = Def ? Def->FindFragment<UItemFragment_Consumable>() : nullptr;
 	if (!Consumable)
@@ -1808,6 +3514,29 @@ bool AVCCharacterBase::UseItemInSlot(int32 SlotIndex)
 		const UItemFragment_Equipment* EquipFrag = Def ? Def->FindFragment<UItemFragment_Equipment>() : nullptr;
 		if (EquipFrag && EquipFrag->EquipmentSlotTag.IsValid() && EquipmentManager)
 		{
+			// A carried weapon (D79): into its sheath (the sheath's weapon to the bag), then drawn with its montage, the
+			// weapon drawn before going back to its own sheath.
+			if (EquipFrag->SheathSlotTag.IsValid())
+			{
+				const EEquipmentResult Equipped = EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, FGameplayTag());
+				FGameplayTag Sheath;
+				for (const FEquipmentSlot& Slot : EquipmentManager->EquipmentSlots)
+				{
+					if (Slot.bIsOccupied && Slot.EquippedItem.InstanceId == Item.InstanceId)
+					{
+						Sheath = Slot.SlotTag;
+					}
+				}
+				UE_LOG(LogVoxelCharacter, Log, TEXT("UseItemInSlot: carry %s -> %s: %s"), *Item.ItemDefinitionId.PrimaryAssetName.ToString(),
+					*Sheath.ToString(), *UEnum::GetValueAsString(Equipped));
+				// A shield (D96) is no weapon of the cycle: it follows the drawn one into the off hand on its own, and the
+				// weapon in the hand stays there.
+				if (Equipped == EEquipmentResult::Success && GetCarriedWeaponSlots().Contains(Sheath))
+				{
+					RunSheathSequence(Sheath, /*bOwnerPlayedIt*/ false);
+				}
+				return Equipped == EEquipmentResult::Success;
+			}
 			const EEquipmentResult Result = EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, EquipFrag->EquipmentSlotTag);
 			UE_LOG(LogVoxelCharacter, Log, TEXT("UseItemInSlot: equip %s -> %s: %s"), *Item.ItemDefinitionId.PrimaryAssetName.ToString(),
 				*EquipFrag->EquipmentSlotTag.ToString(), *UEnum::GetValueAsString(Result));
@@ -1869,6 +3598,10 @@ bool AVCCharacterBase::UseItemInSlot(int32 SlotIndex)
 	}
 
 	UE_LOG(LogVoxelCharacter, Log, TEXT("UseItemInSlot: used %s from slot %d."), *Item.ItemDefinitionId.PrimaryAssetName.ToString(), SlotIndex);
+	if (ActionMontages)
+	{
+		ActionMontages->PlayActionForEveryone(EVCAnimAction::Use);
+	}
 	return true;
 #else
 	return false;
@@ -1952,6 +3685,7 @@ void AVCCharacterBase::BuildItemSnapshot(FVCItemSnapshot& Snapshot) const
 				FVCSnapshotEquipmentEntry& Entry = Snapshot.Equipment.AddDefaulted_GetRef();
 				Entry.SlotTag = SlotTag;
 				Entry.ItemJson = ItemToJson(Item);
+				Entry.bDrawn = EquipmentManager->IsDrawn(SlotTag);
 			}
 		}
 	}
@@ -2057,7 +3791,14 @@ bool AVCCharacterBase::RestoreItemSnapshotFromPlayerState()
 			{
 				continue;
 			}
-			if (EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, Entry.SlotTag) == EEquipmentResult::Success)
+			// A drawn weapon comes back drawn (no montage); an old save's main-hand weapon lands in its sheath, drawn. A slot
+			// the character no longer has (a shield saved in the retired Sheath.ShieldBack, D95) gives way to the item's own.
+			const bool bHasSlot = EquipmentManager->EquipmentSlots.ContainsByPredicate([&Entry](const FEquipmentSlot& Slot)
+			{
+				return Slot.SlotTag == Entry.SlotTag;
+			});
+			if (EquipmentManager->TryEquipFromInventory(Item.InstanceId, InventoryComponent, bHasSlot ? Entry.SlotTag : FGameplayTag(),
+				Entry.bDrawn) == EEquipmentResult::Success)
 			{
 				++Restored;
 			}

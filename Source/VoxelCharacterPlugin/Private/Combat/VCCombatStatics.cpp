@@ -4,6 +4,9 @@
 #include "Combat/VCDamageReceiverInterface.h"
 #include "Combat/VCCombatComponent.h"
 #include "Utilities/CGFCombatStatics.h"
+#include "Camera/VCAimCameraMode.h"
+#include "Core/VCCharacterBase.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Actor.h"
 #include "Engine/World.h"
 
@@ -55,4 +58,28 @@ FVCViewSweep UVCCombatStatics::SweepHostileUnderView(AActor* Viewer, float Range
 		Sweep.Hostile = HitActor;
 	}
 	return Sweep;
+}
+
+bool UVCCombatStatics::ComputeAimRay(const AActor* Viewer, FVector& OutOrigin, FVector& OutDirection)
+{
+	if (!Viewer)
+	{
+		return false;
+	}
+	FVector Eyes;
+	FRotator View;
+	Viewer->GetActorEyesViewPoint(Eyes, View);
+	OutDirection = View.Vector();
+	OutOrigin = Eyes;
+	// Aiming in third person: from the aim camera, whose place every machine computes alike (D74). The view's rotation is
+	// the control rotation on the owner and the server, the replicated base aim rotation elsewhere: the same source as
+	// the eyes' ray had.
+	if (const AVCCharacterBase* Character = Cast<AVCCharacterBase>(Viewer))
+	{
+		if (Character->IsAiming() && Character->GetViewMode() != EVCViewMode::FirstPerson)
+		{
+			OutOrigin = UVCAimCameraMode::ComputeDefaultCameraLocation(Character->GetActorLocation(), View, Character->GetCharacterMovement());
+		}
+	}
+	return true;
 }

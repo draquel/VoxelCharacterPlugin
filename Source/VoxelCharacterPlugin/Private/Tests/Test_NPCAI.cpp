@@ -28,6 +28,41 @@ namespace VCNPCAITestHelpers
 }
 
 // ---------------------------------------------------------------------------
+// The weather's hold (the weather plan's P5): prey held for a storm stands where it is instead of roaming or
+// patrolling, still flees a threat, and roams again when the hold lifts; hostiles ignore the flag.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCNPCAI_WeatherHold, "VoxelCharacter.AI.WeatherHold", VC_NPCAI_FLAGS)
+bool FVCNPCAI_WeatherHold::RunTest(const FString& Parameters)
+{
+	using namespace VCNPCAITestHelpers;
+	FVCNPCAIDecisionInput In;
+	In.bPrey = true;
+	In.bCanWander = true;
+	TestEqual(TEXT("Prey, no hold -> Wander"), Decide(In, EVCNPCAIState::Idle), EVCNPCAIState::Wander);
+	In.bHoldsForWeather = true;
+	TestEqual(TEXT("Prey held for the weather -> Idle"), Decide(In, EVCNPCAIState::Wander), EVCNPCAIState::Idle);
+	In.bHasRoute = true;
+	TestEqual(TEXT("... a route does not move it either"), Decide(In, EVCNPCAIState::Idle), EVCNPCAIState::Idle);
+	In.bHasTarget = true;
+	In.bTargetVisible = true;
+	In.bThreatInFleeRange = true;
+	In.DistanceToTarget = 300.f;
+	TestEqual(TEXT("... a threat still makes it flee"), Decide(In, EVCNPCAIState::Idle), EVCNPCAIState::Flee);
+	In.bHasTarget = false;
+	In.bTargetVisible = false;
+	In.bThreatInFleeRange = false;
+	In.bHasRoute = false;
+	In.bHoldsForWeather = false;
+	TestEqual(TEXT("The hold lifted -> Wander"), Decide(In, EVCNPCAIState::Idle), EVCNPCAIState::Wander);
+	// A hostile with the flag set by mistake behaves as ever.
+	FVCNPCAIDecisionInput Hostile;
+	Hostile.bCanWander = true;
+	Hostile.bHoldsForWeather = true;
+	TestEqual(TEXT("Hostiles ignore the hold -> Wander"), Decide(Hostile, EVCNPCAIState::Idle), EVCNPCAIState::Wander);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
 // Surface behaviours (feature 10): wandering replaces idling when a radius is set; prey flees instead of
 // fighting and settles once the threat is gone; hostiles without a route roam.
 // ---------------------------------------------------------------------------

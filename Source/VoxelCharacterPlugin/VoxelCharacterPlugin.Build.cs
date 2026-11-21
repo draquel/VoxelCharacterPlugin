@@ -21,6 +21,7 @@ public class VoxelCharacterPlugin : ModuleRules
 				"CommonGameFramework",
 				"AIModule",
 				"VoxelCore", // FVoxelWorldBounds in UVCMovementComponent's header (world edge push-back)
+				"AnimGraphRuntime", // FAnimNode_SkeletalControlBase: FVCAnimNode_FootBoneIK (character animation P6)
 			}
 		);
 
@@ -38,7 +39,12 @@ public class VoxelCharacterPlugin : ModuleRules
 				"VoxelStreaming",
 				"VoxelGeneration", // IVoxelWorldMode.h (VCTerrainQueryHelper.cpp)
 				"PhysicsCore", // CollisionShape.h
+				"RenderCore", // SetNearClipPlaneGlobals: FVCNearClipOverride (G192)
+				"GameplayTasks", // UAbilityTask_WaitDelay: the melee hit waits for its montage (character animation P3)
+				"AnimationCore", // AnimationCore::SolveTwoBoneIK: FVCAnimNode_FootBoneIK (character animation P6)
+				"AnimationBudgetAllocator", // USkeletalMeshComponentBudgeted: the NPCs' animation budget (character animation P7)
 				"VoxelNavigation", // UVCVoxelPathProvider (feature 10)
+				"Niagara", // UVCWaterEffectsComponent: the splash and the wake (the water plan's W1)
 				"VoxelScatter",
 				"JsonUtilities",
 				"VoxelMap",
@@ -57,10 +63,19 @@ public class VoxelCharacterPlugin : ModuleRules
 		bool bHasInventory = Directory.Exists(Path.Combine(PluginsRoot, "ItemInventoryPlugin"));
 		bool bHasInteraction = Directory.Exists(Path.Combine(PluginsRoot, "InteractionPlugin"));
 		bool bHasEquipment = Directory.Exists(Path.Combine(PluginsRoot, "EquipmentPlugin"));
+		// The weather (the weather plan's P4): the wind's push and the wet grip read UWorldWeatherSubsystem; without the
+		// plugin the movement is as before.
+		bool bHasWeather = Directory.Exists(Path.Combine(PluginsRoot, "WorldWeatherPlugin"));
 
 		PublicDefinitions.Add("WITH_INVENTORY_PLUGIN=" + (bHasInventory ? "1" : "0"));
 		PublicDefinitions.Add("WITH_INTERACTION_PLUGIN=" + (bHasInteraction ? "1" : "0"));
 		PublicDefinitions.Add("WITH_EQUIPMENT_PLUGIN=" + (bHasEquipment ? "1" : "0"));
+		PublicDefinitions.Add("WITH_WORLD_WEATHER=" + (bHasWeather ? "1" : "0"));
+
+		if (bHasWeather)
+		{
+			PrivateDependencyModuleNames.Add("WorldWeather");
+		}
 
 		if (bHasInventory)
 		{

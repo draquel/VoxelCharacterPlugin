@@ -1,0 +1,1095 @@
+// Copyright Daniel Raquel. All Rights Reserved.
+
+#include "VCAnimAuthoringLibrary.h"
+#include "AnimationGraph.h"
+#include "AnimationGraphSchema.h"
+#include "AnimGraphNode_Base.h"
+#include "AnimStateEntryNode.h"
+#include "AnimStateNode.h"
+#include "AnimStateTransitionNode.h"
+#include "AnimationStateMachineGraph.h"
+#include "Animation/AnimBlueprint.h"
+#include "Animation/AnimMontage.h"
+#include "Animation/AnimSequence.h"
+#include "Animation/AnimSequenceBase.h"
+#include "Animation/BlendSpace.h"
+#include "Animation/Skeleton.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphNode.h"
+#include "EdGraph/EdGraphPin.h"
+#include "EdGraphSchema_K2.h"
+#include "EdGraphUtilities.h"
+#include "Engine/Blueprint.h"
+#include "Engine/MemberReference.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
+#include "K2Node_CallFunction.h"
+#include "Misc/PackageName.h"
+#include "Serialization/ArchiveReplaceObjectRef.h"
+#include "UObject/UObjectHash.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogVoxelCharacterEditor, Log, All);
+
+namespace VCAnimAuthoring
+{
+	UEdGraph* FindGraph(UBlueprint* Blueprint, FName GraphName)
+	{
+		if (!Blueprint)
+		{
+			return nullptr;
+		}
+		TArray<UEdGraph*> Graphs;
+		Blueprint->GetAllGraphs(Graphs);
+		for (UEdGraph* Graph : Graphs)
+		{
+			if (Graph && Graph->GetFName() == GraphName)
+			{
+				return Graph;
+			}
+		}
+		return nullptr;
+	}
+
+	/** A node by its object name, else by its title. */
+	UEdGraphNode* FindNode(UEdGraph* Graph, const FString& NodeName)
+	{
+		if (!Graph)
+		{
+			return nullptr;
+		}
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (Node && Node->GetName() == NodeName)
+			{
+				return Node;
+			}
+		}
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (Node && Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString().Equals(NodeName, ESearchCase::IgnoreCase))
+			{
+				return Node;
+			}
+		}
+		return nullptr;
+	}
+
+	/** A pin by its name, else by its display name. */
+	UEdGraphPin* FindPin(UEdGraphNode* Node, const FString& PinName, EEdGraphPinDirection Direction)
+	{
+		if (!Node)
+		{
+			return nullptr;
+		}
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (Pin && Pin->Direction == Direction && Pin->GetName() == PinName)
+			{
+				return Pin;
+			}
+		}
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (Pin && Pin->Direction == Direction && Pin->GetDisplayName().ToString().Equals(PinName, ESearchCase::IgnoreCase))
+			{
+				return Pin;
+			}
+		}
+		return nullptr;
+	}
+
+	/** Walks a dotted path of struct members from an object to the last property and its address. */
+	bool ResolvePropertyPath(UObject* Object, const FString& Path, FProperty*& OutProperty, void*& OutAddress)
+	{
+		TArray<FString> Parts;
+		Path.ParseIntoArray(Parts, TEXT("."));
+		const UStruct* Struct = Object->GetClass();
+		void* Container = Object;
+		for (int32 Index = 0; Index < Parts.Num(); ++Index)
+		{
+			FProperty* Property = FindFProperty<FProperty>(Struct, *Parts[Index]);
+			if (!Property)
+			{
+				return false;
+			}
+			void* Address = Property->ContainerPtrToValuePtr<void>(Container);
+			if (Index == Parts.Num() - 1)
+			{
+				OutProperty = Property;
+				OutAddress = Address;
+				return true;
+			}
+			const FStructProperty* StructProperty = CastField<FStructProperty>(Property);
+			if (!StructProperty)
+			{
+				return false;
+			}
+			Struct = StructProperty->Struct;
+			Container = Address;
+		}
+		return false;
+	}
+
+	UEdGraphNode* AddNode(UEdGraph* Graph, UClass* NodeClass, int32 X, int32 Y)
+	{
+		Graph->Modify();
+		UEdGraphNode* Node = NewObject<UEdGraphNode>(Graph, NodeClass, NAME_None, RF_Transactional);
+		Graph->AddNode(Node, /*bFromUI=*/ false, /*bSelectNewNode=*/ false);
+		Node->CreateNewGuid();
+		Node->PostPlacedNewNode();
+		Node->AllocateDefaultPins();
+		Node->NodePosX = X;
+		Node->NodePosY = Y;
+		return Node;
+	}
+}
+
+bool UVCAnimAuthoringLibrary::AddAnimLayer(UAnimBlueprint* Blueprint, FName LayerName, FName InputPoseName)
+{
+	using namespace VCAnimAuthoring;
+	if (!Blueprint || LayerName.IsNone())
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AddAnimLayer: no blueprint or no layer name"));
+		return false;
+	}
+	if (FindGraph(Blueprint, LayerName))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AddAnimLayer: %s already has a graph %s"), *Blueprint->GetName(), *LayerName.ToString());
+		return false;
+	}
+	// What the editor's "Add Animation Layer" does (FBlueprintEditor::NewDocument_OnClick, CGT_NewAnimationLayer).
+	UEdGraph* Layer = FBlueprintEditorUtils::CreateNewGraph(Blueprint, LayerName, UAnimationGraph::StaticClass(), UAnimationGraphSchema::StaticClass());
+	FBlueprintEditorUtils::AddDomainSpecificGraph(Blueprint, Layer);
+	if (!InputPoseName.IsNone())
+	{
+		UClass* InputClass = FindObject<UClass>(nullptr, TEXT("/Script/AnimGraph.AnimGraphNode_LinkedInputPose"));
+		if (!InputClass)
+		{
+			UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AddAnimLayer: no linked input pose node class"));
+			return false;
+		}
+		UEdGraphNode* Input = AddNode(Layer, InputClass, -400, 0);
+		FProperty* Property = nullptr;
+		void* Address = nullptr;
+		if (!ResolvePropertyPath(Input, TEXT("Node.Name"), Property, Address) || !Property->ImportText_Direct(*InputPoseName.ToString(), Address, Input, PPF_None))
+		{
+			UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AddAnimLayer: could not name the input pose %s"), *InputPoseName.ToString());
+			return false;
+		}
+		Input->ReconstructNode();
+	}
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
+}
+
+bool UVCAnimAuthoringLibrary::ImplementInterface(UBlueprint* Blueprint, UClass* InterfaceClass)
+{
+	if (!Blueprint || !InterfaceClass)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ImplementInterface: no blueprint or no interface"));
+		return false;
+	}
+	for (const FBPInterfaceDescription& Implemented : Blueprint->ImplementedInterfaces)
+	{
+		if (Implemented.Interface == InterfaceClass)
+		{
+			return true;
+		}
+	}
+	const bool bDone = FBlueprintEditorUtils::ImplementNewInterface(Blueprint, InterfaceClass->GetClassPathName());
+	if (!bDone)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ImplementInterface: %s refused %s"), *Blueprint->GetName(), *InterfaceClass->GetName());
+	}
+	return bDone;
+}
+
+FString UVCAnimAuthoringLibrary::AddGraphNode(UBlueprint* Blueprint, FName GraphName, const FString& NodeClassPath, int32 X, int32 Y)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraph* Graph = FindGraph(Blueprint, GraphName);
+	UClass* NodeClass = FindObject<UClass>(nullptr, *NodeClassPath);
+	if (!NodeClass)
+	{
+		NodeClass = LoadObject<UClass>(nullptr, *NodeClassPath);
+	}
+	if (!Graph || !NodeClass || !NodeClass->IsChildOf(UEdGraphNode::StaticClass()) || NodeClass->HasAnyClassFlags(CLASS_Abstract))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AddGraphNode: no graph %s in %s, or %s is no node class"), *GraphName.ToString(),
+			*GetNameSafe(Blueprint), *NodeClassPath);
+		return FString();
+	}
+	UEdGraphNode* Node = AddNode(Graph, NodeClass, X, Y);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return Node->GetName();
+}
+
+bool UVCAnimAuthoringLibrary::SetNodeProperty(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, const FString& PropertyPath,
+	const FString& ValueText)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraphNode* Node = FindNode(FindGraph(Blueprint, GraphName), NodeName);
+	FProperty* Property = nullptr;
+	void* Address = nullptr;
+	if (!Node || !ResolvePropertyPath(Node, PropertyPath, Property, Address))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetNodeProperty: no node %s in %s.%s, or no property %s on it"), *NodeName,
+			*GetNameSafe(Blueprint), *GraphName.ToString(), *PropertyPath);
+		return false;
+	}
+	Node->Modify();
+	if (!Property->ImportText_Direct(*ValueText, Address, Node, PPF_None))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetNodeProperty: %s.%s refused \"%s\""), *NodeName, *PropertyPath, *ValueText);
+		return false;
+	}
+	Node->ReconstructNode();
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
+}
+
+bool UVCAnimAuthoringLibrary::SetLinkedAnimLayer(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, UClass* InterfaceClass,
+	FName LayerName, UClass* InstanceClass)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraphNode* Node = FindNode(FindGraph(Blueprint, GraphName), NodeName);
+	UBlueprint* InterfaceBlueprint = InterfaceClass ? Cast<UBlueprint>(InterfaceClass->ClassGeneratedBy) : nullptr;
+	const UEdGraph* LayerGraph = FindGraph(InterfaceBlueprint, LayerName);
+	FProperty* Interface = nullptr;
+	FProperty* Layer = nullptr;
+	FProperty* Instance = nullptr;
+	FProperty* Guid = nullptr;
+	FProperty* Reference = nullptr;
+	void* InterfaceAddress = nullptr;
+	void* LayerAddress = nullptr;
+	void* InstanceAddress = nullptr;
+	void* GuidAddress = nullptr;
+	void* ReferenceAddress = nullptr;
+	if (!Node || !LayerGraph
+		|| !ResolvePropertyPath(Node, TEXT("Node.Interface"), Interface, InterfaceAddress)
+		|| !ResolvePropertyPath(Node, TEXT("Node.Layer"), Layer, LayerAddress)
+		|| !ResolvePropertyPath(Node, TEXT("Node.InstanceClass"), Instance, InstanceAddress)
+		|| !ResolvePropertyPath(Node, TEXT("InterfaceGuid"), Guid, GuidAddress)
+		|| !ResolvePropertyPath(Node, TEXT("FunctionReference"), Reference, ReferenceAddress)
+		|| !CastField<FClassProperty>(Interface) || !CastField<FNameProperty>(Layer) || !CastField<FClassProperty>(Instance))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetLinkedAnimLayer: %s in %s.%s is no linked anim layer node, or %s has no layer %s"),
+			*NodeName, *GetNameSafe(Blueprint), *GraphName.ToString(), *GetNameSafe(InterfaceClass), *LayerName.ToString());
+		return false;
+	}
+	Node->Modify();
+	CastField<FClassProperty>(Interface)->SetObjectPropertyValue(InterfaceAddress, InterfaceClass);
+	CastField<FNameProperty>(Layer)->SetPropertyValue(LayerAddress, LayerName);
+	CastField<FClassProperty>(Instance)->SetObjectPropertyValue(InstanceAddress, InstanceClass);
+	// As UAnimGraphNode_LinkedAnimLayer::SetLayerName: the member reference names the layer function on the interface.
+	*static_cast<FGuid*>(GuidAddress) = LayerGraph->GraphGuid;
+	static_cast<FMemberReference*>(ReferenceAddress)->SetExternalMember(LayerName, InterfaceClass, LayerGraph->GraphGuid);
+	Node->ReconstructNode();
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
+}
+
+bool UVCAnimAuthoringLibrary::SetPinDefault(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, const FString& PinName, const FString& Value)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraph* Graph = FindGraph(Blueprint, GraphName);
+	UEdGraphPin* Pin = FindPin(FindNode(Graph, NodeName), PinName, EGPD_Input);
+	const UEdGraphSchema* Schema = Graph ? Graph->GetSchema() : nullptr;
+	if (!Pin || !Schema)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetPinDefault: no input pin %s on %s in %s.%s"), *PinName, *NodeName, *GetNameSafe(Blueprint), *GraphName.ToString());
+		return false;
+	}
+	const FName Category = Pin->PinType.PinCategory;
+	if (Category == UEdGraphSchema_K2::PC_Object || Category == UEdGraphSchema_K2::PC_Class
+		|| Category == UEdGraphSchema_K2::PC_SoftObject || Category == UEdGraphSchema_K2::PC_SoftClass)
+	{
+		UObject* Object = Value.IsEmpty() ? nullptr : LoadObject<UObject>(nullptr, *Value);
+		if (!Value.IsEmpty() && !Object)
+		{
+			UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetPinDefault: %s does not load"), *Value);
+			return false;
+		}
+		Schema->TrySetDefaultObject(*Pin, Object);
+	}
+	else
+	{
+		Schema->TrySetDefaultValue(*Pin, Value);
+	}
+	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+	return true;
+}
+
+bool UVCAnimAuthoringLibrary::ConnectPins(UBlueprint* Blueprint, FName GraphName, const FString& FromNode, const FString& FromPin,
+	const FString& ToNode, const FString& ToPin)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraph* Graph = FindGraph(Blueprint, GraphName);
+	UEdGraphPin* Output = FindPin(FindNode(Graph, FromNode), FromPin, EGPD_Output);
+	UEdGraphPin* Input = FindPin(FindNode(Graph, ToNode), ToPin, EGPD_Input);
+	const UEdGraphSchema* Schema = Graph ? Graph->GetSchema() : nullptr;
+	if (!Output || !Input || !Schema)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ConnectPins: no %s.%s or %s.%s in %s.%s"), *FromNode, *FromPin, *ToNode, *ToPin,
+			*GetNameSafe(Blueprint), *GraphName.ToString());
+		return false;
+	}
+	if (!Schema->TryCreateConnection(Output, Input))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ConnectPins: the schema refused %s.%s -> %s.%s"), *FromNode, *FromPin, *ToNode, *ToPin);
+		return false;
+	}
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
+}
+
+bool UVCAnimAuthoringLibrary::SetObjectProperty(UObject* Object, const FString& PropertyPath, const FString& ValueText)
+{
+	FProperty* Property = nullptr;
+	void* Address = nullptr;
+	if (!Object || !VCAnimAuthoring::ResolvePropertyPath(Object, PropertyPath, Property, Address))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetObjectProperty: no property %s on %s"), *PropertyPath, *GetNameSafe(Object));
+		return false;
+	}
+	Object->Modify();
+	if (!Property->ImportText_Direct(*ValueText, Address, Object, PPF_None))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetObjectProperty: %s.%s refused \"%s\""), *GetNameSafe(Object), *PropertyPath, *ValueText);
+		return false;
+	}
+	Object->PostEditChange();
+	Object->MarkPackageDirty();
+	return true;
+}
+
+FString UVCAnimAuthoringLibrary::DescribeGraph(UBlueprint* Blueprint, FName GraphName)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraph* Graph = FindGraph(Blueprint, GraphName);
+	if (!Graph)
+	{
+		return FString();
+	}
+	TArray<FString> Lines;
+	for (const UEdGraphNode* Node : Graph->Nodes)
+	{
+		if (!Node)
+		{
+			continue;
+		}
+		FString Line = FString::Printf(TEXT("%s (%s) '%s':"), *Node->GetName(), *Node->GetClass()->GetName(),
+			*Node->GetNodeTitle(ENodeTitleType::ListView).ToString());
+		for (const UEdGraphPin* Pin : Node->Pins)
+		{
+			if (Pin && !Pin->bHidden)
+			{
+				Line += FString::Printf(TEXT(" %s<%s>%s"), *Pin->GetName(), Pin->Direction == EGPD_Input ? TEXT("in") : TEXT("out"),
+					Pin->LinkedTo.Num() > 0 ? TEXT("*") : TEXT(""));
+			}
+		}
+		Lines.Add(Line);
+	}
+	return FString::Join(Lines, TEXT("\n"));
+}
+
+FString UVCAnimAuthoringLibrary::GetGraphGuid(UBlueprint* Blueprint, FName GraphName)
+{
+	const UEdGraph* Graph = VCAnimAuthoring::FindGraph(Blueprint, GraphName);
+	return Graph ? Graph->GraphGuid.ToString() : FString();
+}
+
+bool UVCAnimAuthoringLibrary::AppendMontageSegment(UAnimMontage* Montage, UAnimSequenceBase* Sequence, FName SectionName, bool bLoopSection)
+{
+	if (!Montage || !Sequence || SectionName.IsNone() || Montage->SlotAnimTracks.Num() == 0 || Montage->CompositeSections.Num() == 0)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AppendMontageSegment: no montage, no sequence, no section name, or %s has no track"),
+			*GetNameSafe(Montage));
+		return false;
+	}
+	if (Montage->GetSectionIndex(SectionName) != INDEX_NONE)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AppendMontageSegment: %s already has a section %s"), *Montage->GetName(), *SectionName.ToString());
+		return false;
+	}
+	FAnimTrack& Track = Montage->SlotAnimTracks[0].AnimTrack;
+	const float Start = Track.GetLength();
+
+	// The section playing at the montage's end so far: the one the new section follows.
+	FName Previous = Montage->CompositeSections[0].SectionName;
+	float PreviousTime = -1.f;
+	for (const FCompositeSection& Section : Montage->CompositeSections)
+	{
+		if (Section.GetTime() < Start && Section.GetTime() > PreviousTime)
+		{
+			Previous = Section.SectionName;
+			PreviousTime = Section.GetTime();
+		}
+	}
+
+	Montage->Modify();
+	FAnimSegment Segment;
+	Segment.SetAnimReference(Sequence, /*bInitialize*/ true);
+	Segment.StartPos = Start;
+	Track.AnimSegments.Add(Segment);
+	Montage->SetCompositeLength(Track.GetLength());
+	if (Montage->AddAnimCompositeSection(SectionName, Start) == INDEX_NONE)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AppendMontageSegment: %s refused the section %s"), *Montage->GetName(), *SectionName.ToString());
+		return false;
+	}
+	// By name: adding a section may reorder them.
+	Montage->CompositeSections[Montage->GetSectionIndex(Previous)].NextSectionName = SectionName;
+	if (bLoopSection)
+	{
+		Montage->CompositeSections[Montage->GetSectionIndex(SectionName)].NextSectionName = SectionName;
+	}
+	Montage->UpdateLinkableElements();
+	Montage->PostEditChange();
+	Montage->MarkPackageDirty();
+	return true;
+}
+
+bool UVCAnimAuthoringLibrary::LinkMontageSections(UAnimMontage* Montage, FName SectionName, FName NextSection)
+{
+	const int32 Index = Montage ? Montage->GetSectionIndex(SectionName) : INDEX_NONE;
+	if (Index == INDEX_NONE || (!NextSection.IsNone() && Montage->GetSectionIndex(NextSection) == INDEX_NONE))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("LinkMontageSections: %s has no section %s or %s"), *GetNameSafe(Montage),
+			*SectionName.ToString(), *NextSection.ToString());
+		return false;
+	}
+	if (Montage->CompositeSections[Index].NextSectionName == NextSection)
+	{
+		return true;
+	}
+	Montage->Modify();
+	Montage->CompositeSections[Index].NextSectionName = NextSection;
+	Montage->PostEditChange();
+	Montage->MarkPackageDirty();
+	return true;
+}
+
+TArray<FString> UVCAnimAuthoringLibrary::ListGraphs(UBlueprint* Blueprint)
+{
+	TArray<FString> Names;
+	if (!Blueprint)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ListGraphs: no blueprint"));
+		return Names;
+	}
+	TArray<UEdGraph*> Graphs;
+	Blueprint->GetAllGraphs(Graphs);
+	for (const UEdGraph* Graph : Graphs)
+	{
+		if (!Graph)
+		{
+			continue;
+		}
+		// A state's or a transition's graph sits inside its state machine's graph.
+		const UEdGraph* Outer = Graph->GetOuter() ? Graph->GetOuter()->GetTypedOuter<UEdGraph>() : nullptr;
+		Names.Add(Outer ? Outer->GetName() + TEXT("/") + Graph->GetName() : Graph->GetName());
+	}
+	return Names;
+}
+
+FString UVCAnimAuthoringLibrary::ExportGraphNodes(UBlueprint* Blueprint, FName GraphName, const TArray<FString>& NodeNames)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraph* Graph = FindGraph(Blueprint, GraphName);
+	if (!Graph)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ExportGraphNodes: no graph %s in %s"), *GraphName.ToString(), *GetNameSafe(Blueprint));
+		return FString();
+	}
+	TSet<UObject*> Nodes;
+	if (NodeNames.Num() == 0)
+	{
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (Node && Node->CanDuplicateNode())
+			{
+				Nodes.Add(Node);
+			}
+		}
+	}
+	for (const FString& Name : NodeNames)
+	{
+		if (UEdGraphNode* Node = FindNode(Graph, Name))
+		{
+			Nodes.Add(Node);
+		}
+		else
+		{
+			UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ExportGraphNodes: no node %s in %s.%s"), *Name, *GetNameSafe(Blueprint), *GraphName.ToString());
+		}
+	}
+	if (Nodes.Num() == 0)
+	{
+		return FString();
+	}
+	// What the editor's copy does before it exports.
+	for (UObject* Object : Nodes)
+	{
+		CastChecked<UEdGraphNode>(Object)->PrepareForCopying();
+	}
+	FString Text;
+	FEdGraphUtilities::ExportNodesToText(Nodes, Text);
+	return Text;
+}
+
+TArray<FString> UVCAnimAuthoringLibrary::ImportGraphNodes(UBlueprint* Blueprint, FName GraphName, const FString& Text, int32 OffsetX, int32 OffsetY)
+{
+	using namespace VCAnimAuthoring;
+	TArray<FString> Pasted;
+	UEdGraph* Graph = FindGraph(Blueprint, GraphName);
+	if (!Graph || !FEdGraphUtilities::CanImportNodesFromText(Graph, Text))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ImportGraphNodes: no graph %s in %s, or it refuses the text"), *GraphName.ToString(),
+			*GetNameSafe(Blueprint));
+		return Pasted;
+	}
+	Graph->Modify();
+	TSet<UEdGraphNode*> Nodes;
+	FEdGraphUtilities::ImportNodesFromText(Graph, Text, Nodes);
+	// What the blueprint editor's paste does with each node (FBlueprintEditor::PasteNodesHere), less the selection.
+	for (UEdGraphNode* Node : Nodes)
+	{
+		Node->NodePosX += OffsetX;
+		Node->NodePosY += OffsetY;
+		Node->CreateNewGuid();
+		Pasted.Add(FString::Printf(TEXT("%s (%s) '%s'"), *Node->GetName(), *Node->GetClass()->GetName(),
+			*Node->GetNodeTitle(ENodeTitleType::ListView).ToString()));
+	}
+	Graph->NotifyGraphChanged();
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return Pasted;
+}
+
+bool UVCAnimAuthoringLibrary::SetNodePinVisible(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, FName PropertyName, bool bVisible)
+{
+	using namespace VCAnimAuthoring;
+	UAnimGraphNode_Base* Node = Cast<UAnimGraphNode_Base>(FindNode(FindGraph(Blueprint, GraphName), NodeName));
+	if (!Node)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetNodePinVisible: no anim node %s in %s.%s"), *NodeName, *GetNameSafe(Blueprint), *GraphName.ToString());
+		return false;
+	}
+	for (FOptionalPinFromProperty& Option : Node->ShowPinForProperties)
+	{
+		if (Option.PropertyName == PropertyName)
+		{
+			Node->Modify();
+			Option.bShowPin = bVisible;
+			Node->ReconstructNode();
+			FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+			return true;
+		}
+	}
+	UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetNodePinVisible: %s has no optional pin for %s"), *NodeName, *PropertyName.ToString());
+	return false;
+}
+
+bool UVCAnimAuthoringLibrary::SetMontageSlot(UAnimMontage* Montage, FName SlotName)
+{
+	if (!Montage || SlotName.IsNone() || Montage->SlotAnimTracks.Num() == 0)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetMontageSlot: no montage, no slot name, or %s has no track"), *GetNameSafe(Montage));
+		return false;
+	}
+	// The slot is not registered with the skeleton (a content pack's asset, left unchanged): the layer's slot node
+	// registers it in memory when it is built or loaded, and the montage plays in the skeleton's default slot group.
+	Montage->Modify();
+	Montage->SlotAnimTracks[0].SlotName = SlotName;
+	Montage->PostEditChange();
+	Montage->MarkPackageDirty();
+	return true;
+}
+
+bool UVCAnimAuthoringLibrary::TrimMontage(UAnimMontage* Montage, float StartTime, float EndTime)
+{
+	if (!Montage || Montage->SlotAnimTracks.Num() == 0 || Montage->SlotAnimTracks[0].AnimTrack.AnimSegments.Num() != 1)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("TrimMontage: no montage, or %s is not of one sequence"), *GetNameSafe(Montage));
+		return false;
+	}
+	FAnimTrack& Track = Montage->SlotAnimTracks[0].AnimTrack;
+	FAnimSegment& Segment = Track.AnimSegments[0];
+	const UAnimSequenceBase* Sequence = Segment.GetAnimReference();
+	const float Length = Sequence ? Sequence->GetPlayLength() : 0.f;
+	if (!Sequence || StartTime < 0.f || EndTime <= StartTime || EndTime > Length + UE_KINDA_SMALL_NUMBER)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("TrimMontage: %s cannot play %.3f to %.3f of a %.3f s sequence"),
+			*Montage->GetName(), StartTime, EndTime, Length);
+		return false;
+	}
+	Montage->Modify();
+	Segment.AnimStartTime = StartTime;
+	Segment.AnimEndTime = FMath::Min(EndTime, Length);
+	Montage->SetCompositeLength(Track.GetLength());
+	Montage->UpdateLinkableElements();
+	Montage->PostEditChange();
+	Montage->MarkPackageDirty();
+	return true;
+}
+
+bool UVCAnimAuthoringLibrary::ResetMontage(UAnimMontage* Montage, UAnimSequenceBase* Sequence)
+{
+	if (!Montage || !Sequence || Montage->SlotAnimTracks.Num() == 0)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ResetMontage: no montage, no sequence, or %s has no track"), *GetNameSafe(Montage));
+		return false;
+	}
+	Montage->Modify();
+	if (USkeleton* Skeleton = Sequence->GetSkeleton())
+	{
+		Montage->SetSkeleton(Skeleton);
+	}
+	Montage->SlotAnimTracks.SetNum(1);
+	FAnimTrack& Track = Montage->SlotAnimTracks[0].AnimTrack;
+	Track.AnimSegments.Reset();
+	FAnimSegment Segment;
+	Segment.SetAnimReference(Sequence, /*bInitialize*/ true);
+	Segment.StartPos = 0.f;
+	Track.AnimSegments.Add(Segment);
+	Montage->SetCompositeLength(Track.GetLength());
+
+	// One section at the start, under the first one's name, leading nowhere (a draw's led into its hold)
+	const FName First = Montage->CompositeSections.Num() > 0 ? Montage->CompositeSections[0].SectionName : FName(TEXT("Default"));
+	Montage->CompositeSections.Reset();
+	if (Montage->AddAnimCompositeSection(First, 0.f) == INDEX_NONE)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ResetMontage: %s refused the section %s"), *Montage->GetName(), *First.ToString());
+		return false;
+	}
+	Montage->UpdateLinkableElements();
+	Montage->PostEditChange();
+	Montage->MarkPackageDirty();
+	return true;
+}
+
+TArray<FString> UVCAnimAuthoringLibrary::CopyAssetsWithReferences(const TMap<FString, FString>& SourceToDestination)
+{
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	auto Load = [](const FString& PackagePath) -> UObject*
+	{
+		return LoadObject<UObject>(nullptr, *(PackagePath + TEXT(".") + FPackageName::GetShortName(PackagePath)));
+	};
+
+	// Copy what is missing; each source's objects stand for the copy's (a blueprint's class and default object too)
+	TMap<UObject*, UObject*> Replacements;
+	TArray<UObject*> Copies;
+	TArray<FString> Made;
+	for (const TPair<FString, FString>& Pair : SourceToDestination)
+	{
+		UObject* Source = Load(Pair.Key);
+		if (!Source)
+		{
+			UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("CopyAssetsWithReferences: %s does not load"), *Pair.Key);
+			return {};
+		}
+		UObject* Copy = FPackageName::DoesPackageExist(Pair.Value) ? Load(Pair.Value) : nullptr;
+		if (!Copy)
+		{
+			Copy = AssetTools.DuplicateAsset(FPackageName::GetShortName(Pair.Value), FPackageName::GetLongPackagePath(Pair.Value), Source);
+		}
+		if (!Copy || Copy->GetClass() != Source->GetClass())
+		{
+			UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("CopyAssetsWithReferences: %s did not copy to %s"), *Pair.Key, *Pair.Value);
+			return {};
+		}
+		Replacements.Add(Source, Copy);
+		const UBlueprint* SourceBlueprint = Cast<UBlueprint>(Source);
+		const UBlueprint* CopyBlueprint = Cast<UBlueprint>(Copy);
+		if (SourceBlueprint && CopyBlueprint && SourceBlueprint->GeneratedClass && CopyBlueprint->GeneratedClass)
+		{
+			Replacements.Add(SourceBlueprint->GeneratedClass, CopyBlueprint->GeneratedClass);
+			Replacements.Add(SourceBlueprint->GeneratedClass->GetDefaultObject(), CopyBlueprint->GeneratedClass->GetDefaultObject());
+			if (SourceBlueprint->SkeletonGeneratedClass && CopyBlueprint->SkeletonGeneratedClass)
+			{
+				Replacements.Add(SourceBlueprint->SkeletonGeneratedClass, CopyBlueprint->SkeletonGeneratedClass);
+			}
+		}
+		Copies.Add(Copy);
+		Made.Add(Pair.Value);
+	}
+
+	// Point every reference inside each copy (and its subobjects) at the copies
+	for (UObject* Copy : Copies)
+	{
+		TArray<UObject*> Objects;
+		GetObjectsWithOuter(Copy->GetOutermost(), Objects, EGetObjectsFlags::IncludeNestedObjects);
+		int32 Replaced = 0;
+		for (UObject* Object : Objects)
+		{
+			FArchiveReplaceObjectRef<UObject> Replacer(Object, Replacements,
+				EArchiveReplaceObjectFlags::IgnoreOuterRef | EArchiveReplaceObjectFlags::IgnoreArchetypeRef);
+			Replaced += Replacer.GetCount();
+		}
+		if (UBlueprint* Blueprint = Cast<UBlueprint>(Copy))
+		{
+			FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+		}
+		Copy->MarkPackageDirty();
+		UE_LOG(LogVoxelCharacterEditor, Log, TEXT("CopyAssetsWithReferences: %s, %d references pointed at the copies"), *Copy->GetPathName(), Replaced);
+	}
+	return Made;
+}
+
+bool UVCAnimAuthoringLibrary::RenameMemberVariable(UBlueprint* Blueprint, FName OldName, FName NewName)
+{
+	if (!Blueprint)
+	{
+		return false;
+	}
+	if (FBlueprintEditorUtils::FindNewVariableIndex(Blueprint, OldName) != INDEX_NONE)
+	{
+		FBlueprintEditorUtils::RenameMemberVariable(Blueprint, OldName, NewName);
+	}
+	const bool bRenamed = FBlueprintEditorUtils::FindNewVariableIndex(Blueprint, NewName) != INDEX_NONE;
+	UE_CLOG(!bRenamed, LogVoxelCharacterEditor, Warning, TEXT("RenameMemberVariable: %s has no variable %s or %s"),
+		*Blueprint->GetName(), *OldName.ToString(), *NewName.ToString());
+	return bRenamed;
+}
+
+int32 UVCAnimAuthoringLibrary::RemoveGraphNodes(UBlueprint* Blueprint, FName GraphName, const TArray<FString>& NodeNames)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraph* Graph = FindGraph(Blueprint, GraphName);
+	int32 Removed = 0;
+	for (const FString& Name : NodeNames)
+	{
+		if (UEdGraphNode* Node = FindNode(Graph, Name))
+		{
+			FBlueprintEditorUtils::RemoveNode(Blueprint, Node, /*bDontRecompile=*/ true);
+			++Removed;
+		}
+		else
+		{
+			UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("RemoveGraphNodes: no node %s in %s.%s"), *Name, *GetNameSafe(Blueprint), *GraphName.ToString());
+		}
+	}
+	if (Removed > 0)
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	}
+	return Removed;
+}
+
+int32 UVCAnimAuthoringLibrary::ReplaceFunctionCalls(UBlueprint* Blueprint, FName OldFunctionName, UClass* NewOwner, FName NewFunctionName)
+{
+	UFunction* NewFunction = NewOwner ? NewOwner->FindFunctionByName(NewFunctionName) : nullptr;
+	if (!Blueprint || !NewFunction)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("ReplaceFunctionCalls: no blueprint, or %s has no function %s"),
+			*GetNameSafe(NewOwner), *NewFunctionName.ToString());
+		return -1;
+	}
+	const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+	TArray<UEdGraph*> Graphs;
+	Blueprint->GetAllGraphs(Graphs);
+	int32 Replaced = 0;
+	for (UEdGraph* Graph : Graphs)
+	{
+		TArray<UK2Node_CallFunction*> Calls;
+		Graph->GetNodesOfClass(Calls);
+		for (UK2Node_CallFunction* Old : Calls)
+		{
+			if (Old->FunctionReference.GetMemberName() != OldFunctionName)
+			{
+				continue;
+			}
+			Graph->Modify();
+			UK2Node_CallFunction* New = NewObject<UK2Node_CallFunction>(Graph, NAME_None, RF_Transactional);
+			New->SetFromFunction(NewFunction);
+			New->NodePosX = Old->NodePosX;
+			New->NodePosY = Old->NodePosY;
+			Graph->AddNode(New, /*bFromUI=*/ false, /*bSelectNewNode=*/ false);
+			New->CreateNewGuid();
+			New->PostPlacedNewNode();
+			New->AllocateDefaultPins();
+
+			// Split the new node's pins as the old node's are, then move each pin's links and default across by name
+			for (UEdGraphPin* OldPin : TArray<UEdGraphPin*>(Old->Pins))
+			{
+				if (OldPin && OldPin->SubPins.Num() > 0 && !OldPin->ParentPin)
+				{
+					UEdGraphPin* NewPin = New->FindPin(OldPin->PinName, OldPin->Direction);
+					if (NewPin && NewPin->SubPins.Num() == 0)
+					{
+						Schema->SplitPin(NewPin, /*bNotify=*/ false);
+					}
+				}
+			}
+			for (UEdGraphPin* OldPin : Old->Pins)
+			{
+				if (!OldPin || OldPin->SubPins.Num() > 0 || OldPin->PinName == UEdGraphSchema_K2::PN_Self)
+				{
+					continue;
+				}
+				UEdGraphPin* NewPin = New->FindPin(OldPin->PinName, OldPin->Direction);
+				if (!NewPin)
+				{
+					UE_CLOG(OldPin->LinkedTo.Num() > 0, LogVoxelCharacterEditor, Warning,
+						TEXT("ReplaceFunctionCalls: %s has no pin %s; its links in %s.%s are dropped"),
+						*NewFunctionName.ToString(), *OldPin->PinName.ToString(), *Blueprint->GetName(), *Graph->GetName());
+					continue;
+				}
+				if (OldPin->LinkedTo.Num() == 0)
+				{
+					NewPin->DefaultValue = OldPin->DefaultValue;
+					NewPin->DefaultObject = OldPin->DefaultObject;
+					NewPin->DefaultTextValue = OldPin->DefaultTextValue;
+				}
+				for (UEdGraphPin* Linked : TArray<UEdGraphPin*>(OldPin->LinkedTo))
+				{
+					OldPin->BreakLinkTo(Linked);
+					NewPin->MakeLinkTo(Linked);
+				}
+			}
+			FBlueprintEditorUtils::RemoveNode(Blueprint, Old, /*bDontRecompile=*/ true);
+			++Replaced;
+		}
+	}
+	if (Replaced > 0)
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	}
+	return Replaced;
+}
+
+bool UVCAnimAuthoringLibrary::RecombinePin(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, const FString& PinName)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraphNode* Node = FindNode(FindGraph(Blueprint, GraphName), NodeName);
+	UEdGraphPin* Pin = FindPin(Node, PinName, EGPD_Input);
+	const EEdGraphPinDirection Direction = Pin ? EGPD_Input : EGPD_Output;
+	if (!Pin)
+	{
+		Pin = FindPin(Node, PinName, EGPD_Output);
+	}
+	if (!Pin)
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("RecombinePin: no pin %s on %s in %s.%s"), *PinName, *NodeName, *GetNameSafe(Blueprint), *GraphName.ToString());
+		return false;
+	}
+	if (Pin->SubPins.Num() > 0)
+	{
+		GetDefault<UEdGraphSchema_K2>()->RecombinePin(Pin->SubPins[0]);
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	}
+	const UEdGraphPin* After = FindPin(Node, PinName, Direction);
+	return After && After->SubPins.Num() == 0;
+}
+
+TArray<FString> UVCAnimAuthoringLibrary::GetPinLinks(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, const FString& PinName)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraphNode* Node = FindNode(FindGraph(Blueprint, GraphName), NodeName);
+	UEdGraphPin* Pin = FindPin(Node, PinName, EGPD_Input);
+	if (!Pin)
+	{
+		Pin = FindPin(Node, PinName, EGPD_Output);
+	}
+	TArray<FString> Links;
+	if (!Pin)
+	{
+		return Links;
+	}
+	TArray<const UEdGraphPin*> Pins = { Pin };
+	Pins.Append(Pin->SubPins);
+	for (const UEdGraphPin* Each : Pins)
+	{
+		for (const UEdGraphPin* Linked : Each->LinkedTo)
+		{
+			if (Linked && Linked->GetOwningNode())
+			{
+				Links.Add(Linked->GetOwningNode()->GetName() + TEXT(".") + Linked->PinName.ToString());
+			}
+		}
+	}
+	return Links;
+}
+
+bool UVCAnimAuthoringLibrary::SetBlendSpaceSamples(UBlendSpace* BlendSpace, const FString& AxisName, float Min, float Max,
+	const TArray<UAnimSequence*>& Sequences, const TArray<float>& Positions)
+{
+	if (!BlendSpace || Sequences.Num() != Positions.Num() || Max <= Min)
+	{
+		return false;
+	}
+	// The axes are protected: the property reaches the first
+	const FStructProperty* Axes = FindFProperty<FStructProperty>(UBlendSpace::StaticClass(), TEXT("BlendParameters"));
+	if (!Axes || Axes->Struct != FBlendParameter::StaticStruct())
+	{
+		return false;
+	}
+	BlendSpace->Modify();
+	FBlendParameter* Axis = Axes->ContainerPtrToValuePtr<FBlendParameter>(BlendSpace, 0);
+	Axis->DisplayName = AxisName;
+	Axis->Min = Min;
+	Axis->Max = Max;
+	Axis->GridNum = FMath::Max(4, Sequences.Num() * 2);
+	for (int32 Index = BlendSpace->GetNumberOfBlendSamples() - 1; Index >= 0; --Index)
+	{
+		BlendSpace->DeleteSample(Index);
+	}
+	bool bAll = true;
+	for (int32 Index = 0; Index < Sequences.Num(); ++Index)
+	{
+		bAll &= Sequences[Index] && BlendSpace->AddSample(Sequences[Index], FVector(Positions[Index], 0.0, 0.0)) != INDEX_NONE;
+	}
+	BlendSpace->ValidateSampleData();
+	BlendSpace->ResampleData();
+	BlendSpace->PostEditChange();
+	BlendSpace->MarkPackageDirty();
+	return bAll;
+}
+
+bool UVCAnimAuthoringLibrary::SetBlendSpaceSamples2D(UBlendSpace* BlendSpace, const FString& XName, float XMin, float XMax, bool bWrapX,
+	const FString& YName, float YMin, float YMax, const TArray<UAnimSequence*>& Sequences, const TArray<FVector2D>& Positions,
+	float SmoothingTime)
+{
+	if (!BlendSpace || Sequences.Num() != Positions.Num() || XMax <= XMin || YMax <= YMin)
+	{
+		return false;
+	}
+	// The axes and the input's smoothing are protected: their properties reach them
+	const FStructProperty* Axes = FindFProperty<FStructProperty>(UBlendSpace::StaticClass(), TEXT("BlendParameters"));
+	const FStructProperty* Smoothing = FindFProperty<FStructProperty>(UBlendSpace::StaticClass(), TEXT("InterpolationParam"));
+	if (!Axes || Axes->Struct != FBlendParameter::StaticStruct() || Axes->ArrayDim < 2
+		|| !Smoothing || Smoothing->Struct != FInterpolationParameter::StaticStruct() || Smoothing->ArrayDim < 2)
+	{
+		return false;
+	}
+	BlendSpace->Modify();
+	FBlendParameter* X = Axes->ContainerPtrToValuePtr<FBlendParameter>(BlendSpace, 0);
+	FBlendParameter* Y = Axes->ContainerPtrToValuePtr<FBlendParameter>(BlendSpace, 1);
+	X->DisplayName = XName;
+	X->Min = XMin;
+	X->Max = XMax;
+	X->GridNum = 8;
+	X->bWrapInput = bWrapX;
+	Y->DisplayName = YName;
+	Y->Min = YMin;
+	Y->Max = YMax;
+	Y->GridNum = 4;
+	for (int32 Axis = 0; Axis < 2; ++Axis)
+	{
+		Smoothing->ContainerPtrToValuePtr<FInterpolationParameter>(BlendSpace, Axis)->InterpolationTime = FMath::Max(SmoothingTime, 0.f);
+	}
+	for (int32 Index = BlendSpace->GetNumberOfBlendSamples() - 1; Index >= 0; --Index)
+	{
+		BlendSpace->DeleteSample(Index);
+	}
+	bool bAll = true;
+	for (int32 Index = 0; Index < Sequences.Num(); ++Index)
+	{
+		bAll &= Sequences[Index] && BlendSpace->AddSample(Sequences[Index], FVector(Positions[Index].X, Positions[Index].Y, 0.0)) != INDEX_NONE;
+	}
+	BlendSpace->ValidateSampleData();
+	BlendSpace->ResampleData();
+	BlendSpace->PostEditChange();
+	BlendSpace->MarkPackageDirty();
+	return bAll;
+}
+
+namespace VCAnimAuthoring
+{
+	/** A state machine graph's state (not a transition) by its name. */
+	UAnimStateNodeBase* FindState(UEdGraph* Graph, const FString& StateName)
+	{
+		if (!Graph)
+		{
+			return nullptr;
+		}
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			UAnimStateNodeBase* State = Cast<UAnimStateNodeBase>(Node);
+			if (State && !State->IsA<UAnimStateTransitionNode>() && State->GetStateName() == StateName)
+			{
+				return State;
+			}
+		}
+		return nullptr;
+	}
+}
+
+FString UVCAnimAuthoringLibrary::AddState(UBlueprint* Blueprint, FName StateMachineGraph, const FString& StateName, int32 X, int32 Y)
+{
+	using namespace VCAnimAuthoring;
+	UAnimationStateMachineGraph* Graph = Cast<UAnimationStateMachineGraph>(FindGraph(Blueprint, StateMachineGraph));
+	if (!Graph || StateName.IsEmpty())
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AddState: no state machine graph %s in %s"), *StateMachineGraph.ToString(), *GetNameSafe(Blueprint));
+		return FString();
+	}
+	UAnimStateNode* State = Cast<UAnimStateNode>(AddNode(Graph, UAnimStateNode::StaticClass(), X, Y));
+	if (!State || !State->BoundGraph)
+	{
+		return FString();
+	}
+	// Through the base: the state classes export no rename of their own (a virtual call needs none).
+	static_cast<UEdGraphNode*>(State)->OnRenameNode(StateName);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return State->BoundGraph->GetName();
+}
+
+bool UVCAnimAuthoringLibrary::SetEntryState(UBlueprint* Blueprint, FName StateMachineGraph, const FString& StateName)
+{
+	using namespace VCAnimAuthoring;
+	UAnimationStateMachineGraph* Graph = Cast<UAnimationStateMachineGraph>(FindGraph(Blueprint, StateMachineGraph));
+	UAnimStateNodeBase* State = FindState(Graph, StateName);
+	UEdGraphPin* Entry = Graph && Graph->EntryNode ? Graph->EntryNode->GetOutputPin() : nullptr;
+	if (!State || !Entry || !State->GetInputPin())
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("SetEntryState: no state %s or no entry in %s.%s"), *StateName, *GetNameSafe(Blueprint),
+			*StateMachineGraph.ToString());
+		return false;
+	}
+	Entry->BreakAllPinLinks();
+	Entry->MakeLinkTo(State->GetInputPin());
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
+}
+
+FString UVCAnimAuthoringLibrary::AddStateTransition(UBlueprint* Blueprint, FName StateMachineGraph, const FString& FromState, const FString& ToState,
+	const FString& RuleGraphName)
+{
+	using namespace VCAnimAuthoring;
+	UAnimationStateMachineGraph* Graph = Cast<UAnimationStateMachineGraph>(FindGraph(Blueprint, StateMachineGraph));
+	UAnimStateNodeBase* From = FindState(Graph, FromState);
+	UAnimStateNodeBase* To = FindState(Graph, ToState);
+	if (!From || !To || RuleGraphName.IsEmpty() || FindGraph(Blueprint, FName(*RuleGraphName)))
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("AddStateTransition: no state %s or %s in %s.%s, or %s is taken"), *FromState, *ToState,
+			*GetNameSafe(Blueprint), *StateMachineGraph.ToString(), *RuleGraphName);
+		return FString();
+	}
+	UAnimStateTransitionNode* Transition = Cast<UAnimStateTransitionNode>(AddNode(Graph, UAnimStateTransitionNode::StaticClass(),
+		(From->NodePosX + To->NodePosX) / 2, (From->NodePosY + To->NodePosY) / 2));
+	if (!Transition || !Transition->BoundGraph)
+	{
+		return FString();
+	}
+	Transition->CreateConnections(From, To);
+	FBlueprintEditorUtils::RenameGraph(Transition->BoundGraph, RuleGraphName);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return Transition->GetName();
+}
+
+bool UVCAnimAuthoringLibrary::RenameGraphNode(UBlueprint* Blueprint, FName GraphName, const FString& NodeName, const FString& NewName)
+{
+	using namespace VCAnimAuthoring;
+	UEdGraphNode* Node = FindNode(FindGraph(Blueprint, GraphName), NodeName);
+	if (!Node || !Node->GetCanRenameNode() || NewName.IsEmpty())
+	{
+		UE_LOG(LogVoxelCharacterEditor, Warning, TEXT("RenameGraphNode: no renamable node %s in %s.%s"), *NodeName, *GetNameSafe(Blueprint),
+			*GraphName.ToString());
+		return false;
+	}
+	Node->OnRenameNode(NewName);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
+}

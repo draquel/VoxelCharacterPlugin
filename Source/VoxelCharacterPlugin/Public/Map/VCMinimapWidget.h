@@ -67,6 +67,7 @@ public:
 
 protected:
 	virtual void NativeOnInitialized() override;
+	virtual void NativeDestruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
@@ -74,8 +75,9 @@ private:
 	void BuildWidgetTree();
 
 	/**
-	 * Fill the map texture from tile data around Center and upload it (the costly step, G64). Records the tiles it read
-	 * (FillTiles) and their signature.
+	 * Fill the map texture from tile data around Center and upload it (the costly step, G64), composed from the tile
+	 * pyramid at the level matching its texels (MAP_PYRAMID_PLAN.md P1). Records the tiles it shows at that level
+	 * (FillTiles) and their signature, and asks the map for them (UVoxelMapSubsystem::RequestView, the minimap first).
 	 *
 	 * @param Center The world position the texture is centred on (the player's at the fill)
 	 */
@@ -91,7 +93,7 @@ private:
 	 */
 	bool NeedsRefill(const FVector& PlayerPos, double Now) const;
 
-	/** A signature of the tile images the last fill read (each tile's entry, its pixel buffer and resolution, G64). */
+	/** A signature of the tile images the last fill showed at its level (each tile's entry, its pixel buffer and resolution, G64). */
 	uint64 ComputeTileSignature() const;
 
 	/** World units per texel, which is also per screen pixel: 2 * MinimapWorldRadius / MinimapSize. */
@@ -157,10 +159,11 @@ private:
 	float TimeSinceLastUpdate = 0.0f;
 	int32 CurrentTextureSize = 0;
 
-	// The last fill (G64): where it was centred, when, the tiles it read and their signature.
+	// The last fill (G64): where it was centred, when, the pyramid level and the tiles it showed there, their signature.
 	FVector FillCenter = FVector::ZeroVector;
 	bool bHasFill = false;
 	double LastFillTime = 0.0;
 	uint64 FillTileSignature = 0;
+	int32 FillLevel = 0;
 	TArray<FIntPoint> FillTiles;
 };

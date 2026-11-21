@@ -188,6 +188,16 @@ void UVCMinimapWidget::BuildWidgetTree()
 // Tick — Refresh Map
 // ---------------------------------------------------------------------------
 
+void UVCMinimapWidget::NativeDestruct()
+{
+	// The minimap's request goes with it (MAP_PYRAMID_PLAN.md P1): its tiles stop waiting.
+	if (UVoxelMapSubsystem* Subsystem = MapSubsystem.Get())
+	{
+		Subsystem->RequestView(EVoxelMapRequester::Minimap, {});
+	}
+	Super::NativeDestruct();
+}
+
 void UVCMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
@@ -236,7 +246,7 @@ void UVCMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 
 	const FVector PlayerPos = PlayerPawn->GetActorLocation();
 
-	// Request tiles for the minimap's visible area (oversized for rotation and the shift margin)
+	// Explore the minimap's visible area (oversized for rotation and the shift margin); its images are asked for at each fill.
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(VCMinimap_RequestTiles);
 		const VCMinimapStats::FScope Timed(VCMinimapStats::Tiles);
@@ -483,7 +493,7 @@ uint64 UVCMinimapWidget::ComputeTileSignature() const
 	for (const FIntPoint& Coord : FillTiles)
 	{
 		// A tile drawn again replaces its pixel buffer; one dropped from the store is gone.
-		const FVoxelMapTile* Tile = Subsystem->GetTile(Coord);
+		const FVoxelMapTile* Tile = Subsystem->FindTile(FVoxelMapTileId(Coord, FillLevel));
 		Mix(static_cast<uint64>(reinterpret_cast<UPTRINT>(Tile)));
 		Mix(Tile ? static_cast<uint64>(reinterpret_cast<UPTRINT>(Tile->PixelData.GetData())) : 0);
 		Mix(Tile ? static_cast<uint64>(Tile->Resolution) : 0);
@@ -546,7 +556,10 @@ void UVCMinimapWidget::RefreshMapTexture(const FVector& Center)
 		return;
 	}
 	uint8* PixelData = static_cast<uint8*>(TextureData);
-	TSet<FIntPoint> Visited;
+	// The tile pyramid's level whose pixels match the texels (MAP_PYRAMID_PLAN.md P1): level 1 at the defaults (160 uu
+	// texels over 75 uu voxels), about 36 tiles.
+	const int32 Level = Subsystem->LevelForTexel(WorldPerPixel);
+	TArray<FIntPoint> Visited;
 
 	if (Subsystem->IsPlanetMap())
 	{
@@ -554,9 +567,10 @@ void UVCMinimapWidget::RefreshMapTexture(const FVector& Center)
 		// units per pixel from the corner, as world (X, Y) on a plane, so the rotation carries over.
 		const FVCPlanetMapFrame Frame = FVCPlanetMapFrame::At(Subsystem->GetPlanetCenter(), Subsystem->GetPlanetRadius(), Center);
 		FVCPlanetMapSampler Sampler;
-		Sampler.bRequireExplored = false; // the minimap's area is requested (explored) every refresh
+		Sampler.bRequireExplored = false; // the minimap's area is explored every refresh
 		Sampler.Unexplored = Sampler.Undrawn = Sampler.Background = FColor(5, 5, 5, 255);
-		Sampler.VisitedTiles = &Visited;
+		Sampler.Level = Level;
+		Sampler.ViewTiles = &Visited;
 		Sampler.Fill(*Subsystem, PixelData, TexSize, 16, [&Frame, WorldPerPixel, ViewWorldExtent](double X, double Y, FVector& OutDirection)
 		{
 			OutDirection = Frame.DirectionAtOffset(X * WorldPerPixel - ViewWorldExtent, Y * WorldPerPixel - ViewWorldExtent);
@@ -567,7 +581,8 @@ void UVCMinimapWidget::RefreshMapTexture(const FVector& Center)
 	{
 		// A plane: texel by texel (FVCPlaneMapSampler, G64).
 		FVCPlaneMapSampler Sampler;
-		Sampler.VisitedTiles = &Visited;
+		Sampler.Level = Level;
+		Sampler.ViewTiles = &Visited;
 		Sampler.Fill(*Subsystem, PixelData, TexSize, Center, WorldPerPixel);
 	}
 	VCMinimapStats::Add(VCMinimapStats::Fill, FPlatformTime::ToMilliseconds64(FPlatformTime::Cycles64() - FillStart));
@@ -588,6 +603,16 @@ void UVCMinimapWidget::RefreshMapTexture(const FVector& Center)
 	FillCenter = Center;
 	bHasFill = true;
 	LastFillTime = FPlatformTime::Seconds();
-	FillTiles = Visited.Array();
+	FillLevel = Level;
+	FillTiles = MoveTemp(Visited);
 	FillTileSignature = ComputeTileSignature();
+
+	// The minimap's view, nearest the player first: it replaces its last request (MAP_PYRAMID_PLAN.md P1).
+	TArray<FVoxelMapTileId> Request;
+	Request.Reserve(FillTiles.Num());
+	for (const FIntPoint& Coord : FillTiles)
+	{
+		Request.Emplace(Coord, FillLevel);
+	}
+	Subsystem->RequestView(EVoxelMapRequester::Minimap, Request);
 }

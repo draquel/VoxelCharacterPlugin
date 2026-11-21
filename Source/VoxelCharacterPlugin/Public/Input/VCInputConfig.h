@@ -47,6 +47,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_SecondaryAction;
 
+	/**
+	 * Digital — middle mouse button / gamepad right shoulder — the sword's secondary attack, the combo's other branch
+	 * (the sword moves plan, D166); RMB stays the guard.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_SecondaryAttack;
+
 	/** Digital — V key — switch FP / TP. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_ToggleView;
@@ -75,6 +82,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_Use;
 
+	/** Digital — R key — sheathe the drawn weapon, or draw the last one (the equipment sheathing plan, D79). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_Sheathe;
+
+	/** Digital — X key — sheathe the drawn weapon and draw the next carried one (D79). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_CycleWeapon;
+
 	/** Digital — B key — toggle voxel edit mode (dig / place on the primary / secondary actions). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_ToggleEditMode;
@@ -86,6 +101,13 @@ public:
 	/** Hold to sprint (spends stamina). LeftShift in IMC_Gameplay. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
 	TObjectPtr<UInputAction> IA_Sprint;
+
+	/**
+	 * The dodge and the roll (the sword moves plan, D170): a roll toward the movement input, a step back without it.
+	 * LeftAlt and Gamepad_FaceButton_Right in IMC_Gameplay.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")
+	TObjectPtr<UInputAction> IA_Dodge;
 
 	/** Hold to crouch (slow walk); dives while swimming. LeftCtrl in IMC_Gameplay. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Input|Actions")

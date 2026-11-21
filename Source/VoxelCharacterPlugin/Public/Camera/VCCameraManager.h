@@ -31,6 +31,23 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Camera")
 	void PushCameraMode(TSubclassOf<UVCCameraModeBase> CameraModeClass);
 
+	/**
+	 * Leave the top mode (the character refinement plan's C3: the aim camera when the aim ends): the mode under it comes
+	 * back as a fresh instance on top and blends in, the old top blends out and goes as any replaced mode does. A replaced
+	 * mode leaves the stack once it has blended out (about three seconds), so a long aim finds nothing under the top: then
+	 * FallbackClass is pushed (none: nothing happens).
+	 * @param FallbackClass The mode to return to when nothing is under the top (the view's own mode)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VoxelCharacter|Camera")
+	void PopCameraMode(TSubclassOf<UVCCameraModeBase> FallbackClass);
+
+	/** The class of the mode on top of the stack, or null. */
+	UClass* GetTopCameraModeClass() const;
+
+	/** The third-person aim camera (UVCAimCameraMode): pushed while the character aims, popped when it stops. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Camera")
+	TSubclassOf<UVCCameraModeBase> AimModeClass;
+
 	/** Called each tick to compute and apply the blended camera transform. */
 	void UpdateCamera(float DeltaTime);
 

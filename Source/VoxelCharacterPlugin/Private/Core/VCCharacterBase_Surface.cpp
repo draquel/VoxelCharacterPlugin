@@ -10,6 +10,7 @@
 #include "Core/VCPlayerController.h"
 #include "Core/VCGameModeBase.h"
 #include "Combat/VCCombatComponent.h"
+#include "Animation/VCActionAnimSet.h"
 #include "Editing/VCBlockInteractionComponent.h"
 #include "Utilities/CGFCombatStatics.h"
 #include "Tags/CGFGameplayTags.h"
@@ -219,6 +220,7 @@ bool AVCCharacterBase::TryChopScatter()
 	{
 		return false;
 	}
+	PlayOwnAction(EVCAnimAction::Chop);
 	if (HasAuthority())
 	{
 		Server_ChopScatter_Implementation(AimPoint);
@@ -236,9 +238,10 @@ void AVCCharacterBase::Server_ChopScatter_Implementation(const FVector& AimPoint
 	{
 		return;
 	}
-	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	AVCPlayerController* PC = Cast<AVCPlayerController>(GetController());
+	if (PC && PC->ChopScatterAt(AimPoint))
 	{
-		PC->ChopScatterAt(AimPoint);
+		ShareOwnAction(EVCAnimAction::Chop);
 	}
 }
 
@@ -263,6 +266,7 @@ bool AVCCharacterBase::TryChopVoxelTree()
 	{
 		return false;
 	}
+	PlayOwnAction(EVCAnimAction::Chop);
 	if (HasAuthority())
 	{
 		Server_ChopVoxelTree_Implementation(VoxelCoord);
@@ -280,9 +284,10 @@ void AVCCharacterBase::Server_ChopVoxelTree_Implementation(const FIntVector& Vox
 	{
 		return;
 	}
-	if (AVCPlayerController* PC = Cast<AVCPlayerController>(GetController()))
+	AVCPlayerController* PC = Cast<AVCPlayerController>(GetController());
+	if (PC && PC->ChopVoxelTreeAt(VoxelCoord))
 	{
-		PC->ChopVoxelTreeAt(VoxelCoord);
+		ShareOwnAction(EVCAnimAction::Chop);
 	}
 }
 
@@ -295,8 +300,8 @@ float AVCCharacterBase::GetMiningSpeed() const
 bool AVCCharacterBase::HasDiggingTool() const
 {
 #if WITH_EQUIPMENT_PLUGIN
-	static const FGameplayTag MainHandTag = FGameplayTag::RequestGameplayTag(FName("Equipment.Slot.MainHand"), false);
-	if (!EquipmentManager || !EquipmentManager->IsSlotOccupied(MainHandTag))
+	// A pickaxe in the hand, its own slot's or drawn from the belt (a belted one grants no mining speed either, D77).
+	if (!EquipmentManager || !EquipmentManager->GetHeldItem(CGFGameplayTags::Equipment_Slot_MainHand).IsValid())
 	{
 		return false;
 	}

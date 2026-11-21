@@ -252,6 +252,8 @@ bool FVCPlanet_GravityTowardCentre::RunTest(const FString& Parameters)
 				continue;
 			}
 			Move->bRunPhysicsWithNoController = true;
+			// The world's weather blows a falling body sideways (the weather plan's P4); this measures gravity alone (G141).
+			Move->WindPushFactor = 0.f;
 			Move->SetMovementMode(MOVE_Falling);
 			for (int32 Frame = 0; Frame < 20; ++Frame)
 			{
@@ -280,6 +282,7 @@ bool FVCPlanet_GravityTowardCentre::RunTest(const FString& Parameters)
 			return false;
 		}
 		Move->bRunPhysicsWithNoController = true;
+		Move->WindPushFactor = 0.f;
 		Move->SetMovementMode(MOVE_Falling);
 		for (int32 Frame = 0; Frame < 20; ++Frame)
 		{

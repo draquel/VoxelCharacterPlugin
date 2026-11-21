@@ -190,6 +190,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
 	TSubclassOf<UUserWidget> VitalsWidgetClass;
 
+	/** The aim reticle (centre; the character refinement plan's C3). Defaults to UVCReticleWidget. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|UI")
+	TSubclassOf<UUserWidget> ReticleWidgetClass;
+
 	/**
 	 * Optional HUD clock (top-centre), any UUserWidget — the world-clock plugin's widget in the demo.
 	 * None = no clock. This plugin never reads the time itself.
@@ -367,6 +371,9 @@ private:
 	TObjectPtr<UUserWidget> ClockWidget;
 
 	UPROPERTY()
+	TObjectPtr<UUserWidget> ReticleWidget;
+
+	UPROPERTY()
 	TObjectPtr<UUserWidget> InventoryPanelWidget;
 
 	UPROPERTY()
@@ -383,6 +390,10 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UUserWidget> VitalsWidget;
+
+	/** The weapons carried on the body, above the hotbar (UVCCarriedWeaponsWidget; the equipment sheathing plan). */
+	UPROPERTY()
+	TObjectPtr<UUserWidget> CarriedWeaponsWidget;
 
 	/** Point the vitals widget at a (re)possessed character. */
 	void BindVitalsToPawn(APawn* InPawn);

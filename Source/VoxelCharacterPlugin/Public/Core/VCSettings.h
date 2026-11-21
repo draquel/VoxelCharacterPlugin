@@ -4,7 +4,15 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
+#include "VoxelCoreTypes.h"
 #include "VCSettings.generated.h"
+
+class UAnimInstance;
+class UMaterialInterface;
+class UNiagaraSystem;
+class USoundBase;
+class UVCActionAnimSet;
+class UVCCharacterAppearance;
 
 /**
  * The character plugin's project-wide settings (Project Settings > Plugins > Voxel Character; code review CR4, the plan's
@@ -24,4 +32,74 @@ public:
 	/** Floating NPC health bars: 0 = never, 1 = NPCs with bShowHealthBar, 2 = every NPC (vc.UI.NPCHealthBars) */
 	UPROPERTY(config, EditAnywhere, Category = "UI", meta = (ClampMin = "0", ClampMax = "2"))
 	int32 NPCHealthBars = 1;
+
+	/**
+	 * The player's action montage sets (character animation P3): what an AVCCharacterBase whose UVCActionMontageComponent
+	 * lists none plays, one set per Equipment.AnimSet tag. Scripts/setup_character_layers.py builds them.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Animation")
+	TArray<TSoftObjectPtr<UVCActionAnimSet>> PlayerActionAnimSets;
+
+	/**
+	 * The player's motion-matching AnimBP (character animation P5): the Game Animation Sample's CMC AnimBP on
+	 * UVCMotionMatchingAnimInstance, built by Scripts/setup_character_locomotion.py. The player plays it while
+	 * vc.Anim.Locomotion is 1 and it loads; otherwise, and on a dedicated server, its Blueprint's own anim class.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Animation")
+	TSoftClassPtr<UAnimInstance> PlayerLocomotionAnimClass;
+
+	/**
+	 * The player's state-machine AnimBP (the locomotion state machine plan, D86): ABP_VCPlayerLocomotion on
+	 * UVCLocomotionAnimInstance, the packs' clips by the held action set, built by Scripts/setup_character_state_machine.py.
+	 * The player plays it while vc.Anim.Locomotion is 2 and it loads; otherwise, and on a dedicated server, its Blueprint's own.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Animation")
+	TSoftClassPtr<UAnimInstance> PlayerStateMachineAnimClass;
+
+	/**
+	 * The player's body where nothing more particular names one (character animation P6): the project's choice, by its
+	 * style. Empty: the player Blueprint's own body. A game mode's PlayerAppearance and the player's own choice come first.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Appearance")
+	TSoftObjectPtr<UVCCharacterAppearance> DefaultPlayerAppearance;
+
+	/**
+	 * The player's body by the voxel world's meshing mode, over DefaultPlayerAppearance (this project: a MetaHuman in
+	 * smooth worlds, the low-poly body in cubic ones). A mode not listed takes the default.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Appearance")
+	TMap<EMeshingMode, TSoftObjectPtr<UVCCharacterAppearance>> PlayerAppearanceByMeshing;
+
+	/**
+	 * The underwater view's post-process material (the water plan's W1): the waterline per pixel, and under it a tint and
+	 * a fog by scene depth; UVCUnderwaterPostProcess sets its parameters (CameraDepth, SurfaceUp, Amount, FogDensity,
+	 * FogMaxDistance, DepthFalloff, FogColor, Tint). The parent's Scripts/setup_water_material.py builds it. Empty or
+	 * missing: the view under water is the whole-screen tint alone, with no fog and no waterline.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<UMaterialInterface> UnderwaterMaterial;
+
+	/** The splash where a character enters or leaves the water (UVCWaterEffectsComponent); +Z is the surface's up. Empty: none. */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<UNiagaraSystem> WaterSplashSystem;
+
+	/** The wake a character leaves while it swims at the surface, in world space. Empty: none. */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<UNiagaraSystem> WaterWakeSystem;
+
+	/** The sound of a character entering the water, at the surface. Empty: silent. */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<USoundBase> WaterSplashInSound;
+
+	/** The sound of a character leaving the water. Empty: silent. */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<USoundBase> WaterSplashOutSound;
+
+	/** The loop of a character swimming at the surface (a looping sound). Empty: silent. */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<USoundBase> WaterSwimLoopSound;
+
+	/** The loop the local player hears while its camera is under the surface (a looping sound, not spatialized). Empty: silent. */
+	UPROPERTY(config, EditAnywhere, Category = "Water")
+	TSoftObjectPtr<USoundBase> WaterUnderLoopSound;
 };
