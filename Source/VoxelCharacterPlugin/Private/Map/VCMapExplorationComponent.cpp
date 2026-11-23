@@ -73,13 +73,14 @@ namespace
 				continue;
 			}
 			const ENetMode Mode = World->GetNetMode();
-			FString Line = FString::Printf(TEXT("[MapExplored] world=%d net=%s explored=%lld |"), Context.PIEInstance,
+			FString Line = FString::Printf(TEXT("[MapExplored] world=%d net=%s explored=%lld overlays=%d |"), Context.PIEInstance,
 				Mode == NM_Client ? TEXT("Client") : Mode == NM_DedicatedServer ? TEXT("DedicatedServer") : Mode == NM_ListenServer ? TEXT("ListenServer") : TEXT("Standalone"),
-				Map->GetNumExploredTiles());
+				Map->GetNumExploredTiles(), Map->GetEditOverlayCount());
 			for (const TPair<FString, FVector>& Player : Players)
 			{
-				Line += FString::Printf(TEXT(" %s@%s=%d"), *Player.Key, *Player.Value.ToCompactString(),
-					Map->IsTileExplored(Map->WorldToTileCoord(Player.Value)) ? 1 : 0);
+				const FIntPoint Tile = Map->WorldToTileCoord(Player.Value);
+				Line += FString::Printf(TEXT(" %s@%s=%d/%d"), *Player.Key, *Player.Value.ToCompactString(),
+					Map->IsTileExplored(Tile) ? 1 : 0, Map->GetEditOverlay(Tile) ? 1 : 0);
 			}
 			UE_LOG(LogVoxelCharacter, Log, TEXT("%s"), *Line);
 		}
@@ -87,9 +88,9 @@ namespace
 
 	FAutoConsoleCommand GVCMapExploredCmd(
 		TEXT("vc.Map.Explored"),
-		TEXT("Log every play world's map: its explored tiles, and for every player (from the server's world) and every place ")
-		TEXT("given (X,Y,Z ...) whether the tile there is explored in that world (G271: each client's map holds its own ")
-		TEXT("player's ground)."),
+		TEXT("Log every play world's map: its explored tiles and edit overlays, and for every player (from the server's world) ")
+		TEXT("and every place given (X,Y,Z ...) whether the tile there is explored in that world and has an edit overlay, as ")
+		TEXT("explored/overlay (G271, G272: each client's map holds its own player's ground and every edit's overlay)."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&LogExploredPerWorld));
 #endif
 }
