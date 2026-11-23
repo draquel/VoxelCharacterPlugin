@@ -4,7 +4,30 @@
 #include "VoxelCubeSphere.h"
 #include "VoxelMapSubsystem.h"
 #include "Async/ParallelFor.h"
+#include "Engine/Texture2D.h"
+#include "UObject/Package.h"
+#include "UObject/UObjectGlobals.h"
 #include "HAL/IConsoleManager.h"
+
+// ==================== FVCMapTexture ====================
+
+UTexture2D* FVCMapTexture::Create(int32 Size, const TCHAR* BaseName)
+{
+	// A name of its own in the transient package: under a name taken there CreateTransient reconstructs the texture that
+	// holds it, another widget's in another play world (G270).
+	const FName Name = MakeUniqueObjectName(GetTransientPackage(), UTexture2D::StaticClass(), FName(BaseName));
+	UTexture2D* Texture = UTexture2D::CreateTransient(Size, Size, PF_B8G8R8A8, Name);
+	if (!Texture)
+	{
+		return nullptr;
+	}
+	Texture->Filter = TF_Bilinear;
+	Texture->SRGB = true;
+	Texture->CompressionSettings = TC_VectorDisplacementmap;
+	Texture->AddressX = TA_Clamp;
+	Texture->AddressY = TA_Clamp;
+	return Texture;
+}
 
 // ==================== FVCPlanetMapFrame ====================
 

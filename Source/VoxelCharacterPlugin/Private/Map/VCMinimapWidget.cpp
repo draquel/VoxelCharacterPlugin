@@ -430,17 +430,12 @@ void UVCMinimapWidget::EnsureTexture(int32 TexSize)
 		return;
 	}
 
-	MapTexture = UTexture2D::CreateTransient(TexSize, TexSize, PF_B8G8R8A8, TEXT("MinimapTexture"));
+	// A texture of this widget's own: another play world's minimap (a second PIE client) must not fill it (G270).
+	MapTexture = FVCMapTexture::Create(TexSize, TEXT("MinimapTexture"));
 	if (!MapTexture)
 	{
 		return;
 	}
-
-	MapTexture->Filter = TF_Bilinear;
-	MapTexture->SRGB = true;
-	MapTexture->CompressionSettings = TC_VectorDisplacementmap;
-	MapTexture->AddressX = TA_Clamp;
-	MapTexture->AddressY = TA_Clamp;
 
 	CurrentTextureSize = TexSize;
 }
