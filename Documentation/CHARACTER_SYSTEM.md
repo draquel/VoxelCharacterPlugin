@@ -1186,6 +1186,12 @@ weapon whose set has a secondary branch, the branch's attack by the combo's rule
 behind a raised guard, in edit mode or while a weapon comes out. In the air it plays the set's plunge (D169).
 `PressSecondaryAttack` runs it for scripts.
 
+The gamepad's triggers drive the primary action (`Gamepad_RightTriggerAxis`) and the secondary action
+(`Gamepad_LeftTriggerAxis`) through a `Down` trigger at half travel (an actuation threshold of 0.5) on their mappings in
+`IMC_Gameplay` (G269). A mapping with no trigger counts as held at any value above zero, and a connected controller whose
+trigger rests above zero (one read 44/255) held the primary action down for the whole session: a held action never starts
+again, so no click attacked, unarmed, with a sword or with a bow. The mouse buttons' mappings have no trigger.
+
 ### The primary action
 
 Primary and secondary actions (LMB / RMB) go through one chain; new action types insert into it, they do not replace
