@@ -113,6 +113,30 @@ bool FVCWindAirTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
+// The speed multiplier a client's move carries (G242): the server takes it when it is its own, or the value its own
+// replaced within the grace (the cold's slow reaches the client a trip after the server applied it); otherwise its own.
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCClientSpeedMultiplierTest, "VoxelCharacter.Movement.ClientSpeedMultiplier",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FVCClientSpeedMultiplierTest::RunTest(const FString& Parameters)
+{
+	bool bRejected = true;
+	TestEqual(TEXT("The server's own value"), UVCMovementComponent::ResolveClientSpeedMultiplier(0.85f, 0.85f, 1.f, 5.0, 1.f, bRejected), 0.85f);
+	TestFalse(TEXT("The server's own value: accepted"), bRejected);
+	TestEqual(TEXT("The replaced value within the grace"), UVCMovementComponent::ResolveClientSpeedMultiplier(1.f, 0.85f, 1.f, 0.3, 1.f, bRejected), 1.f);
+	TestFalse(TEXT("The replaced value within the grace: accepted"), bRejected);
+	TestEqual(TEXT("The replaced value past the grace"), UVCMovementComponent::ResolveClientSpeedMultiplier(1.f, 0.85f, 1.f, 1.5, 1.f, bRejected), 0.85f);
+	TestTrue(TEXT("The replaced value past the grace: rejected"), bRejected);
+	TestEqual(TEXT("Another value"), UVCMovementComponent::ResolveClientSpeedMultiplier(2.f, 0.85f, 1.f, 0.3, 1.f, bRejected), 0.85f);
+	TestTrue(TEXT("Another value: rejected"), bRejected);
+	TestEqual(TEXT("Never changed: only the current"), UVCMovementComponent::ResolveClientSpeedMultiplier(0.85f, 1.f, 0.85f, -1.0, 1.f, bRejected), 1.f);
+	TestTrue(TEXT("Never changed: rejected"), bRejected);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
 // The wet level (the weather plan's P5): soaked by the rain over WetSoakSeconds, at once by a swim, dry again over
 // WetDrySeconds; and the character's hysteresis for the wet and cold states.
 // ---------------------------------------------------------------------------
