@@ -5,7 +5,26 @@
 #include "CoreMinimal.h"
 #include "Templates/Function.h"
 
+class UTexture2D;
 class UVoxelMapSubsystem;
+
+/**
+ * The map widgets' textures (the minimap's, the world map's): a BGRA texture of their own in the transient package,
+ * bilinear, sRGB, uncompressed, clamped. Every play world's widgets share that package, and UTexture2D::CreateTransient
+ * under a name an object there already has reconstructs that object in place: under one fixed name the second PIE
+ * client's minimap took over the first's texture, both widgets filled the one texture in turn, and each client's minimap
+ * showed the two players' positions and explored ground by turns (G270; the same hazard as G144 and G211).
+ */
+struct VOXELCHARACTERPLUGIN_API FVCMapTexture
+{
+	/**
+	 * Create a map texture under a name of its own.
+	 * @param Size Width and height (texels)
+	 * @param BaseName The name's stem (`MinimapTexture`); a suffix makes it unique in the transient package
+	 * @return The texture, or null when the engine makes none (an invalid size)
+	 */
+	static UTexture2D* Create(int32 Size, const TCHAR* BaseName);
+};
 
 /**
  * The minimap's frame on a planet (spherical Phase 4, WORLD_MODES_REVIEW_PLAN.md §18, WM-SY9): the tangent plane of the

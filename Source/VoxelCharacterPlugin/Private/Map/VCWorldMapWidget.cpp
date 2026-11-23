@@ -480,16 +480,12 @@ void UVCWorldMapWidget::RebuildMapTexture()
 	// Create or recreate texture
 	if (!WorldMapTexture || WorldMapTexture->GetSizeX() != TexSize)
 	{
-		WorldMapTexture = UTexture2D::CreateTransient(TexSize, TexSize, PF_B8G8R8A8, TEXT("WorldMapTexture"));
+		// A texture of this widget's own, as the minimap's (G270).
+		WorldMapTexture = FVCMapTexture::Create(TexSize, TEXT("WorldMapTexture"));
 		if (!WorldMapTexture)
 		{
 			return;
 		}
-		WorldMapTexture->Filter = TF_Bilinear;
-		WorldMapTexture->SRGB = true;
-		WorldMapTexture->CompressionSettings = TC_VectorDisplacementmap;
-		WorldMapTexture->AddressX = TA_Clamp;
-		WorldMapTexture->AddressY = TA_Clamp;
 	}
 
 	// Lock texture
@@ -551,16 +547,12 @@ void UVCWorldMapWidget::RebuildPlanetMapTexture()
 	const int32 TexSize = FMath::Clamp(MapTextureFixedSize, 256, 2048);
 	if (!WorldMapTexture || WorldMapTexture->GetSizeX() != TexSize)
 	{
-		WorldMapTexture = UTexture2D::CreateTransient(TexSize, TexSize, PF_B8G8R8A8, TEXT("WorldMapTexture"));
+		// A texture of this widget's own, as the minimap's (G270).
+		WorldMapTexture = FVCMapTexture::Create(TexSize, TEXT("WorldMapTexture"));
 		if (!WorldMapTexture)
 		{
 			return;
 		}
-		WorldMapTexture->Filter = TF_Bilinear;
-		WorldMapTexture->SRGB = true;
-		WorldMapTexture->CompressionSettings = TC_VectorDisplacementmap;
-		WorldMapTexture->AddressX = TA_Clamp;
-		WorldMapTexture->AddressY = TA_Clamp;
 	}
 	FTexture2DMipMap& Mip = WorldMapTexture->GetPlatformData()->Mips[0];
 	uint8* PixelData = static_cast<uint8*>(Mip.BulkData.Lock(LOCK_READ_WRITE));

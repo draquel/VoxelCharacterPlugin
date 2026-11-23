@@ -10,6 +10,7 @@
 #include "Testing/VoxelTestChunkWorld.h"
 #include "Testing/VoxelTestScopedCVar.h"
 #include "Async/TaskGraphInterfaces.h"
+#include "Engine/Texture2D.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformProcess.h"
 
@@ -461,6 +462,72 @@ bool FVCPlanet_MinimapShift::RunTest(const FString& Parameters)
 			TestTrue(*FString::Printf(TEXT("R %.0f, %.1f deg: the shifted texture shows the terrain within half a texel of a fresh fill"), Radius, LatDeg),
 				WorstShown < 0.5);
 		}
+	}
+	return true;
+}
+
+namespace VCMapTextureTest
+{
+	/** Fill a map texture's top mip with one colour; false when it has no texels to lock. */
+	bool FillTexels(UTexture2D* Texture, const FColor& Colour)
+	{
+		FTexture2DMipMap& Mip = Texture->GetPlatformData()->Mips[0];
+		FColor* Texels = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
+		if (!Texels)
+		{
+			return false;
+		}
+		for (int32 I = 0; I < Texture->GetSizeX() * Texture->GetSizeY(); ++I)
+		{
+			Texels[I] = Colour;
+		}
+		Mip.BulkData.Unlock();
+		return true;
+	}
+
+	/** The colour of a map texture's first texel. */
+	FColor FirstTexel(UTexture2D* Texture)
+	{
+		FTexture2DMipMap& Mip = Texture->GetPlatformData()->Mips[0];
+		const FColor* Texels = static_cast<const FColor*>(Mip.BulkData.Lock(LOCK_READ_ONLY));
+		const FColor First = Texels ? Texels[0] : FColor::Transparent;
+		Mip.BulkData.Unlock();
+		return First;
+	}
+}
+
+/**
+ * G270: two minimaps (two PIE clients in one process) each fill a texture of their own. Under one fixed name the second
+ * widget's CreateTransient reconstructed the first's texture in place, both widgets wrote the one texture, and each client's
+ * minimap showed the two players' positions and explored ground by turns.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCMap_TexturePerWidget, "VoxelCharacter.Map.TexturePerWidget", VC_MINIMAP_FLAGS)
+bool FVCMap_TexturePerWidget::RunTest(const FString& Parameters)
+{
+	// The hazard itself, for the record: the engine's own call under one name twice gives the one object back.
+	UTexture2D* Fixed = UTexture2D::CreateTransient(8, 8, PF_B8G8R8A8, TEXT("VCMapTextureTest_Fixed"));
+	UTexture2D* FixedAgain = UTexture2D::CreateTransient(8, 8, PF_B8G8R8A8, TEXT("VCMapTextureTest_Fixed"));
+	AddInfo(FString::Printf(TEXT("CreateTransient under one name twice: %s"),
+		Fixed && Fixed == FixedAgain ? TEXT("the same object (reconstructed in place)") : TEXT("two objects")));
+
+	UTexture2D* First = FVCMapTexture::Create(16, TEXT("VCMapTextureTest"));
+	UTexture2D* Second = FVCMapTexture::Create(16, TEXT("VCMapTextureTest"));
+	if (!TestNotNull(TEXT("The first widget's texture"), First) || !TestNotNull(TEXT("The second widget's texture"), Second))
+	{
+		return false;
+	}
+	TestTrue(TEXT("Two widgets get two textures"), First != Second);
+	TestNotEqual(TEXT("... under two names"), First->GetFName(), Second->GetFName());
+	TestEqual(TEXT("The texture is the size asked for"), First->GetSizeX(), 16);
+	TestEqual(TEXT("... and sRGB BGRA"), First->GetPixelFormat(), PF_B8G8R8A8);
+	TestTrue(TEXT("... sRGB, clamped"), First->SRGB && First->AddressX == TA_Clamp && First->AddressY == TA_Clamp);
+
+	// Each fills its own: the second's fill leaves the first's texels alone.
+	if (TestTrue(TEXT("The first fills"), VCMapTextureTest::FillTexels(First, FColor::Red))
+		&& TestTrue(TEXT("The second fills"), VCMapTextureTest::FillTexels(Second, FColor::Blue)))
+	{
+		TestEqual(TEXT("The first keeps its own texels"), VCMapTextureTest::FirstTexel(First), FColor::Red);
+		TestEqual(TEXT("The second has its own"), VCMapTextureTest::FirstTexel(Second), FColor::Blue);
 	}
 	return true;
 }

@@ -86,7 +86,9 @@ texel at the rim at 80 degrees and by dozens near the pole (`VoxelCharacter.Plan
 
 A fill (`RefreshMapTexture(Center)`):
 
-1. Lock the transient `UTexture2D` mip 0 bulk data
+1. Lock the transient `UTexture2D` mip 0 bulk data (the widget's own, `FVCMapTexture::Create`: a name of its own in the
+   transient package, or a second PIE client's widget would reconstruct the first's texture in place and the two fill
+   the one texture by turns, G270; the world map's the same)
 2. A planet: `FVCPlanetMapSampler::Fill` over the tangent plane at `Center`. A plane: `FVCPlaneMapSampler::Fill`, texel
    by texel (each texel the pixel just inside its far corner, the pixel the old per-tile-pixel blit wrote last; the
    columns' and rows' tiles and positions worked out once; the per-tile-pixel blit before G64 left gaps where tile
