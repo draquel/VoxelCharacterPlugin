@@ -1190,7 +1190,10 @@ The gamepad's triggers drive the primary action (`Gamepad_RightTriggerAxis`) and
 (`Gamepad_LeftTriggerAxis`) through a `Down` trigger at half travel (an actuation threshold of 0.5) on their mappings in
 `IMC_Gameplay` (G269). A mapping with no trigger counts as held at any value above zero, and a connected controller whose
 trigger rests above zero (one read 44/255) held the primary action down for the whole session: a held action never starts
-again, so no click attacked, unarmed, with a sword or with a bow. The mouse buttons' mappings have no trigger.
+again, so no click attacked, unarmed, with a sword or with a bow. The mouse buttons' mappings have no trigger. The sticks
+(`Gamepad_Left2D` to `IA_Move`, `Gamepad_Right2D` to `IA_Look`) start with a radial dead zone from 0.25 to 1, so a stick
+resting off centre neither walks the pawn nor turns the view: Enhanced Input reads a key's raw value, and the legacy
+dead zones in `Config/DefaultInput.ini` (0.25 on each stick axis) never reach these mappings.
 
 ### The primary action
 
