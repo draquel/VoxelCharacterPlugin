@@ -1412,7 +1412,8 @@ runs `FellOutOfWorld`; `RecoverFromMissingTerrain` puts a pawn whose terrain nev
 - **Saves.** `AVCPlayerState::ExportSaveState` / `ImportSaveState(FVCPlayerSaveState)`: items, progression, rest point,
   last transform, vitals, the player's map exploration (G271: a local player's from its world's map, a remote
   player's from what its client sent, `UVCMapExplorationComponent` on the controller, which also sends a saved mask back
-  to the client). `GetSaveKey()` strips the Null subsystem's per-session GUID, so a PIE player keeps one key; in the
+  to the client, and the server map's edit overlays when they change and the client's edits are in step, G273's D193:
+  a client's map draws overlays from its loaded chunks only, so the edits far from it show through the server's). `GetSaveKey()` strips the Null subsystem's per-session GUID, so a PIE player keeps one key; in the
   editor a PIE instance after the first adds `-PIE<n>` (`UVCLocalPlayer`'s login option, `AVCGameModeBase::InitNewPlayer`),
   so two PIE players do not share one entry.
   The engine drops the pawn before `Logout`, so the controller calls `CaptureAvatarState()` on unpossess and
