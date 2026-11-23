@@ -576,6 +576,35 @@ public:
 	float WindClientSlackFloor = 50.f;
 
 	/**
+	 * Seconds after the server's speed multiplier changes (a gameplay effect on MoveSpeedMultiplier: the cold, a slow)
+	 * in which it still accepts a client's move made with the value it replaced (G242): the attribute reaches the client
+	 * a trip after the server applied it, and the moves the client made before it arrive a trip after that. Past the
+	 * grace, a move with another value is simulated with the server's and corrected.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VoxelCharacter|Movement", meta = (ClampMin = "0.0"))
+	float SpeedMultiplierClientGrace = 1.f;
+
+	/**
+	 * Pure: the speed multiplier the server simulates a client's move with (G242): the client's when it is the server's
+	 * current value, or the value that one replaced within SpeedMultiplierClientGrace of the change; otherwise the
+	 * server's current value.
+	 * @param ClientMultiplier The multiplier the client sent with the move
+	 * @param Current The server's multiplier
+	 * @param Previous The value the server's multiplier had before its last change
+	 * @param SecondsSinceChange Seconds since that change on the server (negative: never changed)
+	 * @param Grace SpeedMultiplierClientGrace
+	 * @param bOutRejected Receives whether the client's value was neither
+	 * @return The multiplier the server simulates the move with
+	 */
+	static float ResolveClientSpeedMultiplier(float ClientMultiplier, float Current, float Previous, double SecondsSinceChange, float Grace, bool& bOutRejected);
+
+	/** The speed multiplier of the move being simulated (a replayed move's own, G242). */
+	void SetMoveSpeedMultiplier(float Multiplier) { MoveSpeedMultiplier = Multiplier; }
+
+	/** @return The speed multiplier of the move being simulated (G242) */
+	float GetMoveSpeedMultiplier() const { return MoveSpeedMultiplier; }
+
+	/**
 	 * Pure: the air a move carries, the wind times the exposure rounded to whole uu/s per axis within an int16, so the
 	 * client simulates with exactly what the move data sends (G220).
 	 * @param Air The wind at the pawn times its exposure, world uu/s
@@ -1185,8 +1214,19 @@ protected:
 	/** Base MaxAcceleration before swimming override. Captured on BeginPlay. */
 	float BaseMaxAcceleration = 0.f;
 
-	/** Current GAS speed multiplier (default 1.0). */
+	/** Current GAS speed multiplier (default 1.0): the MoveSpeedMultiplier attribute's value on this machine. */
 	float GASSpeedMultiplier = 1.f;
+
+	/**
+	 * The speed multiplier the move being simulated uses (the gait table's speeds, G242): this machine's
+	 * GASSpeedMultiplier where it moves the pawn itself, the client's sent value on the server (checked,
+	 * ResolveClientSpeedMultiplier), the saved move's in a replay.
+	 */
+	float MoveSpeedMultiplier = 1.f;
+
+	/** On the server: the multiplier's value before its last change, and the world time of that change (G242; -1 = none). */
+	float PreviousGASSpeedMultiplier = 1.f;
+	double GASSpeedMultiplierChangedSeconds = -1.0;
 
 	/** Was the character grounded last frame? Used for floor grace logic. */
 	bool bWasGroundedLastFrame = false;

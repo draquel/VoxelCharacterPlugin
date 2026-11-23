@@ -455,7 +455,7 @@ void UVCMovementComponent::ApplyGaitTable()
 	}
 	const FVCMovementTable Table = ResolveGaitTable(GaitTable, ClipGaitCaps, bWantsClipGaitCaps);
 	const FVCGaitValues Values = ComputeGaitValues(Table, GetGait(), GetRotationMode(), IsMovingOnGround(), IsFalling(), Velocity,
-		Acceleration, UpdatedComponent->GetForwardVector(), FVCGravityFrame::GetUp(this), GASSpeedMultiplier, GroundFrictionScale,
+		Acceleration, UpdatedComponent->GetForwardVector(), FVCGravityFrame::GetUp(this), MoveSpeedMultiplier, GroundFrictionScale,
 		ResolveSpeedCeiling(ClipGaitCaps, bWantsClipGaitCaps, bAimingForGait));
 	RotationRate.Yaw = Values.RotationRate;
 	if (!Values.bRowApplies)

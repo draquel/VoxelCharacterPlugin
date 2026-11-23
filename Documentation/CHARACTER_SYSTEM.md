@@ -101,7 +101,16 @@ attacker builds FCGFDamageContext
   hysteresis (`WetOnLevel` 0.6 / `WetOffLevel` 0.2 on the wet level; `ColdBelowC` 0 / `ColdHysteresisC` 2 on the air
   temperature) and read back from the ASC, so a respawn clears a stale pair. Wet halves the stamina's regeneration
   (`UVCMovementComponent::WetStaminaRegenMultiplier`); cold applies `UVCWeatherColdEffect`, an infinite source-defined
-  effect taking 0.15 off `MoveSpeedMultiplier`, removed by class when the cold lifts. A corpse or a downed character
+  effect taking 0.15 off `MoveSpeedMultiplier`, removed by class when the cold lifts.
+  **A move carries its speed multiplier** (G242, 2026-11-22): the server applies such an effect a trip before the
+  client's attribute changes, and a move each machine simulated with a different multiplier (a gait speed of 500 on
+  one, 425 on the other) left the two pawns apart until a correction. The move's speed comes from
+  `MoveSpeedMultiplier` on the movement component (the gait table's input): a machine that moves the pawn itself
+  takes the attribute's value at each move, a locally controlled client takes it in `ReplicateMoveToServer`, keeps it
+  in the saved move (a replay runs with it) and sends it in the move data (a bit when 1, a float when not); the server
+  takes the client's when it is its own value, or the value its own replaced within `SpeedMultiplierClientGrace` (1 s)
+  of the change, and its own otherwise (`ResolveClientSpeedMultiplier`, D-CR16). Test
+  `VoxelCharacter.Movement.ClientSpeedMultiplier`. A corpse or a downed character
   loses both. The vitals widget's weather line ("Soaked", "Cold", "Soaked and cold") follows the tags' events; a
   change logs once, and `vc.Weather.Log 1` logs the level and the temperature every half second.
 - `UVCMeleeAttackAbility` is server-only; the client requests it by tag `Ability.Attack.Melee`. Damage is the main-hand

@@ -61,6 +61,8 @@ namespace
 
 		/** The air the move pushed with (G220). */
 		FVector SavedWindAir = FVector::ZeroVector;
+		/** The speed multiplier the move ran with (G242). */
+		float SavedSpeedMultiplier = 1.f;
 		/** The wind's drift and airborne time before the move and after it. */
 		FVCWindMoveState StartWind;
 		FVCWindMoveState EndWind;
@@ -73,6 +75,7 @@ namespace
 			bSavedWantsToWalk = 0;
 			bSavedWantsClipGaitCaps = 0;
 			SavedWindAir = FVector::ZeroVector;
+			SavedSpeedMultiplier = 1.f;
 			StartWind = FVCWindMoveState();
 			EndWind = FVCWindMoveState();
 		}
@@ -103,7 +106,8 @@ namespace
 		{
 			const FSavedMove_VC* Other = static_cast<const FSavedMove_VC*>(NewMove.Get());
 			if (bSavedWantsToSprint != Other->bSavedWantsToSprint || bSavedWantsToAscend != Other->bSavedWantsToAscend
-				|| bSavedWantsToWalk != Other->bSavedWantsToWalk || bSavedWantsClipGaitCaps != Other->bSavedWantsClipGaitCaps)
+				|| bSavedWantsToWalk != Other->bSavedWantsToWalk || bSavedWantsClipGaitCaps != Other->bSavedWantsClipGaitCaps
+				|| SavedSpeedMultiplier != Other->SavedSpeedMultiplier)
 			{
 				return false;
 			}
@@ -120,6 +124,7 @@ namespace
 				bSavedWantsToWalk = Movement->bWantsToWalk;
 				bSavedWantsClipGaitCaps = Movement->bWantsClipGaitCaps;
 				SavedWindAir = Movement->GetWindMoveState().Air;
+				SavedSpeedMultiplier = Movement->GetMoveSpeedMultiplier();
 			}
 		}
 
@@ -165,21 +170,28 @@ namespace
 				Movement->bWantsClipGaitCaps = bSavedWantsClipGaitCaps;
 				// A replay pushes with the air the move was sent with, not the read at the time of the replay.
 				Movement->SetMoveWindAir(SavedWindAir);
+				// And with the speed multiplier it was made with, not the one replicated since (G242).
+				Movement->SetMoveSpeedMultiplier(SavedSpeedMultiplier);
 			}
 		}
 	};
 
-	/** The move data sent to the server: the engine's, and the move's air (G220), a bit when calm, three int16 when not. */
+	/**
+	 * The move data sent to the server: the engine's, the move's air (G220), a bit when calm, three int16 when not, and
+	 * the move's speed multiplier (G242), a bit when 1, a float when not.
+	 */
 	struct FVCNetworkMoveData : public FCharacterNetworkMoveData
 	{
 		typedef FCharacterNetworkMoveData Super;
 
 		FVector WindAir = FVector::ZeroVector;
+		float SpeedMultiplier = 1.f;
 
 		virtual void ClientFillNetworkMoveData(const FSavedMove_Character& ClientMove, ENetworkMoveType MoveType) override
 		{
 			Super::ClientFillNetworkMoveData(ClientMove, MoveType);
 			WindAir = static_cast<const FSavedMove_VC&>(ClientMove).SavedWindAir;
+			SpeedMultiplier = static_cast<const FSavedMove_VC&>(ClientMove).SavedSpeedMultiplier;
 		}
 
 		virtual bool Serialize(UCharacterMovementComponent& CharacterMovement, FArchive& Ar, UPackageMap* PackageMap, ENetworkMoveType MoveType) override
@@ -197,6 +209,16 @@ namespace
 			else
 			{
 				WindAir = FVector::ZeroVector;
+			}
+			uint8 bHasSpeed = Ar.IsSaving() && SpeedMultiplier != 1.f ? 1 : 0;
+			Ar.SerializeBits(&bHasSpeed, 1);
+			if (bHasSpeed)
+			{
+				Ar << SpeedMultiplier;
+			}
+			else
+			{
+				SpeedMultiplier = 1.f;
 			}
 			return !Ar.IsError();
 		}
@@ -508,6 +530,15 @@ void UVCMovementComponent::PerformMovement(float DeltaTime)
 	// NPCs) starts from the gravity at its own position, so prediction and authority agree with no new replicated state;
 	// simulated proxies take the engine's replicated gravity direction.
 	UpdatePlanetGravity();
+	// The speed multiplier of the move (G242): this machine's own where it moves the pawn itself; a locally controlled
+	// client takes it in ReplicateMoveToServer (a replay from the saved move) and the server, for a client's pawn, from
+	// the move data (MoveAutonomous).
+	const bool bServesClientMoves = CharacterOwner && CharacterOwner->GetLocalRole() == ROLE_Authority && CharacterOwner->IsPlayerControlled()
+		&& !CharacterOwner->IsLocallyControlled();
+	if (CharacterOwner && CharacterOwner->GetLocalRole() != ROLE_AutonomousProxy && !bServesClientMoves)
+	{
+		MoveSpeedMultiplier = GASSpeedMultiplier;
+	}
 	// The gait table's values for this move, from the saved-move state and the rotation mode both sides hold (C4).
 	ApplyGaitTable();
 	// A montage's root motion only while the move has no input (D106), decided from the move itself.
@@ -522,6 +553,8 @@ void UVCMovementComponent::ReplicateMoveToServer(float DeltaTime, const FVector&
 {
 	// This move's air from this machine's read; the saved move keeps it and the move data sends it (G220).
 	MoveWindAir = ReadWindAir();
+	// And the speed multiplier from the attribute as this machine has it (G242).
+	MoveSpeedMultiplier = GASSpeedMultiplier;
 	Super::ReplicateMoveToServer(DeltaTime, NewAcceleration);
 	if (CVarTraceMoves.GetValueOnGameThread() != 0)
 	{
@@ -565,6 +598,18 @@ void UVCMovementComponent::MoveAutonomous(float ClientTimeStamp, float DeltaTime
 				UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s: the client's wind air %s is outside the server's envelope (mean %s, gustiness %.2f); clamped to %s."),
 					*GetNameSafe(CharacterOwner), *MoveData->WindAir.ToCompactString(), *CachedWeatherMeanWind.ToCompactString(), CachedWeatherGustiness,
 					*MoveWindAir.ToCompactString());
+			}
+			// The speed multiplier the client moved with, when it is the server's or the value the server replaced a
+			// moment ago: a gameplay effect on the speed is applied here a trip before the client has it (G242).
+			bool bRejected = false;
+			const UWorld* World = GetWorld();
+			const double SinceChange = World && GASSpeedMultiplierChangedSeconds >= 0.0 ? World->GetTimeSeconds() - GASSpeedMultiplierChangedSeconds : -1.0;
+			MoveSpeedMultiplier = ResolveClientSpeedMultiplier(MoveData->SpeedMultiplier, GASSpeedMultiplier, PreviousGASSpeedMultiplier, SinceChange,
+				SpeedMultiplierClientGrace, bRejected);
+			if (bRejected)
+			{
+				UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s: the client's speed multiplier %.3f is neither the server's %.3f nor its previous %.3f within %.2f s; the server's used."),
+					*GetNameSafe(CharacterOwner), MoveData->SpeedMultiplier, GASSpeedMultiplier, PreviousGASSpeedMultiplier, SpeedMultiplierClientGrace);
 			}
 		}
 	}
@@ -619,6 +664,21 @@ FVector UVCMovementComponent::QuantizeWindAir(const FVector& Air)
 		return static_cast<double>(FMath::Clamp(FMath::RoundToInt32(V), static_cast<int32>(MIN_int16), static_cast<int32>(MAX_int16)));
 	};
 	return FVector(Axis(Air.X), Axis(Air.Y), Axis(Air.Z));
+}
+
+float UVCMovementComponent::ResolveClientSpeedMultiplier(float ClientMultiplier, float Current, float Previous, double SecondsSinceChange, float Grace, bool& bOutRejected)
+{
+	bOutRejected = false;
+	if (FMath::IsNearlyEqual(ClientMultiplier, Current, 1.0e-4f))
+	{
+		return ClientMultiplier;
+	}
+	if (SecondsSinceChange >= 0.0 && SecondsSinceChange <= Grace && FMath::IsNearlyEqual(ClientMultiplier, Previous, 1.0e-4f))
+	{
+		return ClientMultiplier;
+	}
+	bOutRejected = true;
+	return Current;
 }
 
 FVector UVCMovementComponent::ClampClientWindAir(const FVector& ClientAir, const FVector& MeanWind, float Gustiness, float Tolerance, float SlackFloor, bool& bOutClamped)
@@ -1377,7 +1437,14 @@ float UVCMovementComponent::ImmersionDepth() const
 
 void UVCMovementComponent::OnMoveSpeedAttributeChanged(const FOnAttributeChangeData& Data)
 {
-	GASSpeedMultiplier = FMath::Max(0.f, Data.NewValue);
+	const float NewMultiplier = FMath::Max(0.f, Data.NewValue);
+	if (NewMultiplier != GASSpeedMultiplier)
+	{
+		// The server accepts a client's move made with the value replaced, for a while (G242).
+		PreviousGASSpeedMultiplier = GASSpeedMultiplier;
+		GASSpeedMultiplierChangedSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : -1.0;
+	}
+	GASSpeedMultiplier = NewMultiplier;
 	MaxWalkSpeed = BaseMaxWalkSpeed * GASSpeedMultiplier;
 }
 
