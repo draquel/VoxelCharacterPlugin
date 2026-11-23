@@ -22,6 +22,9 @@
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 #include "VoxelChunkManager.h"
+#include "VoxelMapSubsystem.h"
+#include "GameFramework/PlayerController.h"
+#include "Map/VCMapExplorationComponent.h"
 #include "VoxelWorldConfiguration.h"
 
 namespace
@@ -193,22 +196,45 @@ void AVCPlayerState::OnRep_Progression()
 FString AVCPlayerState::GetSaveKey() const
 {
 	const FUniqueNetIdRepl& NetId = GetUniqueId();
-	if (NetId.IsValid())
+	return NetId.IsValid() ? ComposeSaveKey(NetId.ToString(), NetId.GetType() == FName(TEXT("NULL")), SaveKeySuffix)
+		: ComposeSaveKey(FString(), false, FString());
+}
+
+FString AVCPlayerState::ComposeSaveKey(const FString& NetId, bool bNullId, const FString& Suffix)
+{
+	if (NetId.IsEmpty())
 	{
-		FString Key = NetId.ToString();
-		// The Null online subsystem mints "<ComputerName>-<32 hex>" with a fresh GUID per session; keep
-		// the stable machine part so a standalone / PIE player finds their entry next time.
-		if (NetId.GetType() == FName(TEXT("NULL")))
-		{
-			int32 Dash = INDEX_NONE;
-			if (Key.FindLastChar(TEXT('-'), Dash) && Key.Len() - Dash - 1 == 32)
-			{
-				Key.LeftInline(Dash);
-			}
-		}
-		return Key;
+		return TEXT("Local0");
 	}
-	return TEXT("Local0");
+	if (!bNullId)
+	{
+		return NetId;
+	}
+	// The Null online subsystem mints "<ComputerName>-<32 hex>" with a fresh GUID per session; keep the stable machine
+	// part so a standalone / PIE player finds their entry next time. Every player on one machine has that part, so a
+	// play-in-editor instance after the first adds its number (G271).
+	FString Key = NetId;
+	int32 Dash = INDEX_NONE;
+	if (Key.FindLastChar(TEXT('-'), Dash) && Key.Len() - Dash - 1 == 32)
+	{
+		Key.LeftInline(Dash);
+	}
+	return Suffix.IsEmpty() ? Key : FString::Printf(TEXT("%s-%s"), *Key, *Suffix);
+}
+
+void AVCPlayerState::SetMapExplored(const FString& Encoded, int32 TileCount)
+{
+	if (HasAuthority())
+	{
+		MapExploredTiles = Encoded;
+		MapExploredTileCount = FMath::Max(0, TileCount);
+	}
+}
+
+bool AVCPlayerState::IsOwnedByLocalPlayer() const
+{
+	const APlayerController* PC = GetPlayerController();
+	return PC && PC->IsLocalController();
 }
 
 void AVCPlayerState::ExportSaveState(FVCPlayerSaveState& OutState) const
@@ -219,6 +245,19 @@ void AVCPlayerState::ExportSaveState(FVCPlayerSaveState& OutState) const
 	OutState.bHasRespawnPoint = bHasRespawnPoint;
 	OutState.RespawnPoint = RespawnPoint;
 	OutState.ChosenAppearance = ChosenAppearance.ToSoftObjectPath();
+
+	// Where the player has been (G271): a local player's own map is this world's; a remote player's is the mask its
+	// client reported last (UVCMapExplorationComponent), or the one a save gave it if the client has reported none since.
+	const UVoxelMapSubsystem* Map = GetWorld() ? GetWorld()->GetSubsystem<UVoxelMapSubsystem>() : nullptr;
+	if (IsOwnedByLocalPlayer() && Map)
+	{
+		OutState.MapExploredTiles = Map->ExportExploredTiles(OutState.MapExploredTileCount);
+	}
+	else
+	{
+		OutState.MapExploredTiles = MapExploredTiles;
+		OutState.MapExploredTileCount = MapExploredTileCount;
+	}
 
 	if (const AVCCharacterBase* Avatar = Cast<AVCCharacterBase>(GetPawn()))
 	{
@@ -254,6 +293,13 @@ void AVCPlayerState::ExportSaveState(FVCPlayerSaveState& OutState) const
 
 void AVCPlayerState::CaptureAvatarState()
 {
+	// A local player's map is this world's: keep it too, for a save after the controller has gone (G271).
+	const UVoxelMapSubsystem* Map = GetWorld() ? GetWorld()->GetSubsystem<UVoxelMapSubsystem>() : nullptr;
+	if (HasAuthority() && Map && IsOwnedByLocalPlayer())
+	{
+		MapExploredTiles = Map->ExportExploredTiles(MapExploredTileCount);
+	}
+
 	const AVCCharacterBase* Avatar = Cast<AVCCharacterBase>(GetPawn());
 	if (!HasAuthority() || !Avatar)
 	{
@@ -313,9 +359,28 @@ void AVCPlayerState::ImportSaveState(const FVCPlayerSaveState& State)
 	LastKnownHealth = State.Health;
 	LastKnownStamina = State.Stamina;
 
-	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: imported save state (%d items, %d equipped, cleared %d, spawn %s)"), *GetName(),
+	// The player's map (G271): a local player's goes into this world's map; a remote player's is kept for the next save
+	// and sent to the owning client, whose map lives in its own world. Importing merges, so a second import changes nothing.
+	MapExploredTiles = State.MapExploredTiles;
+	MapExploredTileCount = State.MapExploredTiles.IsEmpty() ? 0 : State.MapExploredTileCount;
+	if (!MapExploredTiles.IsEmpty())
+	{
+		if (IsOwnedByLocalPlayer())
+		{
+			if (UVoxelMapSubsystem* Map = GetWorld() ? GetWorld()->GetSubsystem<UVoxelMapSubsystem>() : nullptr)
+			{
+				Map->ImportExploredTiles(MapExploredTiles, MapExploredTileCount);
+			}
+		}
+		else if (UVCMapExplorationComponent* Sync = GetPlayerController() ? GetPlayerController()->FindComponentByClass<UVCMapExplorationComponent>() : nullptr)
+		{
+			Sync->SendToOwningClient(MapExploredTiles, MapExploredTileCount);
+		}
+	}
+
+	UE_LOG(LogVoxelCharacter, Log, TEXT("%s: imported save state (%d items, %d equipped, cleared %d, spawn %s, %d explored map tile(s))"), *GetName(),
 		State.Inventory.Num(), State.Equipment.Num(), State.Progression.DungeonsCleared,
-		State.bHasLastTransform ? *State.LastTransform.GetLocation().ToCompactString() : TEXT("default"));
+		State.bHasLastTransform ? *State.LastTransform.GetLocation().ToCompactString() : TEXT("default"), MapExploredTileCount);
 
 	// Already playing (the world save loads after the first spawn; mid-session loads): apply it now.
 	if (AVCCharacterBase* Avatar = Cast<AVCCharacterBase>(GetPawn()))

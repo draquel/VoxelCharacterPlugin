@@ -15,6 +15,7 @@ class UInventoryComponent;
 class UItemCursorWidget;
 class UEquipmentManagerComponent;
 class UVCMinimapWidget;
+class UVCMapExplorationComponent;
 class UVCWorldMapWidget;
 class UVoxelChunkManager;
 class UVoxelWorldConfiguration;
@@ -492,6 +493,10 @@ private:
 	/** The equipment manager the held slot belongs to. Equipment source only. */
 	UPROPERTY()
 	TObjectPtr<UEquipmentManagerComponent> HeldEquipmentManager;
+
+	/** The player's map exploration between its client and the server's save (G271). */
+	UPROPERTY(VisibleAnywhere, Category = "VoxelCharacter|Map")
+	TObjectPtr<UVCMapExplorationComponent> MapExploration;
 
 	/** Whether we've bound slot click delegates (guard against double-bind). */
 	bool bSlotDelegatesBound = false;

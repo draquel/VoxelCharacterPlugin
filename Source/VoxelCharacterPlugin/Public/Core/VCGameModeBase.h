@@ -154,6 +154,13 @@ public:
 		float Spacing, FVector& OutLocation);
 
 protected:
+	/**
+	 * In a play-in-editor world, a player whose login names its PIE instance (UVCLocalPlayer::LoginOption) gets
+	 * "PIE<n>" on its save key, before PostLogin restores the player from the save (G271).
+	 */
+	virtual FString InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId, const FString& Options,
+		const FString& Portal = TEXT("")) override;
+
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual void Logout(AController* Exiting) override;
 	virtual void StartPlay() override;

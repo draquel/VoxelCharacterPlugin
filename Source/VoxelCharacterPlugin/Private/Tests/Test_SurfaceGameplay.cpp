@@ -201,6 +201,8 @@ bool FVCSurface_PlayerSaveRoundTrip::RunTest(const FString& Parameters)
 	State.bHasVitals = true;
 	State.Health = 73.5f;
 	State.Stamina = 12.f;
+	State.MapExploredTiles = TEXT("VMXM-the-player-map"); // an opaque blob to the save state (G271)
+	State.MapExploredTileCount = 42;
 
 	FString Json;
 	TestTrue(TEXT("Serialize"), FJsonObjectConverter::UStructToJsonObjectString(State, Json));
@@ -215,6 +217,8 @@ bool FVCSurface_PlayerSaveRoundTrip::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Respawn point"), Back.bHasRespawnPoint && Back.RespawnPoint.GetLocation().Equals(State.RespawnPoint.GetLocation()));
 	TestTrue(TEXT("Last transform"), Back.bHasLastTransform && Back.LastTransform.GetLocation().Equals(State.LastTransform.GetLocation()));
 	TestEqual(TEXT("Health"), Back.Health, 73.5f, 0.001f);
+	TestEqual(TEXT("Map exploration"), Back.MapExploredTiles, State.MapExploredTiles);
+	TestEqual(TEXT("Map exploration tiles"), Back.MapExploredTileCount, 42);
 	return true;
 }
 
