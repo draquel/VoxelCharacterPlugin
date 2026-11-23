@@ -3,6 +3,7 @@
 #include "Core/VCPlayerController.h"
 #include "Core/VCPlayerState.h"
 #include "Map/VCMapExplorationComponent.h"
+#include "VoxelEditReplicationComponent.h"
 #include "UI/VCVitalsWidget.h"
 #include "UI/VCCarriedWeaponsWidget.h"
 #include "UI/VCReticleWidget.h"
@@ -64,6 +65,8 @@ AVCPlayerController::AVCPlayerController()
 {
 	// The player's map exploration between its client and the server's save (G271).
 	MapExploration = CreateDefaultSubobject<UVCMapExplorationComponent>(TEXT("MapExploration"));
+	// The server's voxel edits to this player's client (G273): a dig or a placement, another player's, a flood.
+	EditReplication = CreateDefaultSubobject<UVoxelEditReplicationComponent>(TEXT("EditReplication"));
 }
 
 // ---------------------------------------------------------------------------
