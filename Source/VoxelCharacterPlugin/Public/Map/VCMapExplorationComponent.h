@@ -36,8 +36,11 @@ private:
  * The player's map exploration between its client and the server (G271). A client's map lives in the client's world, so
  * the server's save cannot read it: the owning client sends its explored mask when it has grown (at most every
  * vc.Map.ExploredPushSeconds), the server checks it and keeps it on the player state for the next save, and a mask a
- * save restores goes back to the owning client the same way. On the controller of every player; it does nothing for a
- * local player (standalone, a listen server's host), whose map is the server world's own.
+ * save restores goes back to the owning client the same way. The server also sends its map's edit overlays to a remote
+ * client when they change (at most every vc.Map.OverlayPushSeconds) once the client's edit layer is the server's (G273,
+ * D193): a map draws a tile's overlay from the tile's loaded chunks, so the edits a client holds far from it show on its
+ * map only through the server's overlays, which the client keeps until those chunks load. On the controller of every
+ * player; it does nothing for a local player (standalone, a listen server's host), whose map is the server world's own.
  */
 UCLASS(ClassGroup = (VoxelCharacter), meta = (BlueprintSpawnableComponent))
 class VOXELCHARACTERPLUGIN_API UVCMapExplorationComponent : public UActorComponent
@@ -87,9 +90,28 @@ protected:
 	UFUNCTION(Client, Reliable)
 	void Client_RestoreExploredPart(int32 Index, int32 Count, const FString& Part, int32 TileCount);
 
+	/** Server -> owning client: one part of the server map's edit overlays (UVoxelMapSubsystem::ExportEditOverlays; G273). */
+	UFUNCTION(Client, Reliable)
+	void Client_ReceiveOverlayPart(int32 Index, int32 Count, const FString& Part);
+
 private:
 	/** @return True on the owning client of a remote player (a client's world), where the mask is pushed from. */
 	bool IsRemoteOwningClient() const;
+
+	/** @return True on the server for a remote player's controller, where the map's overlays are pushed from. */
+	bool IsServingRemoteClient() const;
+
+	/** Server: send the server map's edit overlays to the owning client when they changed and its edits are in step. */
+	void PushOverlays(float DeltaTime);
+
+	/** The overlays blob last sent (the server); unset: none sent. */
+	TOptional<FString> LastSentOverlays;
+
+	/** Seconds since the overlays were last checked (the server). */
+	float SecondsSinceOverlayPush = 0.f;
+
+	/** The overlay parts being joined (the client). */
+	FVCExploredBlobAssembler OverlayAssembler;
 
 	/** The exploration revision last sent (the owning client); MAX_uint64: none sent. */
 	uint64 LastPushedRevision = MAX_uint64;
