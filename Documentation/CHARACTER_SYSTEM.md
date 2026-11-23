@@ -1409,7 +1409,11 @@ runs `FellOutOfWorld`; `RecoverFromMissingTerrain` puts a pawn whose terrain nev
   (`AddDungeonCleared(bBossKilled)` on the authority, `OnProgressionChanged`). Layers above (VoxelWorldPOI's dungeon
   objective) push objective text to the controller; this plugin knows nothing of dungeons.
 - **Saves.** `AVCPlayerState::ExportSaveState` / `ImportSaveState(FVCPlayerSaveState)`: items, progression, rest point,
-  last transform, vitals. `GetSaveKey()` strips the Null subsystem's per-session GUID, so a PIE player keeps one key.
+  last transform, vitals, the player's map exploration (G271: a local player's from its world's map, a remote
+  player's from what its client sent, `UVCMapExplorationComponent` on the controller, which also sends a saved mask back
+  to the client). `GetSaveKey()` strips the Null subsystem's per-session GUID, so a PIE player keeps one key; in the
+  editor a PIE instance after the first adds `-PIE<n>` (`UVCLocalPlayer`'s login option, `AVCGameModeBase::InitNewPlayer`),
+  so two PIE players do not share one entry.
   The engine drops the pawn before `Logout`, so the controller calls `CaptureAvatarState()` on unpossess and
   `PawnLeavingGame`; `AVCGameModeBase` broadcasts `OnPlayerLoggingIn` (before the first pawn) and `OnPlayerLoggingOut`.
 

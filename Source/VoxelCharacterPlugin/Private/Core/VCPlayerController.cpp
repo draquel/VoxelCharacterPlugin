@@ -2,6 +2,7 @@
 
 #include "Core/VCPlayerController.h"
 #include "Core/VCPlayerState.h"
+#include "Map/VCMapExplorationComponent.h"
 #include "UI/VCVitalsWidget.h"
 #include "UI/VCCarriedWeaponsWidget.h"
 #include "UI/VCReticleWidget.h"
@@ -61,6 +62,8 @@
 
 AVCPlayerController::AVCPlayerController()
 {
+	// The player's map exploration between its client and the server's save (G271).
+	MapExploration = CreateDefaultSubobject<UVCMapExplorationComponent>(TEXT("MapExploration"));
 }
 
 // ---------------------------------------------------------------------------

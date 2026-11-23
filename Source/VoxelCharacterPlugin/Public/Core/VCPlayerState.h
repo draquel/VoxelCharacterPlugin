@@ -116,9 +116,39 @@ public:
 
 	// --- Save (feature 9) ---
 
-	/** Stable key a save file stores this player under: the unique net id, or Local0 without one. */
+	/**
+	 * Stable key a save file stores this player under: the unique net id, or Local0 without one. A Null online
+	 * subsystem id keeps its machine part, with the save key suffix (SetSaveKeySuffix) after it. Meaningful on the server.
+	 */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Save")
 	FString GetSaveKey() const;
+
+	/**
+	 * Pure: the save key for a net id (GetSaveKey).
+	 * @param NetId   The unique net id as a string; empty: no id
+	 * @param bNullId True when the id is the Null online subsystem's ("<machine>-<32 hex>", a fresh GUID per session)
+	 * @param Suffix  Appended to a Null id's machine part after a dash (the PIE instance, G271); empty: none
+	 * @return The key: a Null id's machine part with the suffix, any other id as it is, Local0 without one
+	 */
+	static FString ComposeSaveKey(const FString& NetId, bool bNullId, const FString& Suffix);
+
+	/**
+	 * Authority: a suffix for the save key of a Null id (the game mode sets "PIE<n>" for a play-in-editor instance
+	 * after the first, so two players on one machine do not share one save entry; G271).
+	 * @param Suffix The suffix; empty: none
+	 */
+	void SetSaveKeySuffix(const FString& Suffix) { SaveKeySuffix = Suffix; }
+
+	/**
+	 * Authority: the player's map exploration, as the owning client reported it (UVCMapExplorationComponent) or a
+	 * save restored it; ExportSaveState writes it for a remote player (a local player's comes from its own map).
+	 * @param Encoded   The explored mask (UVoxelMapSubsystem::ExportExploredTiles)
+	 * @param TileCount The tiles it holds
+	 */
+	void SetMapExplored(const FString& Encoded, int32 TileCount);
+
+	/** @return The tiles of the last explored mask SetMapExplored kept (server only). */
+	int32 GetMapExploredTileCount() const { return MapExploredTileCount; }
 
 	/** Authority: everything about this player worth saving, including the live avatar's items, position and vitals. */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "VoxelCharacter|Save")
@@ -222,6 +252,16 @@ protected:
 	float PendingHealth = 0.f;
 	float PendingStamina = 0.f;
 	bool bHasPendingVitals = false;
+
+	/** @return True when this player is the local player of this machine (standalone, a listen server's host). */
+	bool IsOwnedByLocalPlayer() const;
+
+	/** The save key's suffix for a Null id (SetSaveKeySuffix; server only). */
+	FString SaveKeySuffix;
+
+	/** The player's explored mask and its tile count (SetMapExplored; server only). */
+	FString MapExploredTiles;
+	int32 MapExploredTileCount = 0;
 
 	/** Last avatar's transform / vitals (CaptureAvatarState, ImportSaveState): what a save stores without a pawn. */
 	FTransform LastKnownTransform;

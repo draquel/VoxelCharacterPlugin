@@ -4,6 +4,8 @@
 #include "Core/VCPlayerState.h"
 #include "Core/VCCharacterBase.h"
 #include "Core/VCPlayerController.h"
+#include "Core/VCLocalPlayer.h"
+#include "Kismet/GameplayStatics.h"
 #include "VoxelCharacterPlugin.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
@@ -268,6 +270,28 @@ APawn* AVCGameModeBase::SpawnDefaultPawnAtTransform_Implementation(AController* 
 			*GetNameSafe(PawnClass), *SpawnTransform.GetLocation().ToCompactString());
 	}
 	return ResultPawn;
+}
+
+FString AVCGameModeBase::InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId, const FString& Options,
+	const FString& Portal)
+{
+	const FString Error = Super::InitNewPlayer(NewPlayerController, UniqueId, Options, Portal);
+#if WITH_EDITOR
+	// Every play-in-editor player has the same Null id's machine part, so its save entry would be every other's: the
+	// instance's number keeps them apart (G271). The editor only: a packaged server never takes the option.
+	const UWorld* World = GetWorld();
+	AVCPlayerState* PS = NewPlayerController ? NewPlayerController->GetPlayerState<AVCPlayerState>() : nullptr;
+	if (PS && World && World->WorldType == EWorldType::PIE)
+	{
+		const FString Instance = UGameplayStatics::ParseOption(Options, UVCLocalPlayer::LoginOption);
+		if (!Instance.IsEmpty() && Instance.IsNumeric())
+		{
+			PS->SetSaveKeySuffix(FString::Printf(TEXT("PIE%s"), *Instance));
+			UE_LOG(LogVoxelCharacter, Log, TEXT("Play-in-editor instance %s: save key '%s'."), *Instance, *PS->GetSaveKey());
+		}
+	}
+#endif
+	return Error;
 }
 
 void AVCGameModeBase::PostLogin(APlayerController* NewPlayer)

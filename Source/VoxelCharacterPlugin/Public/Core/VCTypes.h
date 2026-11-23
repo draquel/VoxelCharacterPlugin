@@ -284,6 +284,18 @@ struct VOXELCHARACTERPLUGIN_API FVCPlayerSaveState
 	/** The body the player chose (AVCPlayerState::SetChosenAppearance; character animation P6); empty: the rules decide. */
 	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
 	FSoftObjectPath ChosenAppearance;
+
+	/**
+	 * Where this player has been on the map (G271): the player's own map's explored mask, as
+	 * UVoxelMapSubsystem::ExportExploredTiles encodes it (a 'VMXM' blob); empty when the player explored nothing or the
+	 * save is from before G271 (the world's single mask then, VoxelWorldSave's migration).
+	 */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	FString MapExploredTiles;
+
+	/** The number of tiles MapExploredTiles holds. */
+	UPROPERTY(BlueprintReadWrite, Category = "VoxelCharacter|Save")
+	int32 MapExploredTileCount = 0;
 };
 
 /** A change of the owner's charge the server hears of (a move request of kind EVCMoveKind::Charge; the sword moves plan, D167). */
