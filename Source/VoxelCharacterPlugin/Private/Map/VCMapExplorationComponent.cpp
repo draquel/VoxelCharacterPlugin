@@ -5,6 +5,7 @@
 #include "VoxelCharacterPlugin.h"
 #include "VoxelMapExploredMask.h"
 #include "VoxelMapSubsystem.h"
+#include "VoxelEditReplicationComponent.h"
 
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -14,6 +15,14 @@
 
 namespace
 {
+	TAutoConsoleVariable<float> CVarMapOverlayPushSeconds(
+		TEXT("vc.Map.OverlayPushSeconds"),
+		2.0f,
+		TEXT("How often at most the server sends its map's edit overlays to a remote client, in seconds, when they changed and ")
+		TEXT("the client's edits are in step with the server's (G273): a client's map shows the edits far from it only ")
+		TEXT("through them. 0 = every tick of the component (a second)."),
+		ECVF_Default);
+
 	TAutoConsoleVariable<float> CVarMapExploredPushSeconds(
 		TEXT("vc.Map.ExploredPushSeconds"),
 		5.0f,
@@ -175,9 +184,82 @@ bool UVCMapExplorationComponent::IsRemoteOwningClient() const
 	return PC && World && World->GetNetMode() == NM_Client && PC->IsLocalController();
 }
 
+bool UVCMapExplorationComponent::IsServingRemoteClient() const
+{
+	const APlayerController* PC = Cast<APlayerController>(GetOwner());
+	const UWorld* World = GetWorld();
+	return PC && World && World->GetNetMode() != NM_Client && World->GetNetMode() != NM_Standalone && !PC->IsLocalController()
+		&& PC->GetNetConnection() != nullptr;
+}
+
+void UVCMapExplorationComponent::PushOverlays(float DeltaTime)
+{
+	SecondsSinceOverlayPush += DeltaTime;
+	if (SecondsSinceOverlayPush < CVarMapOverlayPushSeconds.GetValueOnGameThread())
+	{
+		return;
+	}
+	SecondsSinceOverlayPush = 0.f;
+	// The client's edit layer first: a client reconciles the overlays with its own edits (a tile with none left is
+	// cleared), so they go once its edits are the server's. Messages on the controller's channel arrive in order.
+	const AActor* Owner = GetOwner();
+	const UVoxelEditReplicationComponent* Edits = Owner ? Owner->FindComponentByClass<UVoxelEditReplicationComponent>() : nullptr;
+	const UVoxelMapSubsystem* Map = GetWorld()->GetSubsystem<UVoxelMapSubsystem>();
+	if (!Map || (Edits && !Edits->IsClientInStep()))
+	{
+		return;
+	}
+	int32 TileCount = 0;
+	const FString Blob = Map->ExportEditOverlays(TileCount);
+	if (LastSentOverlays.IsSet() ? LastSentOverlays.GetValue() == Blob : Blob.IsEmpty())
+	{
+		return;
+	}
+	if (Blob.Len() > MaxBlobChars)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("Map overlays: the server's edit overlays (%d chars, %d tiles) are over the %d a client takes; not sent."),
+			Blob.Len(), TileCount, MaxBlobChars);
+		return;
+	}
+	LastSentOverlays = Blob;
+	TArray<FString> Parts = SplitBlob(Blob);
+	if (Parts.Num() == 0)
+	{
+		Parts.Add(FString()); // no overlay left: the client's import clears its own, then rebuilds what its loaded chunks hold
+	}
+	for (int32 Index = 0; Index < Parts.Num(); ++Index)
+	{
+		Client_ReceiveOverlayPart(Index, Parts.Num(), Parts[Index]);
+	}
+	UE_LOG(LogVoxelCharacter, Verbose, TEXT("Map overlays: sent %d tile(s) to %s (%d chars in %d part(s))."), TileCount, *GetNameSafe(Owner),
+		Blob.Len(), Parts.Num());
+}
+
+void UVCMapExplorationComponent::Client_ReceiveOverlayPart_Implementation(int32 Index, int32 Count, const FString& Part)
+{
+	FString Blob;
+	if (!OverlayAssembler.AddPart(Index, Count, Part, MaxBlobChars, Blob))
+	{
+		return;
+	}
+	UVoxelMapSubsystem* Map = GetWorld() ? GetWorld()->GetSubsystem<UVoxelMapSubsystem>() : nullptr;
+	if (!Map)
+	{
+		UE_LOG(LogVoxelCharacter, Warning, TEXT("Map overlays: the server's edit overlays arrived in a world with no map; not kept."));
+		return;
+	}
+	const int32 Tiles = Map->ImportEditOverlays(Blob);
+	UE_LOG(LogVoxelCharacter, Log, TEXT("Map overlays: took the server's edit overlays (%d tile(s))."), Tiles);
+}
+
 void UVCMapExplorationComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	if (IsServingRemoteClient())
+	{
+		PushOverlays(DeltaTime);
+		return;
+	}
 	if (!IsRemoteOwningClient())
 	{
 		return;

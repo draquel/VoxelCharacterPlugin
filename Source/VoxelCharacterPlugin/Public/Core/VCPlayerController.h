@@ -16,6 +16,7 @@ class UItemCursorWidget;
 class UEquipmentManagerComponent;
 class UVCMinimapWidget;
 class UVCMapExplorationComponent;
+class UVoxelEditReplicationComponent;
 class UVCWorldMapWidget;
 class UVoxelChunkManager;
 class UVoxelWorldConfiguration;
@@ -497,6 +498,10 @@ private:
 	/** The player's map exploration between its client and the server's save (G271). */
 	UPROPERTY(VisibleAnywhere, Category = "VoxelCharacter|Map")
 	TObjectPtr<UVCMapExplorationComponent> MapExploration;
+
+	/** Sends the server's voxel edits to this player's client and writes them into its terrain (G273, VoxelWorlds). */
+	UPROPERTY(VisibleAnywhere, Category = "VoxelCharacter|Voxel")
+	TObjectPtr<UVoxelEditReplicationComponent> EditReplication;
 
 	/** Whether we've bound slot click delegates (guard against double-bind). */
 	bool bSlotDelegatesBound = false;

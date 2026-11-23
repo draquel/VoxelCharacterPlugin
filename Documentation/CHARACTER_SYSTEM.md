@@ -1251,8 +1251,9 @@ prediction (`BuildCrackLines`). The server keeps one break per player, checks it
 `UVoxelEditManager::CanEditAt`), advances it by elapsed time over the material's hardness
 (`FVoxelMaterialRegistry::GetHardness`) divided by `MiningSpeed`, and digs through `DigVoxelAt` when it completes
 (`Client_BlockBreakFinished`, `OnBlockBroken`). `Server_RequestVoxelModification(Destroy)` is refused while breaks are
-timed. Smooth worlds dig at once. Voxel edits are not replicated to clients (VoxelWorlds' edit layer), so a remote
-client sees its cracks but not the dug block.
+timed. Smooth worlds dig at once. The server sends every edit's voxels to every client (G273: the controller's
+`UVoxelEditReplicationComponent`, VoxelWorlds' `EDIT_LAYER.md`, "Edits on network clients"), so a remote client sees the
+dug block one round trip after the break ends, as every other player does; it does not predict the dig.
 
 **The ghost after a dig** (G75, closed 2026-11-02). Once a dig empties a block, the trace through its cell lands on the
 block behind it, whose place cell is the dug one, so the ghost used to move into the hole at once: a pale block where
@@ -1411,7 +1412,8 @@ runs `FellOutOfWorld`; `RecoverFromMissingTerrain` puts a pawn whose terrain nev
 - **Saves.** `AVCPlayerState::ExportSaveState` / `ImportSaveState(FVCPlayerSaveState)`: items, progression, rest point,
   last transform, vitals, the player's map exploration (G271: a local player's from its world's map, a remote
   player's from what its client sent, `UVCMapExplorationComponent` on the controller, which also sends a saved mask back
-  to the client). `GetSaveKey()` strips the Null subsystem's per-session GUID, so a PIE player keeps one key; in the
+  to the client, and the server map's edit overlays when they change and the client's edits are in step, G273's D193:
+  a client's map draws overlays from its loaded chunks only, so the edits far from it show through the server's). `GetSaveKey()` strips the Null subsystem's per-session GUID, so a PIE player keeps one key; in the
   editor a PIE instance after the first adds `-PIE<n>` (`UVCLocalPlayer`'s login option, `AVCGameModeBase::InitNewPlayer`),
   so two PIE players do not share one entry.
   The engine drops the pawn before `Logout`, so the controller calls `CaptureAvatarState()` on unpossess and
@@ -1572,7 +1574,7 @@ minimap's refill rule (G64): `MAP_UI_WIDGETS.md`.
 | Data | Authority | Replication |
 |---|---|---|
 | Movement | Server (character movement) | Built-in prediction; sprint and swim-rise as saved-move flags; planet gravity recomputed on both sides; the server simulates a move no longer than the client did (the project's `p.NetServerMaxMoveDeltaTimeScalar=1`: at the engine's 1.75 a frame over 0.125 s walked the server's pawn further and was corrected, G240); `vc.Net.TraceMoves` logs each move's inputs on both machines beside the corrections; no base a client cannot resolve (the terrain's collision) is replicated or named in a correction (G221, `vc.Net.ClearUnresolvableBase`) |
-| Voxel edits, block breaks | Server (`Server_RequestVoxelModification`, `Server_BeginBlockBreak`) | Edits are not replicated (VoxelWorlds); the client predicts cracks only |
+| Voxel edits, block breaks | Server (`Server_RequestVoxelModification`, `Server_BeginBlockBreak`) | Each edit's voxels to every client (G273): `UVoxelEditReplicationComponent` on the controller, a reliable client RPC per edit and the chunks a client lacks (a late join, a restart) nearest it first; the client writes the server's voxels (VoxelWorlds' `EDIT_LAYER.md`) and predicts only the cracks |
 | Inventory, equipment | Server (the gameplay plugins' components on the pawn) | Their own replication |
 | Attributes, effects, abilities | Server (ASC on the player state; an NPC's on the NPC) | GAS replication; prediction keys for activation |
 | Progression | Server | `Progression` on the player state |
