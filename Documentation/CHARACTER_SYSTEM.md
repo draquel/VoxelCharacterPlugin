@@ -1013,14 +1013,14 @@ modules: a MetaHuman arrives as content.
   and the aim camera at 1.5 m on either side, so every draw of the bow and every camera pull-in against the terrain
   flipped it, and the sync flipped the trousers and the shoes with it. Those two follow the body by leader pose, and
   the engine counts a follower's LOD change as its leader's: the body's AnimBP and its post-process rebuilt too, 12 ms
-  more on the worker, and the game thread waited for both in that frame (the twelve flips of six draws: 30 to 37 ms
-  against 15 to 19). The appearance now takes its leader-pose parts out of the parts actor's sync (`UVCAppearanceComponent::SetFollowersOnBodyLOD`):
+  more on the worker, and the game thread waited for both in that frame (six draws, twelve flips, in each of two runs: 30 to 42 ms
+  against 15 to 21 around them). The appearance now takes its leader-pose parts out of the parts actor's sync (`UVCAppearanceComponent::SetFollowersOnBodyLOD`):
   they take the body's LOD and change it when the body does (6, 13 and 30 m), and a face flip no longer rebuilds the
-  body (the same twelve flips: 20 to 25 ms). The trousers and the shoes are therefore one LOD finer between 3 and 6 m
+  body (the same draws, the A/B alternated in one editor: 20 to 25 ms, median 22, against the old way's median of 33 to 35). The trousers and the shoes are therefore one LOD finer between 3 and 6 m
   and from 13 to 30 m than the face-driven sync gave them. `vc.Appearance.FollowersOnBodyLOD 0` gives the sync its
   own list back (the A/B); `vc.Appearance.TraceLOD 1` logs every change of a worn mesh's LOD, drawn state, update
   rate and required bones, with a named scope in an Insights trace (`play_trace.py --scopes=G278*`). The face's own
-  flip is left, about 5 ms a flip: keeping it out of the play camera's band changes how the face looks (D195).
+  flip is left, about 5 ms a flip: keeping it out of the play camera's band changes how the face looks (D195; the face at LOD 0 at 3 m costs 0.1 ms of worker, its hair strands 1.15 ms of GPU).
 - `vc.Appearance [name|path|rule]` sets every player's choice on the server (an appearance the settings name, by its
   name, or a path; `rule` clears it; no argument lists them). `Scripts/setup_character_appearances.py` builds
   `DA_VCAppearance_LowPoly` and `DA_VCAppearance_Kellan` (`/Game/CharacterAnimation/Appearances`).
