@@ -9,6 +9,7 @@
 #include "Animation/VCCharacterAppearance.h"
 #include "Core/VCCharacterBase.h"
 #include "Core/VCTypes.h"
+#include "Components/LODSyncComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/SkeletalMesh.h"
@@ -24,6 +25,8 @@
 // - An appearance with a body mesh dresses the character's mesh, and none gives the class's own body back.
 // - The body's post-process AnimBP (a MetaHuman's correctives, G148): the appearance's LOD threshold and switch, off
 //   while the body is hidden from its player's view, the class's own settings back with its own body.
+// - The parts a body leads by leader pose leave the parts actor's LOD sync and take the body's LOD (G278), and the old
+//   way gives the sync its own list back.
 // - The foot-bone placement's pure parts: the pelvis drops to the lowest foot, within its limit; a planted foot tilts
 //   to the ground, within its limit, and a foot in its swing does not.
 // ---------------------------------------------------------------------------
@@ -163,6 +166,55 @@ bool FVCAppearance_BodyPostProcess::RunTest(const FString& Parameters)
 		Appearance->ApplyAppearance(nullptr);
 		TestEqual(TEXT("The class's own threshold back"), Threshold(), OwnThreshold);
 		TestFalse(TEXT("The class's own body runs its post-process"), Mesh->GetDisablePostProcessBlueprint());
+	}
+	GEngine->DestroyWorldContext(World);
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCAppearance_FollowersOnBodyLOD, "VoxelCharacter.Appearance.FollowersOnBodyLOD", VC_APPEARANCE_FLAGS)
+bool FVCAppearance_FollowersOnBodyLOD::RunTest(const FString& Parameters)
+{
+	USkeletalMesh* Cube = LoadObject<USkeletalMesh>(nullptr, TEXT("/Engine/EngineMeshes/SkeletalCube.SkeletalCube"));
+	if (!Cube)
+	{
+		AddWarning(TEXT("No /Engine/EngineMeshes/SkeletalCube for the parts"));
+		return true;
+	}
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("VCAppearanceLODSyncWorld"));
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Context.SetCurrentWorld(World);
+	World->InitializeActorsForPlay(FURL());
+	AActor* Parts = World->SpawnActor<AActor>();
+	if (TestNotNull(TEXT("A parts actor"), Parts))
+	{
+		// A MetaHuman's parts actor in small: a face that drives the sync, trousers and shoes that it sets
+		TMap<FName, USkeletalMeshComponent*> Meshes;
+		for (const FName Name : { FName(TEXT("Face")), FName(TEXT("Legs")), FName(TEXT("Feet")) })
+		{
+			USkeletalMeshComponent* Part = NewObject<USkeletalMeshComponent>(Parts, Name);
+			Part->SetSkeletalMesh(Cube);
+			Part->RegisterComponent();
+			Meshes.Add(Name, Part);
+		}
+		ULODSyncComponent* Sync = NewObject<ULODSyncComponent>(Parts, TEXT("LODSync"));
+		Sync->ComponentsToSync = { FComponentSync(TEXT("Face"), ESyncOption::Drive), FComponentSync(TEXT("Legs"), ESyncOption::Passive),
+			FComponentSync(TEXT("Feet"), ESyncOption::Passive) };
+		Sync->RegisterComponent();
+		const TArray<FComponentSync> Original = Sync->ComponentsToSync;
+		const TArray<FName> Followers = { TEXT("Legs"), TEXT("Feet") };
+		Meshes[TEXT("Legs")]->SetForcedLOD(1);
+
+		TestEqual(TEXT("Following the body: only the face stays in the sync"),
+			UVCAppearanceComponent::SetFollowersOnBodyLOD(*Sync, Original, Followers, true), 1);
+		TestTrue(TEXT("The face it is"), Sync->ComponentsToSync.Num() == 1 && Sync->ComponentsToSync[0].Name == TEXT("Face"));
+		TestEqual(TEXT("A follower's forced LOD is cleared: it takes its leader's"), Meshes[TEXT("Legs")]->GetForcedLOD(), 0);
+		TestEqual(TEXT("Twice changes nothing"), UVCAppearanceComponent::SetFollowersOnBodyLOD(*Sync, Original, Followers, true), 1);
+
+		TestEqual(TEXT("The old way: the sync's own list back"),
+			UVCAppearanceComponent::SetFollowersOnBodyLOD(*Sync, Original, Followers, false), 3);
+		TestTrue(TEXT("In its own order"), Sync->ComponentsToSync.Num() == 3 && Sync->ComponentsToSync[1].Name == TEXT("Legs")
+			&& Sync->ComponentsToSync[2].Name == TEXT("Feet"));
 	}
 	GEngine->DestroyWorldContext(World);
 	World->DestroyWorld(false);

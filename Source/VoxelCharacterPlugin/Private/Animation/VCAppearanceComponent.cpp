@@ -4,14 +4,18 @@
 
 #include "Animation/AnimClassInterface.h"
 #include "Animation/AnimInstance.h"
+#include "Algo/Compare.h"
 #include "Animation/VCCharacterAppearance.h"
 #include "ClothingSimulationInteractor.h"
+#include "Components/LODSyncComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInterface.h"
+#include "UObject/UObjectIterator.h"
 #include "VoxelCharacterPlugin.h"
 
 namespace
@@ -22,6 +26,23 @@ namespace
 		static const FIntProperty* Threshold = FindFProperty<FIntProperty>(USkeletalMeshComponent::StaticClass(), TEXT("PostProcessAnimBPLODThreshold"));
 		return Threshold;
 	}
+
+	void OnFollowersOnBodyLODChanged(IConsoleVariable*)
+	{
+		for (TObjectIterator<UVCAppearanceComponent> It; It; ++It)
+		{
+			if (!It->HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && It->GetWorld())
+			{
+				It->ApplyFollowersLOD();
+			}
+		}
+	}
+
+	TAutoConsoleVariable<int32> CVarFollowersOnBodyLOD(
+		TEXT("vc.Appearance.FollowersOnBodyLOD"),
+		1,
+		TEXT("A/B (G278): 1 the parts a worn body's mesh leads by leader pose (a MetaHuman's trousers and shoes) take the body's LOD, out of the parts actor's LOD sync; 0 the sync forces them to the LOD its face wants, and each change of it rebuilds the body's animation (10 to 15 ms in that frame)."),
+		FConsoleVariableDelegate::CreateStatic(&OnFollowersOnBodyLODChanged));
 }
 
 UVCAppearanceComponent::UVCAppearanceComponent()
@@ -173,9 +194,16 @@ bool UVCAppearanceComponent::ApplyAppearance(const UVCCharacterAppearance* Appea
 			else
 			{
 				Part->SetLeaderPoseComponent(Mesh);
+				LeaderPoseParts.Add(Part->GetFName());
 			}
 		}
 		SetPartsOwnerNoSee(Mesh->bOwnerNoSee, Mesh->bCastHiddenShadow);
+		if (ULODSyncComponent* Sync = PartsActor->FindComponentByClass<ULODSyncComponent>())
+		{
+			PartsLODSync = Sync;
+			OriginalPartsSync = Sync->ComponentsToSync;
+			ApplyFollowersLOD();
+		}
 	}
 	ApplyBodyPostProcess();
 	RefreshSimulations();
@@ -323,8 +351,50 @@ void UVCAppearanceComponent::ApplyBodyPostProcess()
 	}
 }
 
+int32 UVCAppearanceComponent::SetFollowersOnBodyLOD(ULODSyncComponent& Sync, const TArray<FComponentSync>& Original,
+	const TArray<FName>& Followers, bool bFollowBody)
+{
+	TArray<FComponentSync> Wanted = Original;
+	if (bFollowBody)
+	{
+		Wanted.RemoveAll([&Followers](const FComponentSync& Entry) { return Followers.Contains(Entry.Name); });
+	}
+	const bool bSame = Wanted.Num() == Sync.ComponentsToSync.Num() && Algo::Compare(Wanted, Sync.ComponentsToSync,
+		[](const FComponentSync& A, const FComponentSync& B) { return A.Name == B.Name && A.SyncOption == B.SyncOption; });
+	if (!bSame)
+	{
+		Sync.ComponentsToSync = MoveTemp(Wanted);
+		// The sync sets the LODs of what it lists again at once; a part it no longer lists keeps the last LOD forced on it
+		Sync.RefreshSyncComponents();
+	}
+	if (bFollowBody && Sync.GetOwner())
+	{
+		TArray<USkinnedMeshComponent*> Parts;
+		Sync.GetOwner()->GetComponents<USkinnedMeshComponent>(Parts);
+		for (USkinnedMeshComponent* Part : Parts)
+		{
+			if (Followers.Contains(Part->GetFName()) && Part->GetForcedLOD() != 0)
+			{
+				Part->SetForcedLOD(0);
+			}
+		}
+	}
+	return Sync.ComponentsToSync.Num();
+}
+
+void UVCAppearanceComponent::ApplyFollowersLOD()
+{
+	if (ULODSyncComponent* Sync = PartsLODSync.Get())
+	{
+		SetFollowersOnBodyLOD(*Sync, OriginalPartsSync, LeaderPoseParts, CVarFollowersOnBodyLOD.GetValueOnGameThread() != 0);
+	}
+}
+
 void UVCAppearanceComponent::RemoveParts()
 {
+	PartsLODSync.Reset();
+	OriginalPartsSync.Reset();
+	LeaderPoseParts.Reset();
 	if (PartsActor)
 	{
 		PartsActor->Destroy();

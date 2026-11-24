@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Components/LODSyncComponent.h"
 #include "VoxelCoreTypes.h"
 #include "VCAppearanceComponent.generated.h"
 
@@ -44,6 +45,9 @@ public:
 	/** @return The appearance worn; null for the class's own body */
 	UFUNCTION(BlueprintPure, Category = "VoxelCharacter|Appearance")
 	const UVCCharacterAppearance* GetAppearance() const { return Current; }
+
+	/** @return The spawned parts actor (a MetaHuman's Blueprint) whose meshes dress the body; null when none */
+	const AActor* GetPartsActor() const { return PartsActor; }
 
 	/** @return The anim class the worn appearance names; null when it names none */
 	UClass* GetAppearanceAnimClass() const;
@@ -92,6 +96,26 @@ public:
 	 */
 	void RefreshSimulations();
 
+	/**
+	 * Takes the parts that follow the body by leader pose out of the parts actor's LOD sync, or gives the sync its own
+	 * list back (G278). A MetaHuman's sync forces every part to the LOD its face wants, and the face's LOD changes at
+	 * the play camera's distances (the aim camera and the third-person camera are on either side of its first step). A
+	 * leader-pose part forced to a LOD of its own changes LOD with the face, and the engine counts a follower's LOD
+	 * change as its leader's: the body's AnimBP and post-process rebuild their required bones and every node caches its
+	 * bones again (the correctives' pose drivers, the control rig's construction), 10 to 15 ms of animation work in that
+	 * frame. Out of the sync a follower takes its leader's LOD, and changes LOD only when the body does.
+	 * @param Sync        The parts actor's LOD sync
+	 * @param Original    The sync's own list of components
+	 * @param Followers   The names of the parts that follow the body by leader pose
+	 * @param bFollowBody True: the followers out of the sync and their forced LOD cleared; false: the sync's own list
+	 * @return How many components the sync lists afterwards
+	 */
+	static int32 SetFollowersOnBodyLOD(ULODSyncComponent& Sync, const TArray<FComponentSync>& Original, const TArray<FName>& Followers,
+		bool bFollowBody);
+
+	/** Applies `vc.Appearance.FollowersOnBodyLOD` to the worn parts actor's LOD sync (G278); none: nothing to do. */
+	void ApplyFollowersLOD();
+
 private:
 	/** Points each rigid-body node's gravity along the owner's movement's gravity. */
 	void UpdateSimulationGravity();
@@ -132,6 +156,11 @@ private:
 	/** The spawned parts actor (the appearance's PartsActorClass), owned by the character. */
 	UPROPERTY(Transient)
 	TObjectPtr<AActor> PartsActor;
+
+	/** The parts actor's LOD sync (a MetaHuman's), its own list of components, and the parts that follow the body by leader pose (G278). */
+	TWeakObjectPtr<ULODSyncComponent> PartsLODSync;
+	TArray<FComponentSync> OriginalPartsSync;
+	TArray<FName> LeaderPoseParts;
 
 	/** The class's own body and its material overrides, kept on the first change. */
 	UPROPERTY(Transient)

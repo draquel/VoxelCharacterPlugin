@@ -1004,6 +1004,23 @@ modules: a MetaHuman arrives as content.
   ms a frame; a body past LOD 0 (another player farther off) saves 0.85 ms (with the LOD forced to 1: 2.6 to 3.1 ms
   with them, 1.8 to 2.2 without). The CSV profiler, one player standing in `VoxelDemo`, with two other editors open:
   the game thread's numbers were noise, the worker's held across repeated runs.
+- **The parts' LOD** (G278, 2026-11-24). A MetaHuman's Blueprint carries a LOD sync (`ULODSyncComponent`) that forces
+  every part to one LOD, the one its face wants while the face is drawn (Kellan's: four LODs, `Body` and `Face`
+  driving, the face winning); the character's own animated mesh is not in it and takes its own LOD by its size on
+  screen. A part's LOD change rebuilds its required bones, and every node of its graphs caches its bones again on the
+  next evaluation: the face's RigLogic 4.9 ms, the body post-process's pose drivers and its control rig's construction
+  event. Kellan's face steps from LOD 0 to 1 between 2.5 and 3 m from the camera, with the third-person camera at 3 m
+  and the aim camera at 1.5 m on either side, so every draw of the bow and every camera pull-in against the terrain
+  flipped it, and the sync flipped the trousers and the shoes with it. Those two follow the body by leader pose, and
+  the engine counts a follower's LOD change as its leader's: the body's AnimBP and its post-process rebuilt too, 12 ms
+  more on the worker, and the game thread waited for both in that frame (the twelve flips of six draws: 30 to 37 ms
+  against 15 to 19). The appearance now takes its leader-pose parts out of the parts actor's sync (`UVCAppearanceComponent::SetFollowersOnBodyLOD`):
+  they take the body's LOD and change it when the body does (6, 13 and 30 m), and a face flip no longer rebuilds the
+  body (the same twelve flips: 20 to 25 ms). The trousers and the shoes are therefore one LOD finer between 3 and 6 m
+  and from 13 to 30 m than the face-driven sync gave them. `vc.Appearance.FollowersOnBodyLOD 0` gives the sync its
+  own list back (the A/B); `vc.Appearance.TraceLOD 1` logs every change of a worn mesh's LOD, drawn state, update
+  rate and required bones, with a named scope in an Insights trace (`play_trace.py --scopes=G278*`). The face's own
+  flip is left, about 5 ms a flip: keeping it out of the play camera's band changes how the face looks (D195).
 - `vc.Appearance [name|path|rule]` sets every player's choice on the server (an appearance the settings name, by its
   name, or a path; `rule` clears it; no argument lists them). `Scripts/setup_character_appearances.py` builds
   `DA_VCAppearance_LowPoly` and `DA_VCAppearance_Kellan` (`/Game/CharacterAnimation/Appearances`).
