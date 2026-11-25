@@ -65,7 +65,7 @@ void AVCNPCAIController::SetPatrolRoute(const TArray<FVector>& Points)
 {
 	PatrolRoute = Points;
 	PatrolIndex = 0;
-	CurrentPath.Reset();
+	ResetPath();
 	if (PatrolRoute.Num() > 0)
 	{
 		LeashOrigin = PatrolRoute[0];
@@ -126,7 +126,7 @@ void AVCNPCAIController::Provoke(AActor* Attacker)
 	Target = Attacker;
 	LastSeenTime = World->GetTimeSeconds();
 	LastThreatLocation = Attacker->GetActorLocation();
-	CurrentPath.Reset();
+	ResetPath();
 	// Prey runs from it; a hostile turns on it, whatever its temperament (a light it fears still keeps it off:
 	// the next Think holds or backs off).
 	State = Behavior == EVCNPCBehavior::Prey ? EVCNPCAIState::Flee : EVCNPCAIState::Chase;
@@ -358,7 +358,7 @@ void AVCNPCAIController::OnUnPossess()
 	}
 	BoundCombat.Reset();
 	Target.Reset();
-	CurrentPath.Reset();
+	ResetPath();
 	State = EVCNPCAIState::Idle;
 	// The pawn's movement back to every frame (UpdateMovementTickRate may have slowed it).
 	if (UCharacterMovementComponent* Movement = GetPawn() ? GetPawn()->FindComponentByClass<UCharacterMovementComponent>() : nullptr)
@@ -388,6 +388,11 @@ void AVCNPCAIController::Tick(float DeltaSeconds)
 		// line of sight, decisions, the searches they start) in the same frame every interval (G73).
 		LastThinkTime = LastThinkTime < 0.0 ? Now - FMath::FRand() * PerceptionInterval : Now;
 		Think();
+	}
+
+	if (PendingPathHandle != 0)
+	{
+		PollPendingPath();
 	}
 
 	switch (State)
@@ -499,7 +504,7 @@ void AVCNPCAIController::Think()
 		bVisible = T != nullptr;
 		if (T)
 		{
-			CurrentPath.Reset();
+			ResetPath();
 		}
 	}
 	if (bVisible)
@@ -545,7 +550,7 @@ void AVCNPCAIController::Think()
 		{
 			AlertPack(T);
 		}
-		CurrentPath.Reset();
+		ResetPath();
 		State = Next;
 		if (State == EVCNPCAIState::Idle || State == EVCNPCAIState::Attack || State == EVCNPCAIState::Hold)
 		{
@@ -640,33 +645,63 @@ void AVCNPCAIController::SetPathTo(const FVector& Goal)
 {
 	const UWorld* PathWorld = GetWorld();
 	const double PathNow = PathWorld ? PathWorld->GetTimeSeconds() : 0.0;
+	// A search carried from an earlier frame (G281) is still running: no other until it lands (its goal stays the one the
+	// repath tests compare against).
+	if (PendingPathHandle != 0)
+	{
+		PollPendingPath();
+		return;
+	}
+	UVCVoxelPathProvider* Voxel = GetVoxelProvider();
 	// Over the voxels a failed search leaves no path to walk; callers retry while CurrentPath is empty, so
 	// throttle instead of running A* every frame.
-	if (GetVoxelProvider() && PathNow < NextPathRetryTime)
+	if (Voxel && PathNow < NextPathRetryTime)
 	{
 		return;
 	}
 	APawn* MyPawn = GetPawn();
-	CurrentPath.Reset();
-	PathIndex = 0;
 	LastPathGoal = Goal;
-	BestWaypointDistance = TNumericLimits<float>::Max();
-	LastProgressTime = -1.0;
 	if (!MyPawn)
 	{
+		ApplyPathResult(false, TArray<FVector>(), PathNow);
 		return;
 	}
+	TArray<FVector> Points;
 	bool bFound = false;
-	if (PathProvider.GetObject())
+	if (Voxel)
+	{
+		// The surface search may go on over the next frames, within the navigation's search budget: until its route lands
+		// the pawn keeps the route it has (a chaser the one toward where its target was; none: it stands), and the route
+		// it gets is the one a search in one frame gives.
+		FVCNPCCostScope Cost(FVCNPCCost::Get().PathSeconds);
+		++FVCNPCCost::Get().PathRequests;
+		const int32 Handle = Voxel->StartPath(MyPawn->GetActorLocation(), Goal);
+		if (!Voxel->PollPath(Handle, Points, bFound))
+		{
+			PendingPathHandle = Handle;
+			return;
+		}
+	}
+	else if (PathProvider.GetObject())
 	{
 		FVCNPCCostScope Cost(FVCNPCCost::Get().PathSeconds);
 		++FVCNPCCost::Get().PathRequests;
-		bFound = IVCPathProvider::Execute_FindPath(PathProvider.GetObject(), MyPawn->GetActorLocation(), Goal, CurrentPath);
+		bFound = IVCPathProvider::Execute_FindPath(PathProvider.GetObject(), MyPawn->GetActorLocation(), Goal, Points);
 	}
-	if (bFound && CurrentPath.Num() > 0 && GetVoxelProvider() && GetVoxelProvider()->WasLastPathPartial())
+	ApplyPathResult(bFound, MoveTemp(Points), PathNow);
+}
+
+void AVCNPCAIController::ApplyPathResult(bool bFound, TArray<FVector>&& Points, double Now)
+{
+	CurrentPath = MoveTemp(Points);
+	PathIndex = 0;
+	BestWaypointDistance = TNumericLimits<float>::Max();
+	LastProgressTime = -1.0;
+	UVCVoxelPathProvider* Voxel = GetVoxelProvider();
+	if (bFound && CurrentPath.Num() > 0 && Voxel && Voxel->WasLastPathPartial())
 	{
 		// Short of the goal: walk what there is, and search again only after a while (G73).
-		NextPathRetryTime = PathNow + PartialRepathSeconds;
+		NextPathRetryTime = Now + PartialRepathSeconds;
 	}
 	if (!bFound || CurrentPath.Num() == 0)
 	{
@@ -674,14 +709,51 @@ void AVCNPCAIController::SetPathTo(const FVector& Goal)
 		// Over the voxels a failed search means the goal is unreachable (water, cliffs): walking a straight
 		// line there would march the animal into the sea. Other providers (dungeon grids) keep the old
 		// straight-line fallback for the rare miss inside a room.
-		if (!GetVoxelProvider())
+		if (!Voxel)
 		{
-			CurrentPath.Add(Goal);
+			CurrentPath.Add(LastPathGoal);
 		}
 		else
 		{
-			NextPathRetryTime = PathNow + 0.75;
+			NextPathRetryTime = Now + 0.75;
 		}
+	}
+}
+
+bool AVCNPCAIController::PollPendingPath()
+{
+	if (PendingPathHandle == 0)
+	{
+		return false;
+	}
+	UVCVoxelPathProvider* Voxel = GetVoxelProvider();
+	if (!Voxel)
+	{
+		PendingPathHandle = 0;
+		return false;
+	}
+	TArray<FVector> Points;
+	bool bFound = false;
+	if (!Voxel->PollPath(PendingPathHandle, Points, bFound))
+	{
+		return true;
+	}
+	PendingPathHandle = 0;
+	const UWorld* World = GetWorld();
+	ApplyPathResult(bFound, MoveTemp(Points), World ? World->GetTimeSeconds() : 0.0);
+	return false;
+}
+
+void AVCNPCAIController::ResetPath()
+{
+	CurrentPath.Reset();
+	if (PendingPathHandle != 0)
+	{
+		if (const UVCVoxelPathProvider* Voxel = GetVoxelProvider())
+		{
+			Voxel->CancelPath(PendingPathHandle);
+		}
+		PendingPathHandle = 0;
 	}
 }
 
@@ -833,7 +905,8 @@ bool AVCNPCAIController::FollowPath(float DeltaSeconds)
 			const FVector Ahead = MyPawn->GetActorLocation() + FVCGravityFrame::HorizontalDirection(PawnMovement, CurrentPath[PathIndex] - MyPawn->GetActorLocation()) * 160.f;
 			UE_LOG(LogVoxelCharacter, Verbose, TEXT("%s AI: stuck %.1fs short of waypoint %d — blocking ahead and repathing."), *MyPawn->GetName(), Distance, PathIndex);
 			Voxel->ReportBlocked(Ahead, 60.f, 8.f);
-			CurrentPath.Reset();
+			// A search still running began before the block: the next one routes round it.
+			ResetPath();
 			PathIndex = 0;
 			BestWaypointDistance = TNumericLimits<float>::Max();
 			LastProgressTime = -1.0;
@@ -969,7 +1042,7 @@ void AVCNPCAIController::TickWander(float DeltaSeconds, double Now)
 {
 	if (CurrentPath.Num() == 0)
 	{
-		if (Now >= WanderWaitUntil)
+		if (Now >= WanderWaitUntil && !IsPathPending())
 		{
 			FVector Goal;
 			if (PickWanderGoal(Goal))
@@ -1042,7 +1115,7 @@ void AVCNPCAIController::TickFlee(float DeltaSeconds, double Now)
 		LastThreatLocation = T->GetActorLocation();
 	}
 	const bool bArrived = CurrentPath.Num() > 0 && !FollowPath(DeltaSeconds);
-	if ((CurrentPath.Num() == 0 || bArrived) && (LastFleePathTime < 0.0 || Now - LastFleePathTime > 0.5))
+	if ((CurrentPath.Num() == 0 || bArrived) && !IsPathPending() && (LastFleePathTime < 0.0 || Now - LastFleePathTime > 0.5))
 	{
 		FVector Goal;
 		if (PickFleeGoal(LastThreatLocation, Goal))
