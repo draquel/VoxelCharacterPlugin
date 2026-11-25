@@ -13,6 +13,44 @@ bool UVCVoxelPathProvider::FindPath_Implementation(const FVector& From, const FV
 	return bFound;
 }
 
+int32 UVCVoxelPathProvider::StartPath(const FVector& From, const FVector& To) const
+{
+	UVoxelSurfaceNavigationSubsystem* Nav = UVoxelSurfaceNavigationSubsystem::Get(this);
+	return Nav ? Nav->StartPathSearch(From, To) : 0;
+}
+
+bool UVCVoxelPathProvider::PollPath(int32 Handle, TArray<FVector>& OutPoints, bool& bOutFound) const
+{
+	OutPoints.Reset();
+	bOutFound = false;
+	UVoxelSurfaceNavigationSubsystem* Nav = UVoxelSurfaceNavigationSubsystem::Get(this);
+	if (!Nav || Handle == 0)
+	{
+		bLastPathPartial = false;
+		return true;
+	}
+	FVoxelSurfacePathStats Stats;
+	switch (Nav->PollPathSearch(Handle, OutPoints, Stats, bOutFound))
+	{
+	case EVoxelPathSearchState::Running:
+		return false;
+	case EVoxelPathSearchState::Done:
+		bLastPathPartial = bOutFound && Stats.bPartial;
+		return true;
+	default:
+		bLastPathPartial = false;
+		return true;
+	}
+}
+
+void UVCVoxelPathProvider::CancelPath(int32 Handle) const
+{
+	if (UVoxelSurfaceNavigationSubsystem* Nav = UVoxelSurfaceNavigationSubsystem::Get(this))
+	{
+		Nav->CancelPathSearch(Handle);
+	}
+}
+
 bool UVCVoxelPathProvider::IsAvailable(const UObject* WorldContextObject)
 {
 	return UVoxelSurfaceNavigationSubsystem::Get(WorldContextObject) != nullptr;

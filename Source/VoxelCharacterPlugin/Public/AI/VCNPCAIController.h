@@ -343,8 +343,24 @@ protected:
 	/** Unobstructed line from the pawn's eyes to the target (world geometry only; pawns ignore Visibility). */
 	bool HasLineOfSight(const AActor* Other) const;
 
-	/** Build the waypoint list toward a goal through the provider (straight line without one). */
+	/**
+	 * Build the waypoint list toward a goal through the provider (straight line without one). Over the voxels the search
+	 * may go on over the next frames (G281): meanwhile the pawn keeps the route it has (none: it stands), and the new
+	 * route replaces it when it lands (PollPendingPath). While a search is running a call starts no other.
+	 */
 	void SetPathTo(const FVector& Goal);
+
+	/** A route a search found (or its failure) taken as the pawn's: what SetPathTo did after a search in one frame. */
+	void ApplyPathResult(bool bFound, TArray<FVector>&& Points, double Now);
+
+	/** The search SetPathTo carried over: its route taken once it has ended. @return True while it is still running */
+	bool PollPendingPath();
+
+	/** Whether a search SetPathTo began is still running (G281). */
+	bool IsPathPending() const { return PendingPathHandle != 0; }
+
+	/** Drop the route and any search still running for one (a new target, state or route). */
+	void ResetPath();
 
 	/** Steer the pawn along CurrentPath; true while moving. */
 	bool FollowPath(float DeltaSeconds);
@@ -418,6 +434,8 @@ protected:
 	double LastFleePathTime = -1.0;
 	/** A voxel search just failed or came back partial: don't run another before this. */
 	double NextPathRetryTime = 0.0;
+	/** The voxel search SetPathTo began that is still running (G281; 0 = none). */
+	int32 PendingPathHandle = 0;
 	/** When the chase last searched after its target moved (ChaseRepathSeconds; -1 = not yet). */
 	double LastChaseRepathTime = -1.0;
 

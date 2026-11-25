@@ -5,6 +5,13 @@
 #if WITH_AUTOMATION_TESTS
 
 #include "AI/VCNPCAIController.h"
+#include "AI/VCVoxelPathProvider.h"
+#include "HAL/IConsoleManager.h"
+#include "Misc/ScopeExit.h"
+#include "VoxelSurfaceNavigationSubsystem.h"
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Testing/VoxelTestChunkWorld.h"
+#endif
 
 #define VC_NPCAI_FLAGS (EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
@@ -262,6 +269,72 @@ bool FVCNPCAI_LightFear::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Light out -> attacks"), Decide(In, EVCNPCAIState::Hold), EVCNPCAIState::Attack);
 	return true;
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+// ---------------------------------------------------------------------------
+// A search over frames (G281): the surface provider's StartPath and PollPath with the navigation's budget at one node a
+// frame give, frames later, the route and the partial flag FindPath gives at once from the same cold cache; a handle no
+// search has (0: no voxel world) answers as a failed search.
+// ---------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCNPCAI_PathOverFrames, "VoxelCharacter.AI.PathOverFrames",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FVCNPCAI_PathOverFrames::RunTest(const FString& Parameters)
+{
+	VoxelTesting::FTestChunkWorld W;
+	W.Create(TEXT("VCNPCPathOverFrames"));
+	W.ConfigureSmallPlane();
+	W.StartManager();
+	W.SetViewer(FVector(0.0, 0.0, 600.0));
+	UVoxelSurfaceNavigationSubsystem* Nav = W.World->GetSubsystem<UVoxelSurfaceNavigationSubsystem>();
+	IConsoleVariable* Budget = IConsoleManager::Get().FindConsoleVariable(TEXT("voxel.Nav.SearchBudgetMs"));
+	if (TestNotNull(TEXT("The game world has navigation"), Nav) && TestNotNull(TEXT("The budget's variable"), Budget)
+		&& TestTrue(TEXT("Streaming settles"), W.Settle()))
+	{
+		Nav->SetChunkManager(W.Manager);
+		UVCVoxelPathProvider* Provider = NewObject<UVCVoxelPathProvider>(W.World);
+		const FString SavedBudget = Budget->GetString();
+		ON_SCOPE_EXIT { Budget->Set(*SavedBudget, ECVF_SetByConsole); };
+		FRandomStream Random(7);
+		int32 Carried = 0;
+		for (int32 i = 0; i < 5; ++i)
+		{
+			const FVector From(Random.FRandRange(-2500.0, 2500.0), Random.FRandRange(-2500.0, 2500.0), 0.0);
+			const FVector To(Random.FRandRange(-2500.0, 2500.0), Random.FRandRange(-2500.0, 2500.0), 0.0);
+			Nav->InvalidateAll();
+			TArray<FVector> Expected;
+			const bool bExpected = IVCPathProvider::Execute_FindPath(Provider, From, To, Expected);
+			const bool bExpectedPartial = Provider->WasLastPathPartial();
+
+			Budget->Set(TEXT("0.0001"), ECVF_SetByConsole);
+			Nav->InvalidateAll();
+			const int32 Handle = Provider->StartPath(From, To);
+			TArray<FVector> Got;
+			bool bGot = false;
+			int32 Frames = 0;
+			while (!Provider->PollPath(Handle, Got, bGot) && Frames < 200000)
+			{
+				++GFrameCounter; // a new frame: a new budget
+				++Frames;
+				Nav->Tick(0.0f);
+			}
+			Budget->Set(*SavedBudget, ECVF_SetByConsole);
+			Carried += Frames > 0 ? 1 : 0;
+			TestEqual(*FString::Printf(TEXT("Route %d: found as at once"), i), bGot, bExpected);
+			TestTrue(*FString::Printf(TEXT("Route %d: the route found at once"), i), Got == Expected);
+			TestEqual(*FString::Printf(TEXT("Route %d: partial as at once"), i), Provider->WasLastPathPartial(), bExpectedPartial);
+		}
+		TestTrue(TEXT("Searches went on over frames"), Carried > 0);
+		TArray<FVector> None;
+		bool bFound = true;
+		TestTrue(TEXT("Handle 0: answered at once"), Provider->PollPath(0, None, bFound));
+		TestFalse(TEXT("Handle 0: no route"), bFound || None.Num() > 0);
+	}
+	W.Stop();
+	return true;
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS
 
 #undef VC_NPCAI_FLAGS
 

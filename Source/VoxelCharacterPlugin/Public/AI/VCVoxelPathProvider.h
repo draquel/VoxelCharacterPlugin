@@ -45,6 +45,30 @@ public:
 	 */
 	bool WasLastPathPartial() const { return bLastPathPartial; }
 
+	/**
+	 * Begin a search that may go on over the next frames (G281: the surface navigation's per-frame search budget,
+	 * voxel.Nav.SearchBudgetMs). With the budget 0, or a search that ends within it, PollPath answers at once.
+	 *
+	 * @param From Start (world)
+	 * @param To   Goal (world)
+	 * @return The search's handle; 0 when none can run (no voxel world yet), which PollPath answers as a failed search
+	 */
+	int32 StartPath(const FVector& From, const FVector& To) const;
+
+	/**
+	 * Where a search StartPath began stands; once it has ended, its route (WasLastPathPartial then says whether it is
+	 * partial) and the handle is freed.
+	 *
+	 * @param Handle    StartPath's handle
+	 * @param OutPoints The route when it has ended and one was found (as FindPath's)
+	 * @param bOutFound Whether a route was found (when it has ended)
+	 * @return True when the search has ended (or its handle is unknown: then not found), false while it is running
+	 */
+	bool PollPath(int32 Handle, TArray<FVector>& OutPoints, bool& bOutFound) const;
+
+	/** Drop a search StartPath began. @param Handle StartPath's handle */
+	void CancelPath(int32 Handle) const;
+
 private:
 	mutable bool bLastPathPartial = false;
 };

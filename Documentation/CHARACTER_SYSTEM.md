@@ -1,6 +1,6 @@
 # Character System
 
-> State as of 2026-11-02 (code review CR5); Water as of 2026-11-13 (the water plan's W1); the current as of 2026-11-15 (the hydrology plan's H6). Terms: `Documentation/GLOSSARY.md`.
+> State as of 2026-11-02 (code review CR5); NPCs' path searches as of 2026-11-24 (G281); Water as of 2026-11-13 (the water plan's W1); the current as of 2026-11-15 (the hydrology plan's H6). Terms: `Documentation/GLOSSARY.md`.
 
 VoxelCharacterPlugin is the player and NPC layer of the project: the character, its controller, player state and game
 mode, the movement component and camera, input, combat on GAS, NPC AI, surface gameplay (dig, place, chop, rest, craft)
@@ -1458,8 +1458,8 @@ hold, keeping its distance from a lit torch it fears), no Behavior Tree and no n
 Behaviour (`EVCNPCBehavior`: Hostile or Prey) and temperament (`EVCNPCTemperament`: Aggressive or Wary) live on the
 pawn with `WanderRadius`, `PackRadius` and `Faction`; a hostile entering Chase alerts its pack. Movement follows waypoints
 from an `IVCPathProvider`: `UVCVoxelPathProvider` over `UVoxelSurfaceNavigationSubsystem` by default
-(`bUseVoxelNavigation`), a dungeon's grid provider in dungeons, straight lines without one. A stuck walker blocks the
-cells ahead for 8 s and plans again. `SetPatrolRoute` gives a loop; without one an NPC guards `SetLeashOrigin`.
+(`bUseVoxelNavigation`), a dungeon's grid provider in dungeons, straight lines without one; over the voxels a search
+may take a few frames (below, "A path search over frames"). A stuck walker blocks the cells ahead for 8 s and plans again. `SetPatrolRoute` gives a loop; without one an NPC guards `SetLeashOrigin`.
 `vc.AI.Enabled 0` freezes every NPC; `SetAIEnabled(false)` one. `SetWeatherHold(true)` (the weather plan's P5; the
 surface spawner sets it in a storm for the entries that hide in them) turns a prey's roaming and patrolling into Idle
 until it is lifted, a threat still making it flee; hostiles ignore it (`FVCNPCAIDecisionInput::bHoldsForWeather`,
@@ -1568,6 +1568,31 @@ creature (2.25 times as many alive), not the spawner's churn. The next lever is 
 movement at 3x is 19.0 → 14.4 ms/s (NPCs 34.7 → 29.0), at the price of a distant creature's position updating 10 times a
 second (5 past 80 m), so it stays 0.05.
 
+### A path search over frames (G281, 2026-11-24)
+
+An NPC's search over the voxels runs within the surface navigation's search budget a frame (`voxel.Nav.SearchBudgetMs`,
+2 ms for every search of the frame; VoxelWorlds `SURFACE_NAVIGATION.md`, "A search over frames"): `SetPathTo` begins it
+through `UVCVoxelPathProvider::StartPath`, and one that ends within the budget is taken as before, in the same frame. A
+search that goes on is the controller's `PendingPathHandle`; each tick, before its state's work, `PollPendingPath` asks
+for it, and when it lands `ApplyPathResult` takes its route exactly as the search in one frame did (the partial route's
+wait, the failure's 0.75 s, the straight line of a provider with no voxels). Meanwhile:
+
+- the NPC keeps the route it has: a chaser repathing after its target walks the route toward where the target was, as it
+  does between two searches (`ChaseRepathSeconds`); an NPC with no route (a chase's or a wander leg's start, a flight)
+  stands where it is, as it stood in the frame its search ran;
+- it begins no other search: `SetPathTo` asks for the one running, and the wander and flee states pick no new goal;
+- the route starts where the pawn stood when the search began, a few frames back (at most three frames in the
+  measurements below, a chaser's 300 uu/s about 30 uu);
+- a new target, a new state, a new patrol route, the pawn's unpossession or a stuck walker's block drop the search
+  (`ResetPath`, `UVCVoxelPathProvider::CancelPath`): its route would be for a plan the NPC no longer has.
+
+The NPCs run on the server (a dedicated or a listen server alike); the budget is the server world's. On `VoxelDemo`'s
+walk (two five-minute runs a side, the budget 0 and 2 by turns in one editor) 18 of 1,096 searches waited, 21 frames in
+all, none longer than three frames, and the longest frame of a search went from 6.17 and 3.23 ms to 2.07 and 2.04.
+`FVCNPCCost::PathSeconds` counts a search's first frame; the frames after it are the navigation subsystem's tick
+(`FVoxelSurfaceNavCounters::SearchSeconds` counts them all). Test: `VoxelCharacter.AI.PathOverFrames` (the provider's
+search at one node a frame gives `FindPath`'s route and partial flag).
+
 ## HUD and widgets
 
 `AVCPlayerController` owns every player-facing widget; the widget classes come from the gameplay plugins
@@ -1629,7 +1654,7 @@ and `ToggleVoxelDebug` are on the controller and the character. Every name, defa
 
 `VoxelCharacter.*` in `Private/Tests/`: AI, Anim, Camera, Combat, Config, Cubic, Edit, EditMode, EquipmentLoop, Gather,
 Island, Map, NearClip, Plane, Planet, Progression, Respawn, Save, Spawn, Terrain, ViewMode, Water, WorldEdge; the weather's `Movement.WindPush`,
-`Movement.WetLevel` and `AI.WeatherHold`; the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
+`Movement.WetLevel` and `AI.WeatherHold`; a search over frames' `AI.PathOverFrames` (G281); the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)
 and `Combat.AimCameraLocation` (C3); the bow's `Combat.LaunchAlongAimRay` and `Combat.Arrow.WindRule` (D83), the swing at the air's `Combat.Melee.HoldsMeleeWeapon` (G174), the guard's `Combat.Block.Rules` and
