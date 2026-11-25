@@ -1014,13 +1014,22 @@ modules: a MetaHuman arrives as content.
   flipped it, and the sync flipped the trousers and the shoes with it. Those two follow the body by leader pose, and
   the engine counts a follower's LOD change as its leader's: the body's AnimBP and its post-process rebuilt too, 12 ms
   more on the worker, and the game thread waited for both in that frame (six draws, twelve flips, in each of two runs: 30 to 42 ms
-  against 15 to 21 around them). The appearance now takes its leader-pose parts out of the parts actor's sync (`UVCAppearanceComponent::SetFollowersOnBodyLOD`):
-  they take the body's LOD and change it when the body does (6, 13 and 30 m), and a face flip no longer rebuilds the
-  body (the same draws, the A/B alternated in one editor: 20 to 25 ms, median 22, against the old way's median of 33 to 35). The trousers and the shoes are therefore one LOD finer between 3 and 6 m
-  and from 13 to 30 m than the face-driven sync gave them. `vc.Appearance.FollowersOnBodyLOD 0` gives the sync its
-  own list back (the A/B); `vc.Appearance.TraceLOD 1` logs every change of a worn mesh's LOD, drawn state, update
-  rate and required bones, with a named scope in an Insights trace (`play_trace.py --scopes=G278*`). The face's own
-  flip is left, about 5 ms a flip: keeping it out of the play camera's band changes how the face looks (D195; the face at LOD 0 at 3 m costs 0.1 ms of worker, its hair strands 1.15 ms of GPU).
+  against 15 to 21 around them). The appearance now takes the LOD out of the face's hands (`vc.Appearance.PartsOnBodyLOD`,
+  2 by default): the leader-pose parts leave the parts actor's sync (`UVCAppearanceComponent::SetPartsOnBodyLOD`) and
+  take the body's LOD, and the sync, with the face, the hoodie and the grooms still in it, is forced each tick to the
+  body's own LOD (`PickBodySyncLOD`), so the sync's own LOD mapping keeps the grooms on the face's LOD and every part
+  changes LOD only when the body does (6, 13 and 30 m). A draw of the bow changes no LOD and rebuilds nothing
+  (six draws a mode, the modes alternated in one editor: the slowest frame at a draw's start or
+  end 20 to 31 ms, median 22, 2.8 ms over its neighbours, against 21 to 29, median 24.5, +5.7 with the face still
+  flipping, mode 1). The parts are one LOD finer from 3 to 30 m than the face-driven sync gave them, and the hair draws as
+  strands out to 6 m instead of cards from 3 m: 1.15 ms of GPU a frame for the local player at the 3 m camera, more
+  for each other MetaHuman within 6 m, and 0.1 ms of worker for the face's rig at LOD 0 (D195, the user's choice).
+  At a body step the body rebuilds in one frame and the face and hoodie in the next (the sync is forced after the
+  body has taken its LOD). Mode 1 takes out only the trousers and shoes (a face flip then costs about 5 ms, its
+  RigLogic caching its bones again), mode 0 gives the sync back as the MetaHuman ships; `vc.Appearance.TraceLOD 1`
+  logs every change of a worn mesh's LOD, drawn state, update rate and required bones, and of the sync's forced LOD,
+  with a named scope in an Insights trace (`play_trace.py --scopes=G278*`); `vc.Appearance.PartsForcedLOD` (dev)
+  forces every sync to one LOD to compare a part's cost and look at one distance.
 - `vc.Appearance [name|path|rule]` sets every player's choice on the server (an appearance the settings name, by its
   name, or a path; `rule` clears it; no argument lists them). `Scripts/setup_character_appearances.py` builds
   `DA_VCAppearance_LowPoly` and `DA_VCAppearance_Kellan` (`/Game/CharacterAnimation/Appearances`).
