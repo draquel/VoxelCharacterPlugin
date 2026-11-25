@@ -97,24 +97,29 @@ public:
 	void RefreshSimulations();
 
 	/**
-	 * Takes the parts that follow the body by leader pose out of the parts actor's LOD sync, or gives the sync its own
-	 * list back (G278). A MetaHuman's sync forces every part to the LOD its face wants, and the face's LOD changes at
-	 * the play camera's distances (the aim camera and the third-person camera are on either side of its first step). A
-	 * leader-pose part forced to a LOD of its own changes LOD with the face, and the engine counts a follower's LOD
-	 * change as its leader's: the body's AnimBP and post-process rebuild their required bones and every node caches its
-	 * bones again (the correctives' pose drivers, the control rig's construction), 10 to 15 ms of animation work in that
-	 * frame. Out of the sync a follower takes its leader's LOD, and changes LOD only when the body does.
-	 * @param Sync        The parts actor's LOD sync
-	 * @param Original    The sync's own list of components
-	 * @param Followers   The names of the parts that follow the body by leader pose
-	 * @param bFollowBody True: the followers out of the sync and their forced LOD cleared; false: the sync's own list
+	 * Takes the named parts out of the parts actor's LOD sync and clears the LOD it forced on them, or gives the sync its
+	 * own list back (G278). A MetaHuman's sync forces every part to the LOD its face wants, and the face's first step
+	 * lies between the aim camera and the third-person camera: each draw of the bow flips it. A part that changes LOD
+	 * rebuilds its required bones, and the engine counts a leader-pose follower's change as its leader's (the body's pose
+	 * drivers and control rig, 12 ms). Out of the sync a follower takes its leader's LOD and changes only when it does.
+	 * @param Sync     The parts actor's LOD sync
+	 * @param Original The sync's own list of components
+	 * @param OnBody   The names of the parts to take out (none: the sync's own list)
 	 * @return How many components the sync lists afterwards
 	 */
-	static int32 SetFollowersOnBodyLOD(ULODSyncComponent& Sync, const TArray<FComponentSync>& Original, const TArray<FName>& Followers,
-		bool bFollowBody);
+	static int32 SetPartsOnBodyLOD(ULODSyncComponent& Sync, const TArray<FComponentSync>& Original, const TArray<FName>& OnBody);
 
-	/** Applies `vc.Appearance.FollowersOnBodyLOD` to the worn parts actor's LOD sync (G278); none: nothing to do. */
-	void ApplyFollowersLOD();
+	/**
+	 * Pure: the LOD to force on the parts actor's sync so that the parts left in it (a MetaHuman's face, hoodie and
+	 * grooms) step with the body (D195): the body's LOD, within the sync's count.
+	 * @param BodyLOD The character mesh's predicted LOD (-1: none yet)
+	 * @param NumLODs The sync's LOD count (0 or less: no limit)
+	 * @return The LOD to force; -1 when the body has none yet
+	 */
+	static int32 PickBodySyncLOD(int32 BodyLOD, int32 NumLODs);
+
+	/** Applies `vc.Appearance.PartsOnBodyLOD` to the worn parts actor's LOD sync (G278, D195); none: nothing to do. */
+	void ApplyPartsLOD();
 
 private:
 	/** Points each rigid-body node's gravity along the owner's movement's gravity. */
@@ -157,10 +162,18 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<AActor> PartsActor;
 
-	/** The parts actor's LOD sync (a MetaHuman's), its own list of components, and the parts that follow the body by leader pose (G278). */
+	/**
+	 * The parts actor's LOD sync (a MetaHuman's), its own list of components and forced LOD, and the parts that follow
+	 * the body by leader pose (G278); whether the sync is forced to the body's LOD each tick (D195).
+	 */
 	TWeakObjectPtr<ULODSyncComponent> PartsLODSync;
 	TArray<FComponentSync> OriginalPartsSync;
+	int32 OriginalPartsSyncForcedLOD = INDEX_NONE;
 	TArray<FName> LeaderPoseParts;
+	bool bPartsSyncOnBody = false;
+
+	/** Forces the parts actor's sync to the body's LOD (each tick while bPartsSyncOnBody). */
+	void UpdatePartsSyncOnBody();
 
 	/** The class's own body and its material overrides, kept on the first change. */
 	UPROPERTY(Transient)

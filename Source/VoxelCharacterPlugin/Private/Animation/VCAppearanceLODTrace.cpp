@@ -46,6 +46,7 @@ namespace
 	};
 
 	TMap<TWeakObjectPtr<USkeletalMeshComponent>, FVCBodyLODState> GLastStates;
+	TMap<TWeakObjectPtr<const ULODSyncComponent>, int32> GLastSyncForced;
 	FTSTicker::FDelegateHandle GTickerHandle;
 
 	FVCBodyLODState Sample(const USkeletalMeshComponent& Mesh)
@@ -128,6 +129,19 @@ namespace
 				TArray<USkeletalMeshComponent*> PartMeshes;
 				Parts->GetComponents<USkeletalMeshComponent>(PartMeshes);
 				Meshes.Append(PartMeshes);
+				// The parts actor's LOD sync: the LOD forced on it (the body's while the appearance holds it there, D195)
+				if (const ULODSyncComponent* Sync = Parts->FindComponentByClass<ULODSyncComponent>())
+				{
+					int32& Last = GLastSyncForced.FindOrAdd(Sync, MIN_int32);
+					if (Last != Sync->ForcedLOD)
+					{
+						const FString Change = FString::Printf(TEXT("LODSync forced %d->%d"), Last == MIN_int32 ? -1 : Last, Sync->ForcedLOD);
+						UE_LOG(LogVoxelCharacter, Display, TEXT("[G278] f=%llu t=%.3f %s %s"), static_cast<uint64>(GFrameCounter),
+							World->GetRealTimeSeconds(), *GetNameSafe(Parts), *Change);
+						TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*FString::Printf(TEXT("G278 %s"), *Change));
+						Last = Sync->ForcedLOD;
+					}
+				}
 			}
 			for (USkeletalMeshComponent* Mesh : Meshes)
 			{
@@ -172,6 +186,7 @@ namespace
 			FTSTicker::GetCoreTicker().RemoveTicker(GTickerHandle);
 			GTickerHandle.Reset();
 			GLastStates.Reset();
+			GLastSyncForced.Reset();
 		}
 	}
 

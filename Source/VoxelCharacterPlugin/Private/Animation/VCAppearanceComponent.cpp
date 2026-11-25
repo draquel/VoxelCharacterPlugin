@@ -27,22 +27,24 @@ namespace
 		return Threshold;
 	}
 
-	void OnFollowersOnBodyLODChanged(IConsoleVariable*)
+	void OnPartsOnBodyLODChanged(IConsoleVariable*)
 	{
 		for (TObjectIterator<UVCAppearanceComponent> It; It; ++It)
 		{
 			if (!It->HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && It->GetWorld())
 			{
-				It->ApplyFollowersLOD();
+				It->ApplyPartsLOD();
 			}
 		}
 	}
 
-	TAutoConsoleVariable<int32> CVarFollowersOnBodyLOD(
-		TEXT("vc.Appearance.FollowersOnBodyLOD"),
-		1,
-		TEXT("A/B (G278): 1 the parts a worn body's mesh leads by leader pose (a MetaHuman's trousers and shoes) take the body's LOD, out of the parts actor's LOD sync; 0 the sync forces them to the LOD its face wants, and each change of it rebuilds the body's animation (10 to 15 ms in that frame)."),
-		FConsoleVariableDelegate::CreateStatic(&OnFollowersOnBodyLODChanged));
+	TAutoConsoleVariable<int32> CVarPartsOnBodyLOD(
+		TEXT("vc.Appearance.PartsOnBodyLOD"),
+		2,
+		TEXT("A/B (G278, D195): how a worn body's parts (a MetaHuman's) take their LOD; as it ships, the parts actor's LOD sync forces every part to the LOD its face wants, which flips at each bow draw. ")
+		TEXT("2: the leader-pose parts (trousers, shoes) out of the sync, on the body's LOD, and the sync (face, hoodie, grooms) forced to the body's LOD: no flip; the hair draws as strands to the body's first step (6 m). ")
+		TEXT("1: the leader-pose parts only (the face's flip re-caches its rig, about 5 ms). 0: as the MetaHuman ships (a flip also rebuilds the body's animation, 12 ms more)."),
+		FConsoleVariableDelegate::CreateStatic(&OnPartsOnBodyLODChanged));
 }
 
 UVCAppearanceComponent::UVCAppearanceComponent()
@@ -202,7 +204,8 @@ bool UVCAppearanceComponent::ApplyAppearance(const UVCCharacterAppearance* Appea
 		{
 			PartsLODSync = Sync;
 			OriginalPartsSync = Sync->ComponentsToSync;
-			ApplyFollowersLOD();
+			OriginalPartsSyncForcedLOD = Sync->ForcedLOD;
+			ApplyPartsLOD();
 		}
 	}
 	ApplyBodyPostProcess();
@@ -267,7 +270,7 @@ void UVCAppearanceComponent::RefreshSimulations()
 			}
 		}
 	}
-	SetComponentTickEnabled(!Simulations.IsEmpty() || !ClothMeshes.IsEmpty());
+	SetComponentTickEnabled(!Simulations.IsEmpty() || !ClothMeshes.IsEmpty() || bPartsSyncOnBody);
 	UpdateSimulationGravity();
 }
 
@@ -304,6 +307,7 @@ void UVCAppearanceComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	UpdateSimulationGravity();
+	UpdatePartsSyncOnBody();
 }
 
 void UVCAppearanceComponent::SetBodyHiddenFromView(bool bHidden)
@@ -351,14 +355,10 @@ void UVCAppearanceComponent::ApplyBodyPostProcess()
 	}
 }
 
-int32 UVCAppearanceComponent::SetFollowersOnBodyLOD(ULODSyncComponent& Sync, const TArray<FComponentSync>& Original,
-	const TArray<FName>& Followers, bool bFollowBody)
+int32 UVCAppearanceComponent::SetPartsOnBodyLOD(ULODSyncComponent& Sync, const TArray<FComponentSync>& Original, const TArray<FName>& OnBody)
 {
 	TArray<FComponentSync> Wanted = Original;
-	if (bFollowBody)
-	{
-		Wanted.RemoveAll([&Followers](const FComponentSync& Entry) { return Followers.Contains(Entry.Name); });
-	}
+	Wanted.RemoveAll([&OnBody](const FComponentSync& Entry) { return OnBody.Contains(Entry.Name); });
 	const bool bSame = Wanted.Num() == Sync.ComponentsToSync.Num() && Algo::Compare(Wanted, Sync.ComponentsToSync,
 		[](const FComponentSync& A, const FComponentSync& B) { return A.Name == B.Name && A.SyncOption == B.SyncOption; });
 	if (!bSame)
@@ -367,13 +367,13 @@ int32 UVCAppearanceComponent::SetFollowersOnBodyLOD(ULODSyncComponent& Sync, con
 		// The sync sets the LODs of what it lists again at once; a part it no longer lists keeps the last LOD forced on it
 		Sync.RefreshSyncComponents();
 	}
-	if (bFollowBody && Sync.GetOwner())
+	if (!OnBody.IsEmpty() && Sync.GetOwner())
 	{
 		TArray<USkinnedMeshComponent*> Parts;
 		Sync.GetOwner()->GetComponents<USkinnedMeshComponent>(Parts);
 		for (USkinnedMeshComponent* Part : Parts)
 		{
-			if (Followers.Contains(Part->GetFName()) && Part->GetForcedLOD() != 0)
+			if (OnBody.Contains(Part->GetFName()) && Part->GetForcedLOD() != 0)
 			{
 				Part->SetForcedLOD(0);
 			}
@@ -382,19 +382,65 @@ int32 UVCAppearanceComponent::SetFollowersOnBodyLOD(ULODSyncComponent& Sync, con
 	return Sync.ComponentsToSync.Num();
 }
 
-void UVCAppearanceComponent::ApplyFollowersLOD()
+int32 UVCAppearanceComponent::PickBodySyncLOD(int32 BodyLOD, int32 NumLODs)
 {
-	if (ULODSyncComponent* Sync = PartsLODSync.Get())
+	if (BodyLOD < 0)
 	{
-		SetFollowersOnBodyLOD(*Sync, OriginalPartsSync, LeaderPoseParts, CVarFollowersOnBodyLOD.GetValueOnGameThread() != 0);
+		return INDEX_NONE;
 	}
+	// A forced LOD past the sync's count is ignored by it: the sync would fall back to what its face wants
+	return NumLODs > 0 ? FMath::Min(BodyLOD, NumLODs - 1) : BodyLOD;
+}
+
+void UVCAppearanceComponent::ApplyPartsLOD()
+{
+	ULODSyncComponent* Sync = PartsLODSync.Get();
+	if (!Sync)
+	{
+		return;
+	}
+	const int32 Mode = CVarPartsOnBodyLOD.GetValueOnGameThread();
+	SetPartsOnBodyLOD(*Sync, OriginalPartsSync, Mode >= 1 ? LeaderPoseParts : TArray<FName>());
+
+	// D195: the parts left in the sync (face, hoodie, grooms) step with the body, so the sync's own LOD mapping keeps
+	// the grooms on the face's LOD; the face no longer flips between the aim camera and the third-person camera
+	bPartsSyncOnBody = Mode >= 2;
+	if (!bPartsSyncOnBody)
+	{
+		Sync->ForcedLOD = OriginalPartsSyncForcedLOD;
+	}
+	UpdatePartsSyncOnBody();
+	SetComponentTickEnabled(!Simulations.IsEmpty() || !ClothMeshes.IsEmpty() || bPartsSyncOnBody);
+}
+
+void UVCAppearanceComponent::UpdatePartsSyncOnBody()
+{
+	ULODSyncComponent* Sync = PartsLODSync.Get();
+	const ACharacter* Character = Cast<ACharacter>(GetOwner());
+	const USkeletalMeshComponent* Body = Character ? Character->GetMesh() : nullptr;
+	if (!bPartsSyncOnBody || !Sync || !Body)
+	{
+		return;
+	}
+#if !UE_BUILD_SHIPPING
+	// vc.Appearance.PartsForcedLOD (dev) forces every sync itself
+	static const IConsoleVariable* DevForced = IConsoleManager::Get().FindConsoleVariable(TEXT("vc.Appearance.PartsForcedLOD"));
+	if (DevForced && DevForced->GetInt() >= 0)
+	{
+		return;
+	}
+#endif
+	const int32 Wanted = PickBodySyncLOD(Body->GetPredictedLODLevel(), Sync->NumLODs);
+	Sync->ForcedLOD = Wanted >= 0 ? Wanted : OriginalPartsSyncForcedLOD;
 }
 
 void UVCAppearanceComponent::RemoveParts()
 {
 	PartsLODSync.Reset();
 	OriginalPartsSync.Reset();
+	OriginalPartsSyncForcedLOD = INDEX_NONE;
 	LeaderPoseParts.Reset();
+	bPartsSyncOnBody = false;
 	if (PartsActor)
 	{
 		PartsActor->Destroy();
