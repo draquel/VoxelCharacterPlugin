@@ -25,8 +25,9 @@
 // - An appearance with a body mesh dresses the character's mesh, and none gives the class's own body back.
 // - The body's post-process AnimBP (a MetaHuman's correctives, G148): the appearance's LOD threshold and switch, off
 //   while the body is hidden from its player's view, the class's own settings back with its own body.
-// - The parts a body leads by leader pose leave the parts actor's LOD sync and take the body's LOD (G278), and the old
-//   way gives the sync its own list back.
+// - The parts a body leads by leader pose, and those with their own animation, leave the parts actor's LOD sync and
+//   take the body's LOD (G278, D195); the sync's own list comes back; the parts left in it follow the drivers taken out
+//   by the sync's own rule.
 // - The foot-bone placement's pure parts: the pelvis drops to the lowest foot, within its limit; a planted foot tilts
 //   to the ground, within its limit, and a foot in its swing does not.
 // ---------------------------------------------------------------------------
@@ -172,8 +173,8 @@ bool FVCAppearance_BodyPostProcess::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCAppearance_FollowersOnBodyLOD, "VoxelCharacter.Appearance.FollowersOnBodyLOD", VC_APPEARANCE_FLAGS)
-bool FVCAppearance_FollowersOnBodyLOD::RunTest(const FString& Parameters)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCAppearance_PartsOnBodyLOD, "VoxelCharacter.Appearance.PartsOnBodyLOD", VC_APPEARANCE_FLAGS)
+bool FVCAppearance_PartsOnBodyLOD::RunTest(const FString& Parameters)
 {
 	USkeletalMesh* Cube = LoadObject<USkeletalMesh>(nullptr, TEXT("/Engine/EngineMeshes/SkeletalCube.SkeletalCube"));
 	if (!Cube)
@@ -206,16 +207,21 @@ bool FVCAppearance_FollowersOnBodyLOD::RunTest(const FString& Parameters)
 		Meshes[TEXT("Legs")]->SetForcedLOD(1);
 
 		TestEqual(TEXT("Following the body: only the face stays in the sync"),
-			UVCAppearanceComponent::SetFollowersOnBodyLOD(*Sync, Original, Followers, true), 1);
+			UVCAppearanceComponent::SetPartsOnBodyLOD(*Sync, Original, Followers), 1);
 		TestTrue(TEXT("The face it is"), Sync->ComponentsToSync.Num() == 1 && Sync->ComponentsToSync[0].Name == TEXT("Face"));
 		TestEqual(TEXT("A follower's forced LOD is cleared: it takes its leader's"), Meshes[TEXT("Legs")]->GetForcedLOD(), 0);
-		TestEqual(TEXT("Twice changes nothing"), UVCAppearanceComponent::SetFollowersOnBodyLOD(*Sync, Original, Followers, true), 1);
+		TestEqual(TEXT("Twice changes nothing"), UVCAppearanceComponent::SetPartsOnBodyLOD(*Sync, Original, Followers), 1);
 
 		TestEqual(TEXT("The old way: the sync's own list back"),
-			UVCAppearanceComponent::SetFollowersOnBodyLOD(*Sync, Original, Followers, false), 3);
+			UVCAppearanceComponent::SetPartsOnBodyLOD(*Sync, Original, {}), 3);
 		TestTrue(TEXT("In its own order"), Sync->ComponentsToSync.Num() == 3 && Sync->ComponentsToSync[1].Name == TEXT("Legs")
 			&& Sync->ComponentsToSync[2].Name == TEXT("Feet"));
 	}
+	// D195: the sync (face, hoodie, grooms) forced to the body's LOD, within the sync's count
+	TestEqual(TEXT("No body LOD yet: none forced"), UVCAppearanceComponent::PickBodySyncLOD(-1, 4), -1);
+	TestEqual(TEXT("The body's LOD"), UVCAppearanceComponent::PickBodySyncLOD(1, 4), 1);
+	TestEqual(TEXT("Past the sync's count: its last"), UVCAppearanceComponent::PickBodySyncLOD(6, 4), 3);
+	TestEqual(TEXT("A sync with no count: the body's LOD"), UVCAppearanceComponent::PickBodySyncLOD(2, 0), 2);
 	GEngine->DestroyWorldContext(World);
 	World->DestroyWorld(false);
 	return true;
