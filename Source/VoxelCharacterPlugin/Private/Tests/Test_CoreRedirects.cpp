@@ -9,8 +9,9 @@
 // ---------------------------------------------------------------------------
 // The plugin's [CoreRedirects] (Config/DefaultVoxelCharacterPlugin.ini) for the reflected names the code review's CR3
 // changed (CODE_REVIEW_PLAN.md §17, D-CR3, D-CR4): each old name resolves to the new one, so an asset or Blueprint saved
-// with the old name loads. A redirect in a plugin's own ini is read when the plugin mounts; this test fails if the file
-// stops being read or a line stops parsing.
+// with the old name loads; and the Foot Bone IK's graph node, moved from the Editor module to the UncookedOnly module
+// VoxelCharacterAnimGraph (G284), so the animation Blueprints saved with the old path load. A redirect in a plugin's own
+// ini is read when the plugin mounts; this test fails if the file stops being read or a line stops parsing.
 // ---------------------------------------------------------------------------
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVCCoreRedirectsTest,
@@ -32,6 +33,8 @@ bool FVCCoreRedirectsTest::RunTest(const FString& Parameters)
 			TEXT("/Script/VoxelCharacterPlugin.EVCVoxelModificationType") },
 		{ ECoreRedirectFlags::Type_Struct, TEXT("/Script/VoxelCharacterPlugin.VoxelTerrainContext"),
 			TEXT("/Script/VoxelCharacterPlugin.VCTerrainContext") },
+		{ ECoreRedirectFlags::Type_Class, TEXT("/Script/VoxelCharacterEditor.VCAnimGraphNode_FootBoneIK"),
+			TEXT("/Script/VoxelCharacterAnimGraph.VCAnimGraphNode_FootBoneIK") },
 	};
 	for (const FCase& Case : Cases)
 	{
