@@ -1,12 +1,12 @@
 # VoxelCharacterPlugin — Claude Code Instructions
 
-> State as of 2026-11-20 (the sword moves plan done and frozen: the secondary branch, the charge, the run attack, the air and plunge attacks, the dodge and the roll). Terms: `Documentation/GLOSSARY.md`.
+> State as of 2026-11-20 (the sword moves plan done and frozen: the secondary branch, the charge, the run attack, the air and plunge attacks, the dodge and the roll); the modules as of 2026-11-26 (G284). Terms: `Documentation/GLOSSARY.md`.
 
 The player and NPC layer: character, controller, player state, game mode, movement, camera, input, combat on GAS, NPC
 AI, surface gameplay, the HUD and map widgets. Unreal Engine 5.8; a runtime module, `VoxelCharacterPlugin`, a second
-runtime module, `VoxelCharacterAnimation` (the player's motion matching: PoseSearch stays out of the first, D45), and an
-editor module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the animation content; the graph node of
-`FVCAnimNode_FootBoneIK`).
+runtime module, `VoxelCharacterAnimation` (the player's motion matching: PoseSearch stays out of the first, D45), an
+`UncookedOnly` module, `VoxelCharacterAnimGraph` (the graph node of `FVCAnimNode_FootBoneIK`, G284), and an editor
+module, `VoxelCharacterEditor` (`UVCAnimAuthoringLibrary`: scripting the animation content).
 
 ## Reading order
 
@@ -78,6 +78,11 @@ calls.
   `FOnVCViewModeChanged`. `Voxel` after `VC` says what a type is about (`EVCVoxelModificationType`), never that it is
   VoxelWorlds'. Renamed types get `[CoreRedirects]` in `Config/DefaultVoxelCharacterPlugin.ini` (checked by
   `VoxelCharacter.Config.CoreRedirects`).
+- An anim graph node (the graph class of a runtime anim node, as `UVCAnimGraphNode_FootBoneIK`) goes in
+  `VoxelCharacterAnimGraph` (`UncookedOnly`), never in the `Editor` module: a `-game` or `-server` process of
+  `UnrealEditor.exe` compiles the Blueprint as it loads it and does not load an `Editor` module, so the graph would
+  compile without the node and the body stand in its reference pose (G284). The module depends on no editor-only module (`UnrealEd`, `Kismet`). A node
+  that moves module gets a `ClassRedirects` line.
 - Input actions `IA_<Verb>`, mapping contexts `IMC_<Context>`; data assets `UVC<Name>Config` / `UVC<Name>Data`.
 - `TObjectPtr<>` for `UPROPERTY` object pointers; `GENERATED_BODY()`; categories `"VoxelCharacter|<Area>"`.
 - RPC prefixes: `Server_` (Server, Reliable), `Client_` (Client, Reliable), `Multicast_`. Replicated properties use

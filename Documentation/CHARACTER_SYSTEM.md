@@ -1,14 +1,16 @@
 # Character System
 
-> State as of 2026-11-02 (code review CR5); NPCs' path searches as of 2026-11-24 (G281); Water as of 2026-11-13 (the water plan's W1); the current as of 2026-11-15 (the hydrology plan's H6). Terms: `Documentation/GLOSSARY.md`.
+> State as of 2026-11-02 (code review CR5); NPCs' path searches as of 2026-11-24 (G281); the graph nodes' module as of 2026-11-26 (G284); Water as of 2026-11-13 (the water plan's W1); the current as of 2026-11-15 (the hydrology plan's H6). Terms: `Documentation/GLOSSARY.md`.
 
 VoxelCharacterPlugin is the player and NPC layer of the project: the character, its controller, player state and game
 mode, the movement component and camera, input, combat on GAS, NPC AI, surface gameplay (dig, place, chop, rest, craft)
 and the HUD and map widgets. It owns no item, interaction or equipment system; it uses ItemInventoryPlugin,
 InteractionPlugin and EquipmentPlugin when they are present and compiles without them (`WITH_INVENTORY_PLUGIN`,
 `WITH_INTERACTION_PLUGIN`, `WITH_EQUIPMENT_PLUGIN`, set by `VoxelCharacterPlugin.Build.cs`). It depends on
-CommonGameFramework, VoxelWorlds, GameplayAbilities and EnhancedInput. A runtime module, `VoxelCharacterPlugin`, and
-an editor module, `VoxelCharacterEditor` (scripting the animation content, Animation below); UE 5.8. The rules for changing it are in `.claude/instructions.md`; the February design record is
+CommonGameFramework, VoxelWorlds, GameplayAbilities and EnhancedInput. A runtime module, `VoxelCharacterPlugin`, a
+second runtime module, `VoxelCharacterAnimation` (motion matching), an `UncookedOnly` module, `VoxelCharacterAnimGraph`
+(the anim graph's nodes, G284), and an editor module, `VoxelCharacterEditor` (scripting the animation content, Animation
+below); UE 5.8. The rules for changing it are in `.claude/instructions.md`; the February design record is
 `CharacterController_Design.md` (frozen).
 
 ## Class map
@@ -30,7 +32,7 @@ Paths are under `Source/VoxelCharacterPlugin/Public/` (headers) and `Private/` (
 | Animation | `UVCCharacterAppearance`, `UVCAppearanceComponent` | A body as data (a mesh, or a MetaHuman's Blueprint whose parts dress it) and the component that dresses both character classes in one (Appearance, below) |
 | Animation | `UVCLocomotionAnimInstance`, `UVCLocomotionClipSet` | The player's locomotion as a state machine of our own over the Essential Animation packs (`vc.Anim.Locomotion 2`, the default; the locomotion state machine plan): the anim instance that resolves the held set's clips and computes the rules, and a set's full-body clips (Animation, below) |
 | Animation | `UVCLocomotionAnimSet` | An animal's locomotion for the creature template AnimBP: its blend space by speed, the run's own speed, its idle variant (NPCs, below) |
-| Animation | `FVCAnimNode_FootBoneIK` (its graph node `UVCAnimGraphNode_FootBoneIK` in `VoxelCharacterEditor`) | Foot placement on the foot bones, for a body without the Mannequin's `ik_foot` bones (a MetaHuman's) |
+| Animation | `FVCAnimNode_FootBoneIK` (its graph node `UVCAnimGraphNode_FootBoneIK` in `VoxelCharacterAnimGraph`, G284) | Foot placement on the foot bones, for a body without the Mannequin's `ik_foot` bones (a MetaHuman's) |
 | Animation | `UVCMotionMatchingAnimInstance`, `UVCGravityTrajectoryPredictor` (`VoxelCharacterAnimation`) | The player's motion matching: the parent of the Game Animation Sample's CMC AnimBP, which fills it from our pawn and does its world-Z arithmetic in the gravity frame; the trajectory predictor that turns about local up (Animation, below) |
 | Editor | `UVCEffectsAuthoringLibrary` (`VoxelCharacterEditor`) | Niagara systems from Python, which reaches no emitter: empty a system, add copies of the engine's emitter templates, set each one's sprite material and baked module constants by name, compile (`Scripts/setup_water_material.py`) |
 | Editor | `UVCAnimAuthoringLibrary` (`VoxelCharacterEditor`) | Anim layers, interfaces, graph nodes, pins and properties, a montage's sections and slot, copies of assets with their references among them, from Python, which the engine does not expose: `Scripts/setup_character_layers.py`, `setup_character_ik.py` and `setup_character_locomotion.py` build the content with it |
@@ -945,6 +947,22 @@ L4: D44 is reversed, and motion matching stays selectable for comparison.
   first second: the rest stows the item behind the back) (G147). Still
   stand-ins (D51), for want of a clip in the packs: the pickaxe holds the two-handed idle, and using by hand drinks the
   bow pack's potion.
+- **The graph nodes' module** (G284, 2026-11-26). An animation Blueprint is compiled by every process that loads it
+  uncooked, the editor and also a `-game` or `-server` process of `UnrealEditor.exe` (the QA tools' processes:
+  `gc_trace.py --game`, `server_process.py`, `first_use_trace.py`), so the graph nodes of its graphs must load there.
+  `UVCAnimGraphNode_FootBoneIK` lives in `VoxelCharacterAnimGraph`, a module of type `UncookedOnly` (as the engine's
+  animation plugins have theirs), depending on `AnimGraph`, `BlueprintGraph`, `AnimGraphRuntime` and the runtime
+  module and on no editor-only module; the authoring libraries stay in the `Editor` module `VoxelCharacterEditor`. A
+  cooked game is unchanged: it loads the compiled class, no graph, and no target that needs cooked data builds an
+  `UncookedOnly` module. The node was in `VoxelCharacterEditor` before, which only the editor loads: a `-game` process
+  compiled `ABP_VCPlayerLocomotion` with 110 anim nodes instead of 119 and `ABP_VoxelCharacter` with 47 instead of 56,
+  without the Foot Bone IK and the nodes before it, and the bodies stood in their reference pose (`vc.Anim.Probe`: 0.00 uu
+  from it at 500 uu/s, the state machine in no state); now each compiles as in the editor and the player, the humanoid
+  NPC, the MetaHuman's face and a `-game` client joined to a server process animate (`Scripts/qa/game_anim.py`). The
+  assets were saved with the old path and load through the plugin's `[CoreRedirects]` (`ClassRedirects`), not
+  re-saved; their import of the old package still logs one `VerifyImport` warning per process (D197). The face's
+  `Face_AnimBP` misses the engine's `/Script/MovieSceneAnimMixerEditor` in the same processes (its Sequencer mixer
+  extension); measured, it costs the face nothing (the face moves as in PIE).
 
 ## Appearance
 
@@ -1652,8 +1670,9 @@ and `ToggleVoxelDebug` are on the controller and the character. Every name, defa
 
 ## Tests
 
-`VoxelCharacter.*` in `Private/Tests/`: AI, Anim, Camera, Combat, Config, Cubic, Edit, EditMode, EquipmentLoop, Gather,
-Island, Map, NearClip, Plane, Planet, Progression, Respawn, Save, Spawn, Terrain, ViewMode, Water, WorldEdge; the weather's `Movement.WindPush`,
+`VoxelCharacter.*` in `Private/Tests/` (and `VoxelCharacterAnimGraph`'s `Config.AnimGraphNodeModule`, G284: the module's
+type, the node's class path and its redirect, the two Blueprints holding and compiling the node): AI, Anim, Camera,
+Combat, Config, Cubic, Edit, EditMode, EquipmentLoop, Gather, Island, Map, NearClip, Plane, Planet, Progression, Respawn, Save, Spawn, Terrain, ViewMode, Water, WorldEdge; the weather's `Movement.WindPush`,
 `Movement.WetLevel` and `AI.WeatherHold`; a search over frames' `AI.PathOverFrames` (G281); the bodies' `Appearance.*` (P6), `Anim.CreatureLocomotion` and
 `NPC.BodyBudgetAndHeldItem` (P7); the gait table's `Movement.GaitTable`, `Movement.GaitTableApplied` and
 `Movement.AimTurnEase` (the character refinement plan's C4), `Appearance.AttachCorrection` (C1), `Anim.StanceWeight` (C2)

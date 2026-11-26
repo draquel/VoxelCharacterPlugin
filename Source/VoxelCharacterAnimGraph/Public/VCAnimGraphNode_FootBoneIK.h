@@ -7,9 +7,14 @@
 #include "Animation/VCAnimNode_FootBoneIK.h"
 #include "VCAnimGraphNode_FootBoneIK.generated.h"
 
-/** The anim graph's node for FVCAnimNode_FootBoneIK (character animation P6): foot placement on the foot bones. */
+/**
+ * The anim graph's node for FVCAnimNode_FootBoneIK (character animation P6): foot placement on the foot bones. In the
+ * UncookedOnly module VoxelCharacterAnimGraph since G284 (it was in the Editor module VoxelCharacterEditor, which a -game
+ * or -server process does not load); the plugin's [CoreRedirects] map the old path, so the animation Blueprints saved
+ * with it load unchanged.
+ */
 UCLASS()
-class UVCAnimGraphNode_FootBoneIK : public UAnimGraphNode_SkeletalControlBase
+class VOXELCHARACTERANIMGRAPH_API UVCAnimGraphNode_FootBoneIK : public UAnimGraphNode_SkeletalControlBase
 {
 	GENERATED_BODY()
 
