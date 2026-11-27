@@ -1,6 +1,6 @@
 # Character System
 
-> State as of 2026-11-02 (code review CR5); NPCs' path searches as of 2026-11-24 (G281); the graph nodes' module as of 2026-11-26 (G284); Water as of 2026-11-13 (the water plan's W1); the current as of 2026-11-15 (the hydrology plan's H6). Terms: `Documentation/GLOSSARY.md`.
+> State as of 2026-11-02 (code review CR5); NPCs' path searches as of 2026-11-24 (G281); the graph nodes' module as of 2026-11-26 (G284, D197); Water as of 2026-11-13 (the water plan's W1); the current as of 2026-11-15 (the hydrology plan's H6). Terms: `Documentation/GLOSSARY.md`.
 
 VoxelCharacterPlugin is the player and NPC layer of the project: the character, its controller, player state and game
 mode, the movement component and camera, input, combat on GAS, NPC AI, surface gameplay (dig, place, chop, rest, craft)
@@ -959,8 +959,11 @@ L4: D44 is reversed, and motion matching stays selectable for comparison.
   without the Foot Bone IK and the nodes before it, and the bodies stood in their reference pose (`vc.Anim.Probe`: 0.00 uu
   from it at 500 uu/s, the state machine in no state); now each compiles as in the editor and the player, the humanoid
   NPC, the MetaHuman's face and a `-game` client joined to a server process animate (`Scripts/qa/game_anim.py`). The
-  assets were saved with the old path and load through the plugin's `[CoreRedirects]` (`ClassRedirects`), not
-  re-saved; their import of the old package still logs one `VerifyImport` warning per process (D197). The face's
+  assets were saved with the old path, so they loaded through the plugin's `[CoreRedirects]` (`ClassRedirects`), and
+  their import of the old package logged one `VerifyImport` warning per process (a class redirect does not clear a
+  package import); both were re-saved on 2026-11-26 (D197) and import `VoxelCharacterAnimGraph` alone, and
+  `game_anim.py` fails on that warning. `ABP_VCPlayerMotionMatching` (played by `vc.Anim.Locomotion 1` only) still holds
+  the old import (G306, D200), so the redirect stays until no asset in use does. The face's
   `Face_AnimBP` misses the engine's `/Script/MovieSceneAnimMixerEditor` in the same processes (its Sequencer mixer
   extension); measured, it costs the face nothing (the face moves as in PIE).
 
