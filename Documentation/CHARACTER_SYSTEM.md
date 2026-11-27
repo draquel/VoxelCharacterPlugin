@@ -1,6 +1,6 @@
 # Character System
 
-> State as of 2026-11-02 (code review CR5); NPCs' path searches as of 2026-11-24 (G281); the graph nodes' module as of 2026-11-26 (G284, D197); Water as of 2026-11-13 (the water plan's W1); the current as of 2026-11-15 (the hydrology plan's H6). Terms: `Documentation/GLOSSARY.md`.
+> State as of 2026-11-02 (code review CR5); NPCs' path searches as of 2026-11-24 (G281); the graph nodes' module as of 2026-11-27 (G284, D197, D200); Water as of 2026-11-13 (the water plan's W1); the current as of 2026-11-15 (the hydrology plan's H6). Terms: `Documentation/GLOSSARY.md`.
 
 VoxelCharacterPlugin is the player and NPC layer of the project: the character, its controller, player state and game
 mode, the movement component and camera, input, combat on GAS, NPC AI, surface gameplay (dig, place, chop, rest, craft)
@@ -961,9 +961,12 @@ L4: D44 is reversed, and motion matching stays selectable for comparison.
   NPC, the MetaHuman's face and a `-game` client joined to a server process animate (`Scripts/qa/game_anim.py`). The
   assets were saved with the old path, so they loaded through the plugin's `[CoreRedirects]` (`ClassRedirects`), and
   their import of the old package logged one `VerifyImport` warning per process (a class redirect does not clear a
-  package import); both were re-saved on 2026-11-26 (D197) and import `VoxelCharacterAnimGraph` alone, and
-  `game_anim.py` fails on that warning. `ABP_VCPlayerMotionMatching` (played by `vc.Anim.Locomotion 1` only) still holds
-  the old import (G306, D200), so the redirect stays until no asset in use does. The face's
+  package import); both were re-saved on 2026-11-26 (D197), the third, `ABP_VCPlayerMotionMatching` (played by
+  `vc.Anim.Locomotion 1` only), on 2026-11-27 (D200, G306), each now importing `VoxelCharacterAnimGraph` alone, and
+  `game_anim.py` fails on that warning (`--locomotion=1` plays the third). No asset in this project's content holds the
+  old path any more (every project and pack asset searched); the redirect stays a while for the copies built before the
+  re-saves in other checkouts and branches, and can go once those are rebuilt or re-saved (a `-game` run of
+  `game_anim.py` with and without `--locomotion=1` then shows whether any asset still loads through it). The face's
   `Face_AnimBP` misses the engine's `/Script/MovieSceneAnimMixerEditor` in the same processes (its Sequencer mixer
   extension); measured, it costs the face nothing (the face moves as in PIE).
 
